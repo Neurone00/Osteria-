@@ -36,6 +36,7 @@ const EXPORTS = [
   "dealRuba", "rubaOptions", "rubaPlay",
   "dealCamicia", "camiciaFlip", "demand",
   "dealBriscola", "briscolaPlay", "brisPoints",
+  "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
 const modPath = join(dir, "rules.mjs");
@@ -190,6 +191,56 @@ function playBriscola() {
   return steps;
 }
 
+/* ── perudo ─────────────────────────────────────────────────── */
+function playPerudo() {
+  let g = R.dealPerudo("A", { A: 0, B: 0 });
+  let steps = 0;
+  const MAX = 600;
+  while (!g.done) {
+    if (++steps > MAX) return fail("perudo", `no end after ${MAX} steps`);
+    if (g.counts.A < 0 || g.counts.B < 0) return fail("perudo", "negative dice count");
+    if (g.phase === "roll") {
+      const res = R.perudoRoll(g, g.turn);
+      if (!res) return fail("perudo", "roll refused");
+      if (res.g.rolled[g.turn] && res.g.dice[g.turn].length !== res.g.counts[g.turn])
+        return fail("perudo", "rolled wrong number of dice");
+      g = res.g;
+    } else if (g.phase === "bid") {
+      if (g.bid && Math.random() < 0.35) {
+        const res = R.perudoDoubt(g, g.turn);
+        if (!res) return fail("perudo", "doubt refused");
+        g = res.g;
+      } else {
+        let qty, face;
+        if (!g.bid) {
+          qty = 1;
+          face = 2 + Math.floor(Math.random() * 5);
+        } else if (Math.random() < 0.5 && g.bid.face < 6) {
+          qty = g.bid.qty;
+          face = g.bid.face + 1;
+        } else {
+          qty = g.bid.qty + 1;
+          face = 2 + Math.floor(Math.random() * 5);
+        }
+        const res = R.perudoBid(g, g.turn, qty, face);
+        if (res) g = res.g;
+        else {
+          const d = R.perudoDoubt(g, g.turn);
+          if (!d) return fail("perudo", "neither bid nor doubt accepted");
+          g = d.g;
+        }
+      }
+    } else if (g.phase === "reveal") {
+      const res = R.perudoNext(g, g.reveal.loser);
+      if (!res) return fail("perudo", "next refused");
+      g = res.g;
+    }
+  }
+  if (!(g.counts.A === 0 || g.counts.B === 0)) fail("perudo", "ended without a 0-dice player");
+  if (g.win == null) fail("perudo", "no winner recorded");
+  return steps;
+}
+
 /* ── prepared deck (shuffle + cut ritual) ───────────────────── */
 // A deck the players shuffled by tapping and cut by dragging is dealt exactly as
 // prepared. Check it still holds all 40 cards through a whole game.
@@ -222,6 +273,7 @@ const runs = [
   ["camicia, italian (A/2/3)", () => playCamicia({ intl: false })],
   ["camicia, international (A4 R3 C2 F1)", () => playCamicia({ intl: true })],
   ["briscola", () => playBriscola()],
+  ["perudo", () => playPerudo()],
 ];
 
 console.log(`Osteria — ${DEALS} deals per variant\n`);

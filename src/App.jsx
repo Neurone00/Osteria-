@@ -120,7 +120,16 @@ const GAMES = {
     opts: [],
     def: {},
   },
+  perudo: {
+    name: "Perudo",
+    tag: "dadi e bugie",
+    line: "Cinque dadi a testa, nascosti. Rilancia sulla quantità di una faccia (gli 1 sono jolly) o grida Dubito.",
+    dice: true,
+    opts: [],
+    def: {},
+  },
 };
+const isCard = (game) => !GAMES[game].dice;
 
 /* ── scopa ─────────────────────────────────────────────────── */
 // `pre` is a deck the players shuffled and cut by hand; when given it's dealt
@@ -510,6 +519,85 @@ function briscolaPlay(gs, seat, cardId) {
     }
   }
   return { g, kind, ev, card };
+}
+
+/* ── dice ─────────────────────────────────────────────────────── */
+const rollN = (n) => Array.from({ length: n }, () => 1 + Math.floor(Math.random() * 6));
+
+/* ── perudo / dudo ─────────────────────────────────────────────
+   Two players, five dice each, hidden. Bid a quantity of a face across ALL dice;
+   ones are wild. Raise (more dice, or same count of a higher face) or call Dudo.
+   On a call the dice show: if the bid holds the doubter loses a die, else the
+   bidder does. Lose your last die and you are out. Faces bid are 2–6. */
+function dealPerudo(starter, tally) {
+  return {
+    dice: { A: [], B: [] },
+    counts: { A: 5, B: 5 },
+    phase: "roll",
+    rolled: { A: false, B: false },
+    turn: starter,
+    starter,
+    bid: null,
+    reveal: null,
+    tally: tally || { A: 0, B: 0 },
+    done: false,
+    matchDone: false,
+    win: null,
+  };
+}
+function perudoRoll(gs, seat) {
+  const g = clone(gs);
+  if (g.phase !== "roll" || g.turn !== seat || g.rolled[seat]) return null;
+  g.dice[seat] = rollN(g.counts[seat]);
+  g.rolled[seat] = true;
+  if (g.rolled.A && g.rolled.B) {
+    g.phase = "bid";
+    g.turn = g.starter;
+  } else g.turn = other(seat);
+  return { g, kind: "take", ev: { t: "roll" } };
+}
+function bidValid(prev, qty, face) {
+  if (face < 2 || face > 6 || qty < 1) return false;
+  if (!prev) return true;
+  if (qty > prev.qty) return true;
+  return qty === prev.qty && face > prev.face;
+}
+function perudoBid(gs, seat, qty, face) {
+  const g = clone(gs);
+  if (g.phase !== "bid" || g.turn !== seat || !bidValid(g.bid, qty, face)) return null;
+  g.bid = { seat, qty, face };
+  g.turn = other(seat);
+  return { g, kind: "lay", ev: { t: "bid", qty, face } };
+}
+function perudoDoubt(gs, seat) {
+  const g = clone(gs);
+  if (g.phase !== "bid" || g.turn !== seat || !g.bid) return null;
+  const actual = [...g.dice.A, ...g.dice.B].filter((d) => d === g.bid.face || d === 1).length;
+  const holds = actual >= g.bid.qty; // bid true → the doubter loses
+  const loser = holds ? seat : g.bid.seat;
+  g.counts[loser] -= 1;
+  g.reveal = { qty: g.bid.qty, face: g.bid.face, actual, doubter: seat, loser, dice: { A: g.dice.A.slice(), B: g.dice.B.slice() } };
+  g.phase = "reveal";
+  if (g.counts[loser] <= 0) {
+    g.done = true;
+    g.matchDone = true;
+    g.win = other(loser);
+    g.tally[g.win] += 1;
+  }
+  return { g, kind: "scopa", ev: { t: "doubt" } };
+}
+function perudoNext(gs, seat) {
+  const g = clone(gs);
+  if (g.phase !== "reveal" || g.done || seat !== g.reveal.loser) return null;
+  const st = g.reveal.loser;
+  g.starter = st;
+  g.turn = st;
+  g.phase = "roll";
+  g.rolled = { A: false, B: false };
+  g.dice = { A: [], B: [] };
+  g.bid = null;
+  g.reveal = null;
+  return { g, kind: "lay", ev: { t: "next" } };
 }
 
 /* ═══════════════════════════ feedback ═══════════════════════════ */
@@ -1369,7 +1457,9 @@ input{font-family:inherit}
 .flipy{animation:flipy 340ms ease-in-out both;transform-style:preserve-3d}
 @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
 .floaty{animation:floaty 3.4s ease-in-out infinite}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty{animation:none!important}}
+@keyframes dieroll{0%{transform:rotate(0) scale(1)}25%{transform:rotate(-16deg) scale(1.08)}50%{transform:rotate(14deg) scale(1.04)}75%{transform:rotate(-8deg) scale(1.02)}100%{transform:rotate(0) scale(1)}}
+.dieroll{animation:dieroll 420ms ease-out}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll{animation:none!important}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -1925,6 +2015,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealRuba(dealer, cont?.tally || null, deck)
       : game === "briscola"
       ? dealBriscola(dealer, cont?.tally || null, deck)
+      : game === "perudo"
+      ? dealPerudo(dealer, cont?.tally || null)
       : dealCamicia(cont?.tally || null, deck);
 
   const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });
@@ -1943,12 +2035,13 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     publish({ ...room, status: "play", gs: gsNew, prep: null, log: [], ev: null, anim: null });
   };
 
-  const start = () => beginPrepare("A", null);
+  const start = () => (isCard(room.game) ? beginPrepare("A", null) : dealNow(dealGame(room.game, room.opts, "A", null)));
   const again = () => {
     const g = room.gs;
     if (room.game === "scopa" && !g.matchDone) dealNow(dealGame("scopa", room.opts, other(g.dealer), { scores: g.scores }));
     else if (room.game === "scopa") beginPrepare("A", null);
-    else beginPrepare(other(g.dealer), { tally: g.tally });
+    else if (isCard(room.game)) beginPrepare(other(g.dealer), { tally: g.tally });
+    else dealNow(dealGame(room.game, room.opts, g.win ? other(g.win) : "A", { tally: g.tally })); // dice
   };
 
   const setOpt = (k, val) => {
@@ -2214,6 +2307,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} showScores={showScores} />
       ) : room.game === "briscola" ? (
         <Briscola room={room} gs={gs} seat={seat} opp={opp} mine={mine} slamId={slamId} commit={commit} showScores={showScores} />
+      ) : room.game === "perudo" ? (
+        <Perudo room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : (
         <Board
           room={room}
@@ -2229,7 +2324,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         />
       )}
 
-      {room.ev && !gs.done && (
+      {room.ev && !gs.done && isCard(room.game) && (
         <p style={{ color: T.ink60, fontSize: 12, textAlign: "center", marginTop: 14, minHeight: 16 }}>
           {who(room, room.ev.seat)} {describe(room.ev, french)}
         </p>
@@ -2498,6 +2593,90 @@ function HomeDeck() {
       ))}
     </div>
   );
+}
+
+/* ── dice ── */
+const PIPS = {
+  1: [[1, 1]],
+  2: [[0, 0], [2, 2]],
+  3: [[0, 0], [1, 1], [2, 2]],
+  4: [[0, 0], [0, 2], [2, 0], [2, 2]],
+  5: [[0, 0], [0, 2], [1, 1], [2, 0], [2, 2]],
+  6: [[0, 0], [0, 2], [1, 0], [1, 2], [2, 0], [2, 2]],
+};
+function Die({ v, size = 46, hidden, hi, on, onClick, roll }) {
+  const pos = (i) => ((i + 0.5) / 3) * size;
+  const pipR = size * 0.078;
+  return (
+    <div
+      onClick={onClick}
+      className={roll ? "dieroll" : ""}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size * 0.22,
+        background: hidden ? T.ink : on ? T.ink : "#fff",
+        border: `1px solid ${hi ? "#B8862B" : hidden || on ? T.ink : T.line}`,
+        boxShadow: "0 2px 6px rgba(18,18,18,0.14)",
+        position: "relative",
+        flexShrink: 0,
+        cursor: onClick ? "pointer" : "default",
+      }}
+    >
+      {!hidden &&
+        (PIPS[v] || []).map(([r, c], k) => (
+          <span
+            key={k}
+            style={{
+              position: "absolute",
+              width: pipR * 2,
+              height: pipR * 2,
+              borderRadius: "50%",
+              background: hi ? "#B8862B" : on ? "#fff" : T.ink,
+              left: pos(c) - pipR,
+              top: pos(r) - pipR,
+            }}
+          />
+        ))}
+    </div>
+  );
+}
+async function requestMotion() {
+  try {
+    const D = window.DeviceMotionEvent;
+    if (D && typeof D.requestPermission === "function") return (await D.requestPermission()) === "granted";
+    return typeof window !== "undefined" && "ondevicemotion" in window;
+  } catch {
+    return false;
+  }
+}
+function useShake(onShake, active) {
+  const cb = useRef(onShake);
+  cb.current = onShake;
+  useEffect(() => {
+    if (!active || typeof window === "undefined") return;
+    let last = 0,
+      px = null,
+      py = null,
+      pz = null;
+    const h = (e) => {
+      const a = e.accelerationIncludingGravity || e.acceleration;
+      if (!a) return;
+      if (px != null) {
+        const d = Math.abs((a.x || 0) - px) + Math.abs((a.y || 0) - py) + Math.abs((a.z || 0) - pz);
+        const now = Date.now();
+        if (d > 26 && now - last > 800) {
+          last = now;
+          cb.current();
+        }
+      }
+      px = a.x || 0;
+      py = a.y || 0;
+      pz = a.z || 0;
+    };
+    window.addEventListener("devicemotion", h);
+    return () => window.removeEventListener("devicemotion", h);
+  }, [active]);
 }
 
 /* ── scopa / rubamazzo board ── */
@@ -2927,6 +3106,165 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
     </div>
   );
 }
+
+/* ── perudo ── */
+function Perudo({ room, gs, seat, mine, commit }) {
+  const opp = other(seat);
+  const [motionOn, setMotionOn] = useState(false);
+  const [bidQty, setBidQty] = useState(1);
+  const [bidFace, setBidFace] = useState(2);
+  const rolled = gs.rolled[seat];
+  const canRoll = gs.phase === "roll" && mine && !rolled;
+  const doRoll = () => {
+    if (gs.phase === "roll" && gs.turn === seat && !gs.rolled[seat]) commit(perudoRoll(gs, seat));
+  };
+  useShake(doRoll, motionOn && canRoll);
+  const tapRoll = async () => {
+    if (!motionOn) setMotionOn(await requestMotion());
+    doRoll();
+  };
+  useEffect(() => {
+    if (gs.phase === "bid" && gs.turn === seat) {
+      const m = !gs.bid ? { q: 1, f: 2 } : gs.bid.face < 6 ? { q: gs.bid.qty, f: gs.bid.face + 1 } : { q: gs.bid.qty + 1, f: 2 };
+      setBidQty(m.q);
+      setBidFace(m.f);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gs.phase, gs.turn, gs.bid?.qty, gs.bid?.face]);
+
+  const legal = bidValid(gs.bid, bidQty, bidFace);
+  const total = gs.counts.A + gs.counts.B;
+
+  return (
+    <div>
+      {/* opponent packet */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
+        <div style={{ display: "flex", gap: 4 }}>
+          {Array.from({ length: gs.counts[opp] }).map((_, i) => (
+            <Die key={i} hidden size={26} />
+          ))}
+        </div>
+      </div>
+
+      {/* the standing bid / reveal / prompt */}
+      <div style={{ minHeight: 150, margin: "16px 0", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
+        {gs.phase === "reveal" ? (
+          <div style={{ textAlign: "center", width: "100%" }}>
+            <div className="pop" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: gs.reveal.loser === seat ? T.ink30 : "#B8862B" }}>
+              {gs.reveal.actual >= gs.reveal.qty ? "C’erano!" : "Bluff!"}
+            </div>
+            <Micro style={{ marginTop: 4 }}>
+              {gs.reveal.qty} × {gs.reveal.face} · trovati {gs.reveal.actual} · perde {who(room, gs.reveal.loser)}
+            </Micro>
+            {["A", "B"].map((s) => (
+              <div key={s} style={{ display: "flex", gap: 5, justifyContent: "center", marginTop: 8 }}>
+                {gs.reveal.dice[s].map((d, i) => (
+                  <Die key={i} v={d} size={30} hi={d === gs.reveal.face || d === 1} />
+                ))}
+              </div>
+            ))}
+          </div>
+        ) : gs.bid ? (
+          <div style={{ textAlign: "center" }}>
+            <Micro>{who(room, gs.bid.seat)} dichiara</Micro>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 6 }}>
+              <span className="pop" key={`${gs.bid.qty}-${gs.bid.face}`} style={{ fontFamily: BRAND, fontSize: 42, fontWeight: 700 }}>
+                {gs.bid.qty}
+              </span>
+              <span style={{ fontSize: 24, color: T.ink60 }}>×</span>
+              <Die v={gs.bid.face} size={42} />
+            </div>
+            <Micro style={{ marginTop: 8 }}>{total} dadi in gioco · gli 1 sono jolly</Micro>
+          </div>
+        ) : (
+          <Micro>{gs.phase === "roll" ? "lanciate i dadi" : `${who(room, gs.turn)} apre le puntate`}</Micro>
+        )}
+      </div>
+
+      {/* your dice */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
+          {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
+        </div>
+        <Micro>{gs.counts[seat]} dadi</Micro>
+      </div>
+      <div style={{ display: "flex", gap: 8, justifyContent: "center", minHeight: 52 }}>
+        {rolled || gs.phase !== "roll"
+          ? gs.dice[seat].map((d, i) => <Die key={i} v={d} size={46} roll={rolled && gs.phase === "roll"} />)
+          : Array.from({ length: gs.counts[seat] }).map((_, i) => <Die key={i} hidden size={46} />)}
+      </div>
+
+      {/* actions */}
+      <div style={{ marginTop: 18 }}>
+        {gs.phase === "roll" &&
+          (mine && !rolled ? (
+            <Button full onClick={tapRoll}>
+              Lancia i dadi — scuoti o tocca
+            </Button>
+          ) : (
+            <Micro style={{ textAlign: "center" }}>{rolled ? `aspetta ${who(room, opp)}` : `lancia ${who(room, gs.turn)}`}</Micro>
+          ))}
+
+        {gs.phase === "bid" &&
+          (mine ? (
+            <div>
+              <div style={{ display: "flex", gap: 5, justifyContent: "center", marginBottom: 12 }}>
+                {[2, 3, 4, 5, 6].map((f) => (
+                  <Die key={f} v={f} size={38} on={bidFace === f} onClick={() => setBidFace(f)} />
+                ))}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 12 }}>
+                <button onClick={() => setBidQty((q) => Math.max(1, q - 1))} style={stepBtn}>
+                  −
+                </button>
+                <div style={{ fontFamily: BRAND, fontSize: 26, fontWeight: 700, minWidth: 40, textAlign: "center" }}>{bidQty}</div>
+                <button onClick={() => setBidQty((q) => Math.min(total, q + 1))} style={stepBtn}>
+                  +
+                </button>
+                <span style={{ color: T.ink60 }}>×</span>
+                <Die v={bidFace} size={34} />
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button full disabled={!legal} onClick={() => commit(perudoBid(gs, seat, bidQty, bidFace))}>
+                  Rilancia
+                </Button>
+                {gs.bid && (
+                  <Button kind="line" onClick={() => commit(perudoDoubt(gs, seat))}>
+                    Dubito!
+                  </Button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <Micro style={{ textAlign: "center" }}>tocca a {who(room, gs.turn)}</Micro>
+          ))}
+
+        {gs.phase === "reveal" &&
+          !gs.done &&
+          (seat === gs.reveal.loser ? (
+            <Button full onClick={() => commit(perudoNext(gs, seat))}>
+              Nuovo giro
+            </Button>
+          ) : (
+            <Micro style={{ textAlign: "center" }}>{who(room, gs.reveal.loser)} rilancia i dadi</Micro>
+          ))}
+      </div>
+    </div>
+  );
+}
+const stepBtn = {
+  width: 42,
+  height: 42,
+  borderRadius: 999,
+  border: `1.5px solid ${T.ink}`,
+  background: "transparent",
+  color: T.ink,
+  fontSize: 22,
+  fontWeight: 700,
+  cursor: "pointer",
+  WebkitTapHighlightColor: "transparent",
+};
 
 /* ── the finale ── */
 const SUIT_COLS = ["#A8842A", "#A5342F", "#2C557E", "#3A6B4A"];
