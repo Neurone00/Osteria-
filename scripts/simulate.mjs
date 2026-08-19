@@ -35,6 +35,7 @@ const EXPORTS = [
   "dealScopa", "scopaOptions", "scopaPlay", "scoreScopa", "primiera",
   "dealRuba", "rubaOptions", "rubaPlay",
   "dealCamicia", "camiciaFlip", "demand",
+  "dealBriscola", "briscolaPlay", "brisPoints",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
 const modPath = join(dir, "rules.mjs");
@@ -162,6 +163,33 @@ function playCamicia(o) {
   return { steps, draw: g.win === null };
 }
 
+/* ── briscola ───────────────────────────────────────────────── */
+const brisCensus = (g, label) =>
+  census(
+    { deck: g.deck, handA: g.hands.A, handB: g.hands.B, pileA: g.piles.A, pileB: g.piles.B, lead: g.lead ? [g.lead.card] : [] },
+    label
+  );
+function playBriscola() {
+  let g = R.dealBriscola("A", { A: 0, B: 0 });
+  let steps = 0;
+  const MAX = 100;
+  while (!g.done) {
+    if (++steps > MAX) return fail("briscola", `no end after ${MAX} plays`);
+    brisCensus(g, "briscola mid-hand");
+    const hand = g.hands[g.turn];
+    if (!hand.length) return fail("briscola", `${g.turn} is on turn holding no cards — stuck`);
+    const res = R.briscolaPlay(g, g.turn, pick(hand).id);
+    if (!res) return fail("briscola", "briscolaPlay rejected a card in hand");
+    g = res.g;
+  }
+  brisCensus(g, "briscola end");
+  const total = R.brisPoints(g.piles.A) + R.brisPoints(g.piles.B);
+  if (total !== 120) fail("briscola", `points sum to ${total}, expected 120`);
+  if (g.piles.A.length + g.piles.B.length !== 40)
+    fail("briscola", `hand ended with ${g.piles.A.length + g.piles.B.length} cards collected, expected 40`);
+  return steps;
+}
+
 /* ── prepared deck (shuffle + cut ritual) ───────────────────── */
 // A deck the players shuffled by tapping and cut by dragging is dealt exactly as
 // prepared. Check it still holds all 40 cards through a whole game.
@@ -178,6 +206,8 @@ function playPrepared() {
   scopaCensus(rg, "prepared ruba deal");
   let cg = R.dealCamicia({ A: 0, B: 0 }, deck);
   camiciaCensus(cg, "prepared camicia deal");
+  let bg = R.dealBriscola("A", { A: 0, B: 0 }, deck);
+  brisCensus(bg, "prepared briscola deal");
 }
 
 /* ── run ────────────────────────────────────────────────────── */
@@ -191,6 +221,7 @@ const runs = [
   ["rubamazzo, northern sums", () => playRuba({ sums: true })],
   ["camicia, italian (A/2/3)", () => playCamicia({ intl: false })],
   ["camicia, international (A4 R3 C2 F1)", () => playCamicia({ intl: true })],
+  ["briscola", () => playBriscola()],
 ];
 
 console.log(`Osteria — ${DEALS} deals per variant\n`);

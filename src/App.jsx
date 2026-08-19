@@ -113,6 +113,13 @@ const GAMES = {
     opts: [{ k: "intl", label: "Variante figure (A4 R3 C2 F1)", cycle: [false, true] }],
     def: { intl: false },
   },
+  briscola: {
+    name: "Briscola",
+    tag: "la briscola comanda",
+    line: "Prendi con la carta più forte, o taglia con una briscola. Chi fa più punti su 120 vince.",
+    opts: [],
+    def: {},
+  },
 };
 
 /* ── scopa ─────────────────────────────────────────────────── */
@@ -428,6 +435,83 @@ function camiciaFlip(gs, seat, o) {
   return { g, kind, ev, card };
 }
 
+/* ── briscola ──────────────────────────────────────────────────
+   2-player Briscola. Points: A 11, 3 10, Re 4, Cavallo 3, Fante 2, rest 0
+   (120 total). Beating order within a suit follows those points, then 7·6·5·4·2.
+   No obligation to follow suit; a briscola (trump) beats any non-trump. Winner
+   of a trick draws first, then the loser, until the stock (briscola last) runs
+   out; then the last three tricks are played from the hand. 61 points wins. */
+const BPTS = { 1: 11, 3: 10, 10: 4, 9: 3, 8: 2 };
+const bpts = (v) => BPTS[v] || 0;
+const BRANK = { 1: 10, 3: 9, 10: 8, 9: 7, 8: 6, 7: 5, 6: 4, 5: 3, 4: 2, 2: 1 };
+const brisPoints = (pile) => pile.reduce((s, c) => s + bpts(c.v), 0);
+
+function dealBriscola(dealer, tally, pre) {
+  const d = pre ? pre.slice() : shuffle(makeDeck());
+  const hands = { A: d.splice(0, 3), B: d.splice(0, 3) };
+  const brisc = d.shift(); // the exposed trump indicator…
+  d.push(brisc); // …kept at the bottom of the stock, drawn last
+  return {
+    deck: d,
+    briscola: brisc,
+    trump: brisc.s,
+    hands,
+    piles: { A: [], B: [] },
+    lead: null, // { seat, card } once a trick is half-played
+    turn: other(dealer),
+    leader: other(dealer),
+    dealer,
+    tally: tally || { A: 0, B: 0 },
+    summary: null,
+    done: false,
+    matchDone: false,
+    win: null,
+  };
+}
+
+function brisWinner(lead, resp, trump) {
+  if (resp.card.s === lead.card.s) return BRANK[resp.card.v] > BRANK[lead.card.v] ? resp.seat : lead.seat;
+  if (resp.card.s === trump) return resp.seat;
+  return lead.seat;
+}
+
+function briscolaPlay(gs, seat, cardId) {
+  const g = clone(gs);
+  if (g.turn !== seat || g.done) return null;
+  const i = g.hands[seat].findIndex((c) => c.id === cardId);
+  if (i < 0) return null;
+  const card = g.hands[seat].splice(i, 1)[0];
+  let kind = "lay";
+  let ev;
+  if (!g.lead) {
+    g.lead = { seat, card };
+    g.turn = other(seat);
+    ev = { t: "blead", v: card.v, s: card.s };
+  } else {
+    const win = brisWinner(g.lead, { seat, card }, g.trump);
+    g.piles[win].push(g.lead.card, card);
+    g.lead = null;
+    const loser = other(win);
+    if (g.deck.length) g.hands[win].push(g.deck.shift());
+    if (g.deck.length) g.hands[loser].push(g.deck.shift());
+    g.leader = win;
+    g.turn = win;
+    kind = win === seat ? "take" : "lay";
+    ev = { t: "btake", v: card.v, s: card.s, win };
+    if (!g.hands.A.length && !g.hands.B.length) {
+      const a = brisPoints(g.piles.A);
+      const b = brisPoints(g.piles.B);
+      const w = a === b ? null : a > b ? "A" : "B";
+      if (w) g.tally[w] += 1;
+      g.summary = { a, b, win: w };
+      g.done = true;
+      g.matchDone = true;
+      g.win = w;
+    }
+  }
+  return { g, kind, ev, card };
+}
+
 /* ═══════════════════════════ feedback ═══════════════════════════ */
 let AC = null;
 function slamSound(kind, on) {
@@ -647,6 +731,10 @@ function describe(ev, french) {
       return `gira il ${r(ev.v)} — ${ev.d} da pagare`;
     case "pay":
       return `paga l’ultima — ${ev.n} carte cambiano mano`;
+    case "blead":
+      return `apre con il ${r(ev.v)} di ${suitName(ev.s, french)}`;
+    case "btake":
+      return `risponde con il ${r(ev.v)} di ${suitName(ev.s, french)}`;
     default:
       return "";
   }
@@ -1430,6 +1518,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
       ? dealScopa(dealer, cont?.scores || null, o, deck)
       : game === "ruba"
       ? dealRuba(dealer, cont?.tally || null, deck)
+      : game === "briscola"
+      ? dealBriscola(dealer, cont?.tally || null, deck)
       : dealCamicia(cont?.tally || null, deck);
 
   const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });
@@ -1594,12 +1684,32 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
           <Rule />
 
           <Micro>Gioco</Micro>
-          <Segmented
-            options={Object.entries(GAMES).map(([k, gm]) => ({ v: k, label: gm.name }))}
-            value={room.game}
-            onPick={host ? pickGame : null}
-            style={{ marginTop: 8 }}
-          />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+            {Object.entries(GAMES).map(([k, gm]) => {
+              const on = k === room.game;
+              return (
+                <button
+                  key={k}
+                  onClick={host ? () => pickGame(k) : undefined}
+                  disabled={!host}
+                  style={{
+                    textAlign: "left",
+                    border: `1.5px solid ${on ? T.ink : T.line}`,
+                    background: on ? T.ink : "transparent",
+                    color: on ? T.bg : T.ink,
+                    borderRadius: 12,
+                    padding: "11px 13px",
+                    cursor: host ? "pointer" : "default",
+                    transition: "background 160ms ease, color 160ms ease, border-color 160ms ease",
+                    WebkitTapHighlightColor: "transparent",
+                  }}
+                >
+                  <div style={{ fontFamily: BRAND, fontSize: 16, fontWeight: 600, letterSpacing: "-0.01em" }}>{gm.name}</div>
+                  <div style={{ fontSize: 11, fontFamily: "ui-monospace, monospace", opacity: 0.7, marginTop: 2 }}>{gm.tag}</div>
+                </button>
+              );
+            })}
+          </div>
           <p style={{ color: T.ink60, fontSize: 13, lineHeight: 1.45, margin: "12px 0 0" }}>{g.line}</p>
 
           {g.opts.length > 0 && (
@@ -1652,6 +1762,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
 
       {room.game === "camicia" ? (
         <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} />
+      ) : room.game === "briscola" ? (
+        <Briscola room={room} gs={gs} seat={seat} opp={opp} mine={mine} slamId={slamId} commit={commit} />
       ) : (
         <Board
           room={room}
@@ -2218,6 +2330,109 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
   );
 }
 
+/* ── briscola ── */
+function Briscola({ room, gs, seat, opp, mine, slamId, commit }) {
+  const french = useContext(SuitCtx);
+  const play = (card) => {
+    if (mine) commit(briscolaPlay(gs, seat, card.id));
+  };
+  const myPts = brisPoints(gs.piles[seat]);
+  const oppPts = brisPoints(gs.piles[opp]);
+  const a = room.anim;
+  const played = a && a.card ? { id: a.card, s: a.card[0], v: +a.card.slice(1) } : null;
+  const nameRow = (s, you) => (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>
+        {who(room, s)}
+        {you && <span style={{ color: T.ink30, fontWeight: 400 }}> tu</span>}
+      </div>
+      <Micro>{brisPoints(gs.piles[s])} punti</Micro>
+    </div>
+  );
+
+  return (
+    <div>
+      {/* opponent */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        {nameRow(opp, false)}
+        <div style={{ display: "flex", gap: 3 }}>
+          {gs.hands[opp].map((c) => (
+            <Back key={c.id} size="xs" />
+          ))}
+        </div>
+      </div>
+
+      {/* trump + stock, and the trick in play */}
+      <div style={{ position: "relative", minHeight: 168, margin: "16px 0", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {/* briscola + stock, pinned left */}
+        <div style={{ position: "absolute", left: 0, top: 8, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+          {gs.deck.length > 0 ? (
+            <div style={{ position: "relative", width: 74, height: 60 }}>
+              <div style={{ position: "absolute", left: 20, top: 6, transform: "rotate(90deg)" }}>
+                <Card card={gs.briscola} size="xs" rot={0} />
+              </div>
+              <div style={{ position: "absolute", left: 0, top: 0 }}>
+                <Deck3D n={gs.deck.length} faceUp={false} size="xs" />
+              </div>
+            </div>
+          ) : (
+            <div style={{ width: 40, height: 40, border: `1px solid ${T.line}`, borderRadius: 8, display: "grid", placeItems: "center" }}>
+              <Pip suit={gs.trump} size={22} />
+            </div>
+          )}
+          <Micro>{gs.deck.length > 0 ? `${gs.deck.length} nel mazzo` : "mazzo finito"}</Micro>
+        </div>
+
+        {/* the trick */}
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          {gs.lead ? (
+            <Card card={gs.lead.card} size="lg" rot={-3} slam={slamId === gs.lead.card.id} enter />
+          ) : played && slamId === played.id ? (
+            <Card card={played} size="lg" rot={3} slam />
+          ) : (
+            <Micro>{mine ? "apri la mano" : `gioca ${who(room, gs.turn)}`}</Micro>
+          )}
+        </div>
+      </div>
+
+      {/* turn */}
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+        <div
+          className={!gs.done && mine ? "turn" : ""}
+          style={{
+            fontFamily: BRAND,
+            fontSize: 12,
+            fontWeight: 600,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            padding: "5px 13px",
+            borderRadius: 999,
+            background: !gs.done && mine ? T.ink : "transparent",
+            color: !gs.done && mine ? T.bg : T.ink60,
+            border: `1px solid ${!gs.done && mine ? T.ink : T.line}`,
+          }}
+        >
+          {gs.done ? "mano finita" : mine ? (gs.lead ? "rispondi" : "gioca") : "aspetta"}
+        </div>
+      </div>
+
+      {/* your hand */}
+      <div>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+          {nameRow(seat, true)}
+          <Micro>briscola {suitName(gs.trump, french)}</Micro>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", minHeight: 108 }}>
+          {gs.hands[seat].map((c) => (
+            <Card key={c.id} card={c} size="lg" rot={0} enter dim={!mine} onClick={mine ? () => play(c) : undefined} />
+          ))}
+          {gs.hands[seat].length === 0 && <Micro style={{ alignSelf: "center" }}>mano vuota</Micro>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── the finale ── */
 const SUIT_COLS = ["#A8842A", "#A5342F", "#2C557E", "#3A6B4A"];
 function Confetti() {
@@ -2475,11 +2690,16 @@ function Summary({ room, gs }) {
         </div>
       </div>
     );
-  if (room.game === "ruba" && gs.summary)
+  if ((room.game === "ruba" || room.game === "briscola") && gs.summary)
     return (
-      <Micro style={{ textAlign: "center" }}>
-        {who(room, "A")} {gs.summary.a} — {who(room, "B")} {gs.summary.b} · mani {gs.tally.A}–{gs.tally.B}
-      </Micro>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 22, fontWeight: 700, fontFamily: BRAND }}>
+          {gs.summary.a} <span style={{ color: T.ink30 }}>—</span> {gs.summary.b}
+        </div>
+        <Micro style={{ marginTop: 4 }}>
+          {who(room, "A")} · {who(room, "B")} {room.game === "briscola" ? " · punti su 120" : ""} · mani {gs.tally.A}–{gs.tally.B}
+        </Micro>
+      </div>
     );
   return (
     <Micro style={{ textAlign: "center" }}>
