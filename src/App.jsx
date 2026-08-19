@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 
 /* ═══════════════════════════ tokens ═══════════════════════════ */
 const T = {
@@ -61,10 +61,11 @@ const GAMES = {
     opts: [
       { k: "target", label: "Game to", cycle: [11, 16, 21] },
       { k: "asso", label: "Asso piglia tutto", cycle: [false, true] },
+      { k: "acepile", label: "Asso solo → your pile", cycle: [false, true] },
       { k: "rebello", label: "Rebello (re di denari)", cycle: [false, true] },
       { k: "napola", label: "Napola", cycle: [false, true] },
     ],
-    def: { target: 11, asso: false, rebello: false, napola: false },
+    def: { target: 11, asso: false, acepile: false, rebello: false, napola: false },
   },
   ruba: {
     name: "Rubamazzo",
@@ -198,6 +199,14 @@ function scopaPlay(gs, seat, cardId, take, o) {
       kind = "take";
       note = `takes ${got.map((c) => lbl(c.v)).join("+")} with the ${lbl(card.v)}`;
     }
+  } else if (o.acepile && card.v === 1) {
+    // House rule: an asso played with nothing to capture is banked straight to
+    // your pile instead of being laid on the table. It counts as a take (never
+    // a scopa — the table is untouched), so the last-taker credit follows too.
+    g.piles[seat].push(card);
+    g.last = seat;
+    kind = "take";
+    note = `banks the asso`;
   } else g.table.push(card);
   g.turn = other(seat);
 
@@ -499,7 +508,35 @@ function loadPeerJs() {
 }
 
 /* ═══════════════════════════ marks ═══════════════════════════ */
+/* Card face is a per-device choice, not a table rule: each player sees the deck
+   they picked. false → Napoletane (Italian suits, A/F/C/R); true → Francesi
+   (French suits ♦♥♠♣, A/J/Q/K). Values and scoring never change. */
+const SuitCtx = createContext(false);
+const FR_SUIT = { D: { g: "♦", c: "#B23A2E" }, C: { g: "♥", c: "#B23A2E" }, S: { g: "♠", c: "#15181C" }, B: { g: "♣", c: "#15181C" } };
+const FR_RANK = { 1: "A", 8: "J", 9: "Q", 10: "K" };
+const VS_TEXT = String.fromCharCode(0xfe0e); // force text (not emoji) rendering of ♦♥♠♣
+const faceLbl = (v, french) => (french ? FR_RANK[v] || String(v) : lbl(v));
+
 function Pip({ suit, size = 20 }) {
+  const french = useContext(SuitCtx);
+  if (french) {
+    const f = FR_SUIT[suit];
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+        <text
+          x="12"
+          y="12.5"
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize="20"
+          fontFamily="'Segoe UI Symbol','Noto Sans Symbols2','Apple Symbols',system-ui,sans-serif"
+          fill={f.c}
+        >
+          {f.g + VS_TEXT}
+        </text>
+      </svg>
+    );
+  }
   const c = SUIT[suit].c;
   const p = { fill: "none", stroke: c, strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" };
   return (
@@ -535,16 +572,18 @@ function Pip({ suit, size = 20 }) {
   );
 }
 
-const SZ = { xs: [34, 48], sm: [42, 60], md: [54, 76], lg: [66, 94] };
+const SZ = { xs: [36, 52], sm: [46, 66], md: [58, 82], lg: [74, 104] };
 
-function Card({ card, size = "md", onClick, active, dim, slam, rot }) {
+function Card({ card, size = "md", onClick, active, dim, slam, rot, enter }) {
+  const french = useContext(SuitCtx);
   const [w, h] = SZ[size];
   const r = rot === undefined ? tilt(card.id) : rot;
+  const cls = slam ? "slam" : enter ? "deal" : "";
   return (
     <button
       onClick={onClick}
       disabled={!onClick}
-      className={slam ? "slam" : ""}
+      className={cls}
       style={{
         "--r": `${r}deg`,
         width: w,
@@ -573,14 +612,14 @@ function Card({ card, size = "md", onClick, active, dim, slam, rot }) {
           fontSize: size === "lg" ? 15 : size === "md" ? 13 : 11,
           fontWeight: 700,
           letterSpacing: "-0.03em",
-          color: T.ink,
+          color: french ? FR_SUIT[card.s].c : T.ink,
           lineHeight: 1,
         }}
       >
-        {lbl(card.v)}
+        {faceLbl(card.v, french)}
       </span>
       <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-        <Pip suit={card.s} size={size === "lg" ? 26 : size === "md" ? 22 : 16} />
+        <Pip suit={card.s} size={size === "lg" ? 30 : size === "md" ? 24 : 17} />
       </span>
     </button>
   );
@@ -657,6 +696,7 @@ function Rule() {
 
 const CSS = `
 html,body{overscroll-behavior:none;margin:0}
+.app{min-height:100vh;min-height:100dvh}
 *{box-sizing:border-box}
 button{font-family:inherit}
 input{font-family:inherit}
@@ -676,11 +716,30 @@ input{font-family:inherit}
 .jolt{animation:jolt 190ms ease-out}
 @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .fade{animation:fadeUp 220ms ease-out both}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade{animation:none!important}}
+@keyframes dealIn{from{opacity:0;transform:translateY(10px) scale(.94)}to{opacity:1;transform:none}}
+.deal{animation:dealIn 300ms cubic-bezier(.2,.9,.25,1) both}
+@keyframes turnGlow{0%,100%{opacity:.55}50%{opacity:1}}
+.turn{animation:turnGlow 2s ease-in-out infinite}
+@keyframes swap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.swap{animation:swap 260ms ease-out both}
+.lift{transition:background 240ms ease, box-shadow 240ms ease, border-color 240ms ease}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap{animation:none!important}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
 export default function App() {
+  // Card face is a personal, per-device choice — kept out of the shared room so
+  // each player sees their own deck. It lives above the game so every screen,
+  // including the home preview, renders through the same provider.
+  const [french, setFrench] = useState(false);
+  return (
+    <SuitCtx.Provider value={french}>
+      <Game french={french} setFrench={setFrench} />
+    </SuitCtx.Provider>
+  );
+}
+
+function Game({ french, setFrench }) {
   const [screen, setScreen] = useState("home");
   const [name, setName] = useState("");
   const [codeIn, setCodeIn] = useState("");
@@ -1060,7 +1119,11 @@ export default function App() {
     publish({ ...room, gs: res.g, log, anim: { id: uid(), kind: res.kind, card: res.card?.id, seat } });
   };
 
-  const start = (game) => publish({ ...room, game, opts: { ...GAMES[game].def }, status: "play", gs: newGame(game, GAMES[game].def), log: [], anim: null });
+  // The host picks the game and its house rules in the lobby, before anything is
+  // dealt; both are synced so the guest sees the table being set. Dealing just
+  // flips the room to play with whatever is already staged in room.game/opts.
+  const pickGame = (game) => publish({ ...room, game, opts: { ...GAMES[game].def } });
+  const start = () => publish({ ...room, status: "play", gs: newGame(room.game, room.opts), log: [], anim: null });
 
   const newGame = (game, o, prev) =>
     game === "scopa"
@@ -1104,12 +1167,14 @@ export default function App() {
             Three Italian card games for two people on two phones. Cards land hard.
           </p>
 
-          <div style={{ display: "flex", gap: 8, margin: "30px 0 26px" }}>
+          <div style={{ display: "flex", gap: 8, margin: "26px 0 14px" }}>
             {["D", "C", "S", "B"].map((s, i) => (
               <Card key={s} card={{ id: s + "x", s, v: [1, 7, 10, 3][i] }} size="md" rot={(i - 1.5) * 3.2} />
             ))}
           </div>
+          <FaceToggle french={french} setFrench={setFrench} />
 
+          <div style={{ height: 18 }} />
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -1169,44 +1234,64 @@ export default function App() {
   const opp = other(seat);
   const seated = !!room.names.B;
 
-  /* ═════════ lobby ═════════ */
-  if (room.status === "lobby")
+  /* ═════════ lobby — pick the game and set the rules before dealing ═════════ */
+  if (room.status === "lobby") {
+    const host = seat === "A";
+    const g = GAMES[room.game];
     return (
       <Frame jolt={false}>
-        <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title="Lobby" />
+        <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title="Set the table" />
         <div className="fade">
-          <Micro>Table code</Micro>
-          <div style={{ display: "flex", gap: 6, margin: "8px 0 10px" }}>
-            {room.code.split("").map((ch, i) => (
-              <div key={i} style={codeTile}>
-                {ch}
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <Micro>Table code</Micro>
+              <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
+                {room.code.split("").map((ch, i) => (
+                  <div key={i} style={{ ...codeTile, width: 34, height: 44, fontSize: 19 }}>
+                    {ch}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <p style={{ fontSize: 13, color: T.ink60, margin: 0 }}>
-            {seated ? `${room.names.B} is at the table.` : "Waiting for the second player…"}
-          </p>
-          <Rule />
-          {Object.entries(GAMES).map(([k, g]) => (
-            <div key={k} style={{ marginBottom: 20 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em" }}>{g.name}</div>
-                  <Micro style={{ marginTop: 2 }}>{g.tag}</Micro>
-                </div>
-                {seat === "A" && (
-                  <Button onClick={() => start(k)} disabled={!seated}>
-                    Deal
-                  </Button>
-                )}
-              </div>
-              <p style={{ color: T.ink60, fontSize: 13, lineHeight: 1.45, margin: "6px 0 0" }}>{g.line}</p>
             </div>
-          ))}
-          {seat === "B" && <Micro>{room.names.A} chooses the game.</Micro>}
+            <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6 }}>
+              {seated ? `${room.names.B} is in` : "Waiting for player two…"}
+            </Micro>
+          </div>
+
+          <Rule />
+
+          <Micro>Game</Micro>
+          <Segmented
+            options={Object.entries(GAMES).map(([k, gm]) => ({ v: k, label: gm.name }))}
+            value={room.game}
+            onPick={host ? pickGame : null}
+            style={{ marginTop: 8 }}
+          />
+          <p style={{ color: T.ink60, fontSize: 13, lineHeight: 1.45, margin: "12px 0 0" }}>{g.line}</p>
+
+          {g.opts.length > 0 && (
+            <>
+              <Micro style={{ marginTop: 20 }}>House rules{host ? "" : " · host sets these"}</Micro>
+              <RuleChips conf={g} opts={room.opts} setOpt={host ? setOpt : null} />
+            </>
+          )}
+
+          <Micro style={{ marginTop: 20 }}>Card faces · your device</Micro>
+          <FaceToggle french={french} setFrench={setFrench} />
+
+          <div style={{ marginTop: 24 }}>
+            {host ? (
+              <Button full disabled={!seated} onClick={start}>
+                {seated ? `Deal ${g.name}` : "Waiting for player two…"}
+              </Button>
+            ) : (
+              <Micro>{room.names.A} is setting the table — hold tight.</Micro>
+            )}
+          </div>
         </div>
       </Frame>
     );
+  }
 
   /* ═════════ table ═════════ */
   const gs = room.gs;
@@ -1254,8 +1339,6 @@ export default function App() {
           )}
         </div>
       )}
-
-      {seat === "A" && !gs.done && conf.opts.length > 0 && <Options conf={conf} room={room} setOpt={setOpt} />}
     </Frame>
   );
 }
@@ -1286,9 +1369,9 @@ const codeTile = {
 
 function Frame({ children, jolt }) {
   return (
-    <div style={{ minHeight: "100vh", background: T.bg, color: T.ink, overscrollBehavior: "none", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+    <div className="app" style={{ background: T.bg, color: T.ink, overscrollBehavior: "none", fontFamily: "system-ui, -apple-system, sans-serif" }}>
       <style>{CSS}</style>
-      <div className={jolt ? "jolt" : ""} style={{ maxWidth: 430, margin: "0 auto", padding: "16px 18px 40px" }}>
+      <div className={jolt ? "jolt" : ""} style={{ maxWidth: 480, margin: "0 auto", padding: "14px 16px 24px" }}>
         {children}
       </div>
     </div>
@@ -1339,41 +1422,98 @@ const plain = {
   fontFamily: "ui-monospace, monospace",
 };
 
-function Options({ conf, room, setOpt }) {
+/* A segmented control: the whole row is one pill, the active cell is inked in.
+   onPick null makes it a read-only display (what the guest sees). */
+function Segmented({ options, value, onPick, style }) {
   return (
-    <div style={{ borderTop: `1px solid ${T.line}`, marginTop: 20, paddingTop: 12 }}>
-      <Micro>House rules</Micro>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-        {conf.opts.map((o) => {
-          const cur = room.opts[o.k];
-          const i = o.cycle.indexOf(cur);
-          const next = o.cycle[(i + 1) % o.cycle.length];
-          const on = cur === true;
-          return (
-            <button
-              key={o.k}
-              onClick={() => setOpt(o.k, next)}
-              style={{
-                border: `1px solid ${on ? T.ink : T.line}`,
-                background: on ? T.ink : "transparent",
-                color: on ? T.bg : T.ink60,
-                borderRadius: 999,
-                padding: "6px 11px",
-                fontSize: 11,
-                fontFamily: "ui-monospace, monospace",
-                cursor: "pointer",
-              }}
-            >
-              {o.label}
-              {typeof cur === "number" ? ` ${cur}` : ""}
-            </button>
-          );
-        })}
-      </div>
-      <Micro style={{ marginTop: 8, textTransform: "none", letterSpacing: 0, fontSize: 11 }}>
-        Applies from the next deal.
-      </Micro>
+    <div
+      style={{
+        display: "flex",
+        border: `1px solid ${T.line}`,
+        borderRadius: 999,
+        padding: 3,
+        gap: 3,
+        ...style,
+      }}
+    >
+      {options.map((o) => {
+        const on = o.v === value;
+        return (
+          <button
+            key={o.v}
+            onClick={onPick ? () => onPick(o.v) : undefined}
+            disabled={!onPick}
+            style={{
+              flex: 1,
+              border: "none",
+              background: on ? T.ink : "transparent",
+              color: on ? T.bg : T.ink60,
+              borderRadius: 999,
+              padding: "8px 6px",
+              fontSize: 12,
+              fontWeight: 600,
+              letterSpacing: "0.01em",
+              cursor: onPick ? "pointer" : "default",
+              transition: "background 180ms ease, color 180ms ease",
+              WebkitTapHighlightColor: "transparent",
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
     </div>
+  );
+}
+
+/* House-rule chips. setOpt null → read-only (the guest's view). */
+function RuleChips({ conf, opts, setOpt }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+      {conf.opts.map((o) => {
+        const cur = opts[o.k];
+        const i = o.cycle.indexOf(cur);
+        const next = o.cycle[(i + 1) % o.cycle.length];
+        const on = cur === true;
+        return (
+          <button
+            key={o.k}
+            onClick={setOpt ? () => setOpt(o.k, next) : undefined}
+            disabled={!setOpt}
+            style={{
+              border: `1px solid ${on ? T.ink : T.line}`,
+              background: on ? T.ink : "transparent",
+              color: on ? T.bg : T.ink60,
+              borderRadius: 999,
+              padding: "7px 12px",
+              fontSize: 11,
+              fontFamily: "ui-monospace, monospace",
+              cursor: setOpt ? "pointer" : "default",
+              transition: "background 180ms ease, color 180ms ease, border-color 180ms ease",
+              WebkitTapHighlightColor: "transparent",
+            }}
+          >
+            {o.label}
+            {typeof cur === "number" ? ` ${cur}` : ""}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* Personal deck-face switch. Napoletane (Italian suits) or Francesi (♦♥♠♣). */
+function FaceToggle({ french, setFrench }) {
+  return (
+    <Segmented
+      options={[
+        { v: false, label: "Napoletane" },
+        { v: true, label: "Francesi ♦♥♠♣" },
+      ]}
+      value={french}
+      onPick={(v) => setFrench(v)}
+      style={{ marginTop: 8 }}
+    />
   );
 }
 
@@ -1433,6 +1573,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
               key={c.id}
               card={c}
               size="md"
+              enter
               slam={slamId === c.id}
               active={pick && pick.opts.some((x) => (isScopa ? x : x.ids || []).includes(c.id))}
             />
@@ -1445,7 +1586,11 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
         <PileView room={room} gs={gs} seat={opp} label="their pile" faceUp={!isScopa} slamId={slamId} />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
           {taken && <Card card={taken} size="sm" rot={0} slam={slamId === taken.id} />}
-          <Micro style={{ textAlign: "center" }}>{gs.done ? "hand over" : mine ? "your move" : "waiting"}</Micro>
+          <div className={!gs.done && mine ? "turn" : ""}>
+            <Micro style={{ textAlign: "center", color: !gs.done && mine ? T.ink : T.ink60 }}>
+              {gs.done ? "hand over" : mine ? "your move" : "waiting"}
+            </Micro>
+          </div>
         </div>
         <PileView room={room} gs={gs} seat={seat} label="your pile" faceUp={!isScopa} slamId={slamId} right />
       </div>
@@ -1510,6 +1655,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
               card={c}
               size="lg"
               rot={0}
+              enter
               dim={!mine}
               active={pick?.card.id === c.id}
               onClick={mine && !pick ? () => play(c) : undefined}
@@ -1578,13 +1724,18 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
                 card={c}
                 size={i === shown.length - 1 ? "lg" : "sm"}
                 dim={i !== shown.length - 1}
+                enter={i === shown.length - 1}
                 slam={slamId === c.id}
               />
             </div>
           ))}
         </div>
         <div style={{ marginTop: 16, textAlign: "center" }}>
-          <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.02em" }}>
+          <div
+            key={`${gs.done}-${gs.debt}-${gs.turn}`}
+            className="swap"
+            style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.02em" }}
+          >
             {gs.done
               ? gs.win
                 ? `${who(room, gs.win)} takes the lot`

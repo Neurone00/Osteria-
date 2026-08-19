@@ -166,8 +166,9 @@ function playCamicia(o) {
 const stat = (xs) => `${Math.min(...xs)}–${Math.max(...xs)}, median ${xs.slice().sort((a, b) => a - b)[xs.length >> 1]}`;
 
 const runs = [
-  ["scopa, base rules", () => playScopa({ target: 11, asso: false, rebello: false, napola: false })],
-  ["scopa, asso piglia tutto + rebello + napola", () => playScopa({ target: 11, asso: true, rebello: true, napola: true })],
+  ["scopa, base rules", () => playScopa({ target: 11, asso: false, acepile: false, rebello: false, napola: false })],
+  ["scopa, asso piglia tutto + rebello + napola", () => playScopa({ target: 11, asso: true, acepile: false, rebello: true, napola: true })],
+  ["scopa, asso solo to pile", () => playScopa({ target: 11, asso: false, acepile: true, rebello: false, napola: false })],
   ["rubamazzo, table matches only", () => playRuba({ sums: false })],
   ["rubamazzo, northern sums", () => playRuba({ sums: true })],
   ["camicia, italian (A/2/3)", () => playCamicia({ intl: false })],
