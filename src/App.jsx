@@ -42,6 +42,34 @@ function shuffle(a) {
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const tilt = (id) => (((id.charCodeAt(0) * 31 + id.charCodeAt(1) * 7) % 9) - 4) * 0.9;
 
+// Deterministic PRNG so a shuffle is a pure function of the seed the UI gathers
+// from the player's tapping (timing, rhythm, frame counter). Pure — no globals.
+function mulberry32(a) {
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// One human tap = one full riffle+overhand pass, driven entirely by `seed`.
+function shuffleWith(deck, seed) {
+  const rng = mulberry32(seed >>> 0);
+  const d = deck.slice();
+  for (let i = d.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [d[i], d[j]] = [d[j], d[i]];
+  }
+  return d;
+}
+// Cut: lift everything above `at` and drop it under the rest.
+function cutDeck(deck, at) {
+  const n = deck.length;
+  const k = ((Math.round(at) % n) + n) % n;
+  return [...deck.slice(k), ...deck.slice(0, k)];
+}
+
 /* ═══════════════════════════ rules ═══════════════════════════
    Sources consulted for this build:
    · Scopa / Asso piglia tutto — forced single-card capture, no scopa on the
@@ -88,12 +116,18 @@ const GAMES = {
 };
 
 /* ── scopa ─────────────────────────────────────────────────── */
-function dealScopa(dealer, scores, o) {
+// `pre` is a deck the players shuffled and cut by hand; when given it's dealt
+// exactly as prepared (no reshuffle guard — their cut is respected).
+function dealScopa(dealer, scores, o, pre) {
   let deck, table;
-  do {
-    deck = shuffle(makeDeck());
+  if (pre) {
+    deck = pre.slice();
     table = deck.splice(0, 4);
-  } while (table.filter((c) => c.v === 10).length >= 3);
+  } else
+    do {
+      deck = shuffle(makeDeck());
+      table = deck.splice(0, 4);
+    } while (table.filter((c) => c.v === 10).length >= 3);
   return {
     deck,
     table,
@@ -238,8 +272,8 @@ function scopaPlay(gs, seat, cardId, take, o) {
 }
 
 /* ── rubamazzo ─────────────────────────────────────────────── */
-function dealRuba(dealer, tally) {
-  const deck = shuffle(makeDeck());
+function dealRuba(dealer, tally, pre) {
+  const deck = pre ? pre.slice() : shuffle(makeDeck());
   const table = deck.splice(0, 4);
   return {
     deck,
@@ -335,8 +369,8 @@ function rubaPlay(gs, seat, cardId, opt) {
 /* ── straccia camicia ──────────────────────────────────────── */
 const demand = (v, intl) => (intl ? { 1: 4, 10: 3, 9: 2, 8: 1 }[v] || 0 : { 1: 1, 2: 2, 3: 3 }[v] || 0);
 
-function dealCamicia(tally) {
-  const d = shuffle(makeDeck());
+function dealCamicia(tally, pre) {
+  const d = pre ? pre.slice() : shuffle(makeDeck());
   return {
     decks: { A: d.slice(0, 20), B: d.slice(20) },
     center: [],
@@ -1388,19 +1422,38 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
   // dealt; both are synced so the guest sees the table being set. Dealing just
   // flips the room to play with whatever is already staged in room.game/opts.
   const pickGame = (game) => publish({ ...room, game, opts: { ...GAMES[game].def, ...(savedRules[game] || {}) } });
-  const start = () => publish({ ...room, status: "play", gs: newGame(room.game, room.opts), log: [], ev: null, anim: null });
 
-  const newGame = (game, o, prev) =>
+  // Deal a game from an ordered deck (either RNG or the one the players shuffled
+  // and cut). `cont` carries running scores/tally into the next game.
+  const dealGame = (game, o, dealer, cont, deck) =>
     game === "scopa"
-      ? dealScopa(prev ? other(prev.dealer) : "A", prev ? prev.scores : null, o)
+      ? dealScopa(dealer, cont?.scores || null, o, deck)
       : game === "ruba"
-      ? dealRuba(prev ? other(prev.dealer) : "A", prev ? prev.tally : null)
-      : dealCamicia(prev ? prev.tally : null);
+      ? dealRuba(dealer, cont?.tally || null, deck)
+      : dealCamicia(cont?.tally || null, deck);
 
+  const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });
+
+  // Enter the shuffle-and-cut ritual with a fresh RNG deck; the dealer shuffles,
+  // the other player cuts, then the cut hand deals from the result.
+  const beginPrepare = (dealer, cont) =>
+    publish({ ...room, status: "prep", prep: { deck: shuffle(makeDeck()), step: "shuffle", shuffles: 0, dealer, cont: cont || null } });
+
+  const shuffleTap = (seed) =>
+    publish({ ...room, prep: { ...room.prep, deck: shuffleWith(room.prep.deck, seed), shuffles: room.prep.shuffles + 1 } });
+  const shuffleDone = () => publish({ ...room, prep: { ...room.prep, step: "cut" } });
+  const cutAndDeal = (at) => {
+    const p = room.prep;
+    const gsNew = dealGame(room.game, room.opts, p.dealer, p.cont, cutDeck(p.deck, at));
+    publish({ ...room, status: "play", gs: gsNew, prep: null, log: [], ev: null, anim: null });
+  };
+
+  const start = () => beginPrepare("A", null);
   const again = () => {
     const g = room.gs;
-    const fresh = room.game === "scopa" && g.matchDone ? newGame("scopa", room.opts) : newGame(room.game, room.opts, g);
-    publish({ ...room, gs: fresh, log: [], ev: null, anim: null });
+    if (room.game === "scopa" && !g.matchDone) dealNow(dealGame("scopa", room.opts, other(g.dealer), { scores: g.scores }));
+    else if (room.game === "scopa") beginPrepare("A", null);
+    else beginPrepare(other(g.dealer), { tally: g.tally });
   };
 
   const setOpt = (k, val) => {
@@ -1572,6 +1625,21 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
       </Frame>
     );
   }
+
+  /* ═════════ shuffle & cut ═════════ */
+  if (room.status === "prep" && room.prep)
+    return (
+      <Frame jolt={false}>
+        <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title="Prepara il mazzo" />
+        <Prepare
+          room={room}
+          seat={seat}
+          shuffleTap={shuffleTap}
+          shuffleDone={shuffleDone}
+          cutAndDeal={cutAndDeal}
+        />
+      </Frame>
+    );
 
   /* ═════════ table ═════════ */
   const gs = room.gs;
@@ -2171,6 +2239,171 @@ function Confetti() {
           }}
         />
       ))}
+    </div>
+  );
+}
+
+/* ── shuffle & cut ── */
+function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal }) {
+  const prep = room.prep;
+  const amDealer = seat === prep.dealer;
+  const step = prep.step;
+  const dealerName = who(room, prep.dealer);
+  const cutterName = who(room, other(prep.dealer));
+
+  // Entropy for the shuffle: a seed mixed from tap timing, rhythm and a running
+  // animation-frame counter — the human's hands drive the randomness.
+  const seedRef = useRef((0x9e3779b9 ^ ((prep.deck.length * 2654435761) >>> 0)) >>> 0);
+  const lastTap = useRef(0);
+  const frame = useRef(0);
+  useEffect(() => {
+    if (step !== "shuffle" || !amDealer) return;
+    let raf;
+    const loop = () => {
+      frame.current = (frame.current + 1) >>> 0;
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [step, amDealer]);
+  const tap = () => {
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const dt = now - lastTap.current;
+    lastTap.current = now;
+    let s = seedRef.current;
+    s = (s ^ (Math.floor(now * 1000) >>> 0)) >>> 0;
+    s = Math.imul(s, 2654435761) >>> 0;
+    s = (s ^ (Math.floor(dt * 131) >>> 0)) >>> 0;
+    s = (s ^ frame.current) >>> 0;
+    s = (s ^ (s << 13)) >>> 0;
+    s = (s ^ (s >>> 17)) >>> 0;
+    s = (s ^ (s << 5)) >>> 0;
+    seedRef.current = s;
+    shuffleTap(s);
+    buzz("lay");
+  };
+
+  // Cut: drag across the spread to choose where to lift.
+  const [cutAt, setCutAt] = useState(20);
+  const barRef = useRef(null);
+  const drag = useRef(false);
+  const fromX = (clientX) => {
+    const el = barRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+    setCutAt(Math.max(2, Math.min(38, Math.round(frac * 40))));
+  };
+  const px = (e) => (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
+  const onDown = (e) => {
+    drag.current = true;
+    fromX(px(e));
+  };
+  const onMove = (e) => {
+    if (!drag.current) return;
+    if (e.cancelable) e.preventDefault();
+    fromX(px(e));
+  };
+  const onUp = () => {
+    drag.current = false;
+  };
+
+  const wait = (title, sub) => (
+    <div style={{ textAlign: "center", paddingTop: 70 }}>
+      <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 18 }}>
+        <Back size="sm" stack />
+        <Back size="sm" />
+      </div>
+      <div style={{ fontFamily: BRAND, fontSize: 20, fontWeight: 600 }}>{title}</div>
+      <Micro style={{ marginTop: 8 }}>{sub}</Micro>
+    </div>
+  );
+
+  if (step === "shuffle" && !amDealer) return wait(`${dealerName} mescola`, `${prep.shuffles} mescolate`);
+  if (step === "cut" && amDealer) return wait(`${cutterName} taglia il mazzo`, "un attimo");
+
+  if (step === "shuffle")
+    return (
+      <div className="fade" style={{ textAlign: "center", paddingTop: 8 }}>
+        <Micro>Mescola</Micro>
+        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>
+          Tocca il mazzo per mescolare — più tocchi, più si mescola. Il ritmo delle tue dita decide le carte.
+        </p>
+        <button
+          onClick={tap}
+          style={{
+            background: "none",
+            border: "none",
+            padding: 0,
+            margin: "26px 0 8px",
+            cursor: "pointer",
+            WebkitTapHighlightColor: "transparent",
+          }}
+        >
+          <span key={prep.shuffles} className="pop" style={{ display: "inline-block" }}>
+            <Deck3D n={40} faceUp={false} size="lg" />
+          </span>
+        </button>
+        <div style={{ fontFamily: BRAND, fontSize: 30, fontWeight: 700, lineHeight: 1 }}>{prep.shuffles}</div>
+        <Micro style={{ marginTop: 2 }}>mescolate</Micro>
+        <div style={{ marginTop: 22 }}>
+          <Button full disabled={prep.shuffles < 1} onClick={shuffleDone}>
+            {prep.shuffles < 1 ? "Tocca per mescolare" : `Passa il taglio a ${cutterName}`}
+          </Button>
+        </div>
+      </div>
+    );
+
+  // cut, shown to the non-dealer
+  return (
+    <div className="fade" style={{ textAlign: "center", paddingTop: 8 }}>
+      <Micro>Taglia</Micro>
+      <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>
+        Trascina lungo il mazzo per scegliere dove tagliare, poi conferma.
+      </p>
+      <div
+        ref={barRef}
+        onTouchStart={onDown}
+        onTouchMove={onMove}
+        onTouchEnd={onUp}
+        onMouseDown={onDown}
+        onMouseMove={onMove}
+        onMouseUp={onUp}
+        onMouseLeave={onUp}
+        style={{
+          position: "relative",
+          height: 108,
+          margin: "24px 0 10px",
+          touchAction: "none",
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          cursor: "ew-resize",
+        }}
+      >
+        <div style={{ position: "absolute", left: 0, right: 0, top: 22, bottom: 22, display: "flex", gap: 1 }}>
+          {Array.from({ length: 40 }, (_, i) => (
+            <div
+              key={i}
+              style={{
+                flex: 1,
+                borderRadius: 2,
+                background: i < cutAt ? T.ink : "#4a4a48",
+                boxShadow: i === cutAt - 1 ? `2px 0 0 ${T.bg}` : "none",
+              }}
+            />
+          ))}
+        </div>
+        <div style={{ position: "absolute", top: 6, bottom: 6, left: `calc(${(cutAt / 40) * 100}% - 1px)`, width: 2, background: "#B8862B" }} />
+        <div style={{ position: "absolute", top: -4, left: `calc(${(cutAt / 40) * 100}% - 8px)`, color: "#B8862B", fontSize: 16 }}>▼</div>
+      </div>
+      <Micro>
+        {cutAt} sopra · {40 - cutAt} sotto
+      </Micro>
+      <div style={{ marginTop: 22 }}>
+        <Button full onClick={() => cutAndDeal(cutAt)}>
+          Taglia e distribuisci
+        </Button>
+      </div>
     </div>
   );
 }

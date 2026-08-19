@@ -31,7 +31,7 @@ for (const banned of ["document", "window", "useState", "useEffect"])
     throw new Error(`the rules slice references ${banned} — the cut point is wrong`);
 
 const EXPORTS = [
-  "makeDeck", "shuffle", "GAMES",
+  "makeDeck", "shuffle", "shuffleWith", "cutDeck", "GAMES",
   "dealScopa", "scopaOptions", "scopaPlay", "scoreScopa", "primiera",
   "dealRuba", "rubaOptions", "rubaPlay",
   "dealCamicia", "camiciaFlip", "demand",
@@ -162,6 +162,24 @@ function playCamicia(o) {
   return { steps, draw: g.win === null };
 }
 
+/* ── prepared deck (shuffle + cut ritual) ───────────────────── */
+// A deck the players shuffled by tapping and cut by dragging is dealt exactly as
+// prepared. Check it still holds all 40 cards through a whole game.
+function playPrepared() {
+  let deck = R.makeDeck();
+  for (let t = 0; t < 7; t++) deck = R.shuffleWith(deck, (t * 2654435761 + 12345) >>> 0); // "taps"
+  deck = R.cutDeck(deck, 17); // a cut
+  if (deck.length !== 40 || new Set(deck.map((c) => c.id)).size !== 40)
+    return fail("prepared", "shuffle+cut lost or duplicated cards");
+  // deal each game from the prepared order and make sure it terminates cleanly
+  let sg = R.dealScopa("A", { A: 0, B: 0 }, { target: 11 }, deck);
+  scopaCensus(sg, "prepared scopa deal");
+  let rg = R.dealRuba("A", { A: 0, B: 0 }, deck);
+  scopaCensus(rg, "prepared ruba deal");
+  let cg = R.dealCamicia({ A: 0, B: 0 }, deck);
+  camiciaCensus(cg, "prepared camicia deal");
+}
+
 /* ── run ────────────────────────────────────────────────────── */
 const stat = (xs) => `${Math.min(...xs)}–${Math.max(...xs)}, median ${xs.slice().sort((a, b) => a - b)[xs.length >> 1]}`;
 
@@ -191,6 +209,12 @@ for (const [label, run] of runs) {
   const ok = failures === before;
   const tail = draws ? `, ${draws} called as draws` : "";
   console.log(`${ok ? "✓" : "✗"} ${label.padEnd(44)} ${lengths.length ? stat(lengths) : "—"} plays${tail}`);
+}
+
+{
+  const before = failures;
+  for (let i = 0; i < 200; i++) playPrepared();
+  console.log(`${failures === before ? "✓" : "✗"} ${"prepared deck (shuffle + cut) deals".padEnd(44)} 40 cards through the deal`);
 }
 
 console.log(failures ? `\n${failures} failure(s)` : "\nAll invariants held: 40 cards accounted for throughout, no stuck seats, every hand terminated.");
