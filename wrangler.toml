@@ -1,0 +1,22 @@
+name = "neurone00"
+main = "worker/index.js"
+compatibility_date = "2026-06-01"
+
+# The built game. Static files are served straight from the edge; anything that
+# isn't a file (i.e. /room/CODE) falls through to the Worker.
+[assets]
+directory = "./standalone"
+binding = "ASSETS"
+
+# One Durable Object per table code.
+[durable_objects]
+bindings = [{ name = "TABLE", class_name = "Table" }]
+
+# new_sqlite_classes (not new_classes) — SQLite-backed Durable Objects are the
+# ones available on the Workers free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Table"]
+
+[observability]
+enabled = true
