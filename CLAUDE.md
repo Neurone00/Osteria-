@@ -22,7 +22,7 @@ Two that look like bugs and aren't:
 src/App.jsx        everything: rules engines, transports, UI, motion. ~1500 lines, single file on purpose
 src/main.jsx       React root for the Vite build
 worker/index.js    Cloudflare Worker: serves the game, one Durable Object per table code
-wrangler.toml      name = "neurone00", assets + DO binding
+wrangler.toml      name = "osteria", assets + DO binding
 scripts/           build-standalone.mjs inlines the app into standalone/index.html
 standalone/        generated — the single file Cloudflare uploads. Never hand-edit
 ```

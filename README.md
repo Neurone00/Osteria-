@@ -17,10 +17,10 @@ The Worker in `worker/index.js` serves the game *and* runs the tables, so one co
 ```bash
 npm install
 npx wrangler login       # once
-npx wrangler deploy      # → https://neurone00.<your-subdomain>.workers.dev
+npx wrangler deploy      # → https://osteria.<your-subdomain>.workers.dev
 ```
 
-`wrangler.toml` is already set to `name = "neurone00"`. Change that line to rename the Worker; add a
+`wrangler.toml` is already set to `name = "osteria"`. Change that line to rename the Worker; add a
 `[[routes]]` block with `custom_domain = true` to put it on your own domain.
 
 What you get:
