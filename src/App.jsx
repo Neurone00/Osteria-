@@ -10,6 +10,10 @@ const T = {
   line: "rgba(18,18,18,0.16)",
   paper: "#FFFFFF",
 };
+// Whimsical display face for the wordmark and headings — loaded from Google
+// Fonts by the host page, with a rounded system fallback if it can't (e.g. the
+// offline artifact). Body copy stays on the neutral system stack.
+const BRAND = "'Fredoka', 'Baloo 2', ui-rounded, 'Segoe UI Rounded', system-ui, -apple-system, sans-serif";
 const SUIT = {
   D: { name: "Denari", c: "#A8842A" },
   C: { name: "Coppe", c: "#A5342F" },
@@ -19,7 +23,7 @@ const SUIT = {
 const RANKS = { 1: "A", 8: "F", 9: "C", 10: "R" };
 const lbl = (v) => RANKS[v] || String(v);
 const other = (s) => (s === "A" ? "B" : "A");
-const who = (room, s) => room.names[s] || (s === "A" ? "Host" : "Guest");
+const who = (room, s) => room.names[s] || (s === "A" ? "Oste" : "Ospite");
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 function makeDeck() {
@@ -56,12 +60,12 @@ const PRIM = { 7: 21, 6: 18, 1: 16, 5: 15, 4: 14, 3: 13, 2: 12, 8: 10, 9: 10, 10
 const GAMES = {
   scopa: {
     name: "Scopa",
-    tag: "3 cards each",
-    line: "Take a card of equal value, or a set that sums to it. Empty the table for a scopa.",
+    tag: "3 carte a testa",
+    line: "Prendi una carta di ugual valore, o una somma. Svuota il tavolo per fare scopa.",
     opts: [
-      { k: "target", label: "Game to", cycle: [11, 16, 21] },
+      { k: "target", label: "Partita a", cycle: [11, 16, 21] },
       { k: "asso", label: "Asso piglia tutto", cycle: [false, true] },
-      { k: "acepile", label: "Asso solo → your pile", cycle: [false, true] },
+      { k: "acepile", label: "Asso solo → in pila", cycle: [false, true] },
       { k: "rebello", label: "Rebello (re di denari)", cycle: [false, true] },
       { k: "napola", label: "Napola", cycle: [false, true] },
     ],
@@ -69,16 +73,16 @@ const GAMES = {
   },
   ruba: {
     name: "Rubamazzo",
-    tag: "steal the pile",
-    line: "Match the table to collect. Match the top of a pile and the whole pile is yours.",
-    opts: [{ k: "sums", label: "Northern sums", cycle: [false, true] }],
+    tag: "ruba il mazzo",
+    line: "Abbina il tavolo per raccogliere. Abbina la cima di un mazzo e lo rubi tutto.",
+    opts: [{ k: "sums", label: "Somme del nord", cycle: [false, true] }],
     def: { sums: false },
   },
   camicia: {
     name: "Straccia camicia",
-    tag: "no choices, all nerve",
-    line: "Turn the top card. Asso, due and tre make the other player pay 1, 2 or 3.",
-    opts: [{ k: "intl", label: "Figure variant (A4 R3 C2 F1)", cycle: [false, true] }],
+    tag: "niente scelte, solo nervi",
+    line: "Gira la carta in cima. Asso, due e tre fanno pagare 1, 2 o 3 all’altro.",
+    opts: [{ k: "intl", label: "Variante figure (A4 R3 C2 F1)", cycle: [false, true] }],
     def: { intl: false },
   },
 };
@@ -182,7 +186,7 @@ function scopaPlay(gs, seat, cardId, take, o) {
   if (i < 0) return null;
   const card = g.hands[seat].splice(i, 1)[0];
   let kind = "lay";
-  let note = `lays the ${lbl(card.v)} of ${SUIT[card.s].name.toLowerCase()}`;
+  let note = `cala il ${lbl(card.v)} di ${SUIT[card.s].name.toLowerCase()}`;
   if (take && take.length) {
     const onlyAce = g.table.length === 1 && g.table[0].v === 1;
     const aceSweep = o.asso && card.v === 1 && !onlyAce;
@@ -194,10 +198,10 @@ function scopaPlay(gs, seat, cardId, take, o) {
     if (g.table.length === 0 && !finalPlay && !aceSweep) {
       g.scope[seat] += 1;
       kind = "scopa";
-      note = `sweeps the table — scopa`;
+      note = `svuota il tavolo — scopa`;
     } else {
       kind = "take";
-      note = `takes ${got.map((c) => lbl(c.v)).join("+")} with the ${lbl(card.v)}`;
+      note = `prende ${got.map((c) => lbl(c.v)).join("+")} con il ${lbl(card.v)}`;
     }
   } else if (o.acepile && card.v === 1) {
     // House rule: an asso played with nothing to capture is banked straight to
@@ -206,7 +210,7 @@ function scopaPlay(gs, seat, cardId, take, o) {
     g.piles[seat].push(card);
     g.last = seat;
     kind = "take";
-    note = `banks the asso`;
+    note = `incassa l’asso`;
   } else g.table.push(card);
   g.turn = other(seat);
 
@@ -286,11 +290,11 @@ function rubaPlay(gs, seat, cardId, opt) {
   if (i < 0) return null;
   const card = g.hands[seat].splice(i, 1)[0];
   let kind = "lay";
-  let note = `lays the ${lbl(card.v)} of ${SUIT[card.s].name.toLowerCase()}`;
+  let note = `cala il ${lbl(card.v)} di ${SUIT[card.s].name.toLowerCase()}`;
   if (opt && opt.type === "steal") {
     const pile = g.piles[other(seat)];
     kind = "scopa";
-    note = `steals a pile of ${pile.length} with the ${lbl(card.v)}`;
+    note = `ruba un mazzo di ${pile.length} con il ${lbl(card.v)}`;
     g.piles[seat] = [...g.piles[seat], ...pile, card];
     g.piles[other(seat)] = [];
     g.last = seat;
@@ -300,7 +304,7 @@ function rubaPlay(gs, seat, cardId, opt) {
     g.piles[seat].push(...got, card);
     g.last = seat;
     kind = "take";
-    note = `takes ${got.length} with the ${lbl(card.v)}`;
+    note = `prende ${got.length} con il ${lbl(card.v)}`;
   } else g.table.push(card);
   g.turn = other(seat);
 
@@ -354,13 +358,13 @@ function camiciaFlip(gs, seat, o) {
   g.flips++;
   const d = demand(card.v, o.intl);
   let kind = "lay";
-  let note = `turns the ${lbl(card.v)}`;
+  let note = `gira il ${lbl(card.v)}`;
   if (d > 0) {
     g.owed = seat;
     g.debt = d;
     g.turn = other(seat);
     kind = "take";
-    note = `turns the ${lbl(card.v)} — ${d} to pay`;
+    note = `gira il ${lbl(card.v)} — ${d} da pagare`;
   } else if (g.debt > 0) {
     g.debt -= 1;
     if (g.debt === 0) {
@@ -369,7 +373,7 @@ function camiciaFlip(gs, seat, o) {
       g.center = [];
       g.turn = g.owed;
       kind = "scopa";
-      note = `pays the last one — ${n} cards change hands`;
+      note = `paga l’ultima — ${n} carte cambiano mano`;
       g.owed = null;
     }
   } else g.turn = other(seat);
@@ -752,12 +756,14 @@ function Button({ children, onClick, disabled, kind = "solid", full }) {
         width: full ? "100%" : "auto",
         background: disabled ? "transparent" : solid ? T.ink : "transparent",
         color: disabled ? T.ink30 : solid ? T.bg : T.ink,
-        border: `1px solid ${disabled ? T.line : T.ink}`,
-        borderRadius: 4,
-        padding: "12px 16px",
-        fontSize: 13,
+        border: `1.5px solid ${disabled ? T.line : T.ink}`,
+        borderRadius: 12,
+        padding: solid ? "15px 18px" : "13px 16px",
+        fontFamily: BRAND,
+        fontSize: 16,
         fontWeight: 600,
-        letterSpacing: "0.02em",
+        letterSpacing: "0.01em",
+        whiteSpace: "nowrap",
         cursor: disabled ? "default" : "pointer",
         WebkitTapHighlightColor: "transparent",
       }}
@@ -811,6 +817,7 @@ export default function App() {
   // each game's last-used house rules persist locally (see savePrefs).
   const [french, setFrench] = useState(false);
   const [savedRules, setSavedRules] = useState({});
+  const [name, setName] = useState("");
   const booted = useRef(false);
   useEffect(() => {
     (async () => {
@@ -818,6 +825,7 @@ export default function App() {
       if (!p) return;
       if (typeof p.french === "boolean") setFrench(p.french);
       if (p.rules && typeof p.rules === "object") setSavedRules(p.rules);
+      if (typeof p.name === "string") setName(p.name);
     })();
   }, []);
   useEffect(() => {
@@ -825,19 +833,25 @@ export default function App() {
       booted.current = true;
       return;
     }
-    savePrefs({ french, rules: savedRules });
-  }, [french, savedRules]);
+    savePrefs({ french, rules: savedRules, name });
+  }, [french, savedRules, name]);
   const setGameRules = (game, opts) => setSavedRules((r) => ({ ...r, [game]: opts }));
   return (
     <SuitCtx.Provider value={french}>
-      <Game french={french} setFrench={setFrench} savedRules={savedRules} setGameRules={setGameRules} />
+      <Game
+        french={french}
+        setFrench={setFrench}
+        savedRules={savedRules}
+        setGameRules={setGameRules}
+        name={name}
+        setName={setName}
+      />
     </SuitCtx.Provider>
   );
 }
 
-function Game({ french, setFrench, savedRules, setGameRules }) {
+function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
   const [screen, setScreen] = useState("home");
-  const [name, setName] = useState("");
   const [codeIn, setCodeIn] = useState("");
   const [seat, setSeat] = useState("A");
   const [room, setRoom] = useState(null);
@@ -956,7 +970,7 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
         ws.onopen = () => {
           clearTimeout(timer);
           setLink("waiting");
-          if (!host) ws.send(JSON.stringify({ type: "hello", name: nm || "Guest" }));
+          if (!host) ws.send(JSON.stringify({ type: "hello", name: nm || "Ospite" }));
           give(true);
         };
         ws.onerror = () => {
@@ -1010,7 +1024,7 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
         conn = c;
         c.on("open", () => {
           setLink("live");
-          if (!host) c.send({ hello: nm || "Guest" });
+          if (!host) c.send({ hello: nm || "Ospite" });
           if (queued) {
             c.send(queued);
             queued = null;
@@ -1038,7 +1052,7 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
             }, 1200);
             return;
           }
-          setMsg("No table answering on that code.");
+          setMsg("Nessun tavolo risponde a questo codice.");
           setScreen("home");
         } else if (t.includes("unavailable-id") && host && idRetries++ < 4) {
           setLink("waiting");
@@ -1072,7 +1086,7 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
       code,
       v: 0,
       ts: Date.now(),
-      names: { A: name.trim() || "Host", B: null },
+      names: { A: name.trim() || "Oste", B: null },
       status: "lobby",
       game: "scopa",
       opts: { ...GAMES.scopa.def, ...(savedRules.scopa || {}) },
@@ -1090,34 +1104,34 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
     } else if (await openRelay(code, true, name)) {
       netRef.current.send(fresh);
     } else await openPeer(code, true, name);
-    saveSession({ code, seat: "A", name: name.trim() || "Host", room: fresh });
+    saveSession({ code, seat: "A", name: name.trim() || "Oste", room: fresh });
     setScreen("table");
   };
 
   const joinTable = async () => {
     const code = codeIn.trim().toUpperCase();
-    if (code.length !== 4) return setMsg("Table codes are four letters.");
+    if (code.length !== 4) return setMsg("Il codice è di quattro lettere.");
     setSeat("B");
     setLink("waiting");
     if (hasStore()) {
       const r = await storeRead(code);
-      if (!r) return setMsg(`Nothing dealt at ${code}.`);
+      if (!r) return setMsg(`Nessun tavolo al codice ${code}.`);
       roomRef.current = r;
       setRoom(r);
       openStorage(code);
-      await netRef.current.hello(name.trim() || "Guest");
-    } else if (await openRelay(code, false, name.trim() || "Guest")) {
+      await netRef.current.hello(name.trim() || "Ospite");
+    } else if (await openRelay(code, false, name.trim() || "Ospite")) {
       setTimeout(() => {
         if (!roomRef.current) {
           netRef.current?.close();
-          setMsg(`Nothing dealt at ${code}.`);
+          setMsg(`Nessun tavolo al codice ${code}.`);
           setScreen("home");
         }
       }, 3500);
     } else {
-      await openPeer(code, false, name.trim() || "Guest");
+      await openPeer(code, false, name.trim() || "Ospite");
     }
-    saveSession({ code, seat: "B", name: name.trim() || "Guest" });
+    saveSession({ code, seat: "B", name: name.trim() || "Ospite" });
     setScreen("table");
   };
 
@@ -1249,7 +1263,7 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
             <Back size="sm" />
             <Back size="sm" />
           </div>
-          <Micro style={{ marginTop: 16 }}>Dealing</Micro>
+          <Micro style={{ marginTop: 16 }}>Distribuzione…</Micro>
         </div>
       </Frame>
     );
@@ -1258,58 +1272,71 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
   if (screen === "home")
     return (
       <Frame jolt={false}>
-        <div className="fade" style={{ paddingTop: 34 }}>
-          <Micro>Two players · one code</Micro>
-          <h1 style={{ fontSize: 46, lineHeight: 0.92, letterSpacing: "-0.045em", margin: "10px 0 0", fontWeight: 700 }}>
-            Osteria
-          </h1>
-          <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "12px 0 0", maxWidth: 300 }}>
-            Three Italian card games for two people on two phones. Cards land hard.
-          </p>
-
-          <div style={{ display: "flex", gap: 8, margin: "26px 0 14px" }}>
+        <div
+          className="fade"
+          style={{
+            minHeight: "calc(100dvh - 40px)",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            paddingBottom: 12,
+          }}
+        >
+          {/* wordmark — the one thing the eye lands on */}
+          <div style={{ display: "flex", justifyContent: "center", gap: 7, marginBottom: 2 }}>
             {["D", "C", "S", "B"].map((s, i) => (
-              <Card key={s} card={{ id: s + "x", s, v: [1, 7, 10, 3][i] }} size="md" rot={(i - 1.5) * 3.2} />
+              <Card key={s} card={{ id: s + "x", s, v: [1, 7, 10, 3][i] }} size="sm" rot={(i - 1.5) * 8} />
             ))}
           </div>
-          <FaceToggle french={french} setFrench={setFrench} />
+          <h1
+            style={{
+              fontFamily: BRAND,
+              fontSize: "clamp(56px, 19vw, 104px)",
+              fontWeight: 700,
+              lineHeight: 0.9,
+              letterSpacing: "-0.01em",
+              textAlign: "center",
+              margin: "10px 0 0",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Osteria<span style={{ color: "#A5342F", display: "inline-block", transform: "rotate(7deg)" }}>!</span>
+          </h1>
+          <Micro style={{ textAlign: "center", marginTop: 8 }}>Due giocatori · due telefoni · un codice</Micro>
 
-          <div style={{ height: 18 }} />
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Your name"
-            maxLength={14}
-            style={field}
-          />
-          <div style={{ marginTop: 8 }}>
-            <Button full onClick={openTable}>
-              Open a table
-            </Button>
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <div style={{ marginTop: 26 }}>
             <input
-              value={codeIn}
-              onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
-              placeholder="CODE"
-              style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: "ui-monospace, monospace" }}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Il tuo nome"
+              maxLength={14}
+              style={{ ...field, fontFamily: BRAND, fontSize: 18, textAlign: "center", padding: "14px 13px" }}
             />
-            <Button kind="line" onClick={joinTable}>
-              Join
-            </Button>
-          </div>
-          {msg && <p style={{ color: T.ink, fontSize: 12, marginTop: 10 }}>{msg}</p>}
-
-          <Rule />
-          {Object.entries(GAMES).map(([k, g]) => (
-            <div key={k} style={{ marginBottom: 14 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.02em" }}>{g.name}</span>
-                <Micro>{g.tag}</Micro>
-              </div>
-              <p style={{ color: T.ink60, fontSize: 13, lineHeight: 1.45, margin: "3px 0 0" }}>{g.line}</p>
+            <div style={{ marginTop: 10 }}>
+              <Button full onClick={openTable}>
+                Apri un tavolo
+              </Button>
             </div>
-          ))}
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 2px" }}>
+              <div style={{ flex: 1, height: 1, background: T.line }} />
+              <Micro>oppure</Micro>
+              <div style={{ flex: 1, height: 1, background: T.line }} />
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={codeIn}
+                onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
+                placeholder="CODICE"
+                style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: "ui-monospace, monospace", fontSize: 18, minWidth: 0 }}
+              />
+              <Button kind="line" onClick={joinTable}>
+                Entra
+              </Button>
+            </div>
+            {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
+          </div>
         </div>
       </Frame>
     );
@@ -1318,14 +1345,14 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
     return (
       <Frame jolt={false}>
         <div className="fade" style={{ paddingTop: 60, textAlign: "center" }}>
-          <Micro>Connecting to {codeIn.toUpperCase()}</Micro>
+          <Micro>Connessione a {codeIn.toUpperCase()}</Micro>
           <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 18 }}>
             <Back size="sm" />
             <Back size="sm" />
           </div>
           <div style={{ marginTop: 24 }}>
             <Button kind="line" onClick={leave}>
-              Back
+              Indietro
             </Button>
           </div>
         </div>
@@ -1340,11 +1367,11 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
     const g = GAMES[room.game];
     return (
       <Frame jolt={false}>
-        <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title="Set the table" />
+        <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title="Al tavolo" />
         <div className="fade">
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
             <div>
-              <Micro>Table code</Micro>
+              <Micro>Codice tavolo</Micro>
               <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
                 {room.code.split("").map((ch, i) => (
                   <div key={i} style={{ ...codeTile, width: 34, height: 44, fontSize: 19 }}>
@@ -1354,13 +1381,13 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
               </div>
             </div>
             <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6 }}>
-              {seated ? `${room.names.B} is in` : "Waiting for player two…"}
+              {seated ? `${room.names.B} è al tavolo` : "In attesa del secondo giocatore…"}
             </Micro>
           </div>
 
           <Rule />
 
-          <Micro>Game</Micro>
+          <Micro>Gioco</Micro>
           <Segmented
             options={Object.entries(GAMES).map(([k, gm]) => ({ v: k, label: gm.name }))}
             value={room.game}
@@ -1371,21 +1398,21 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
 
           {g.opts.length > 0 && (
             <>
-              <Micro style={{ marginTop: 20 }}>House rules{host ? "" : " · host sets these"}</Micro>
+              <Micro style={{ marginTop: 20 }}>Regole della casa{host ? "" : " · le sceglie l’host"}</Micro>
               <RuleChips conf={g} opts={room.opts} setOpt={host ? setOpt : null} />
             </>
           )}
 
-          <Micro style={{ marginTop: 20 }}>Card faces · your device</Micro>
+          <Micro style={{ marginTop: 20 }}>Carte · sul tuo telefono</Micro>
           <FaceToggle french={french} setFrench={setFrench} />
 
           <div style={{ marginTop: 24 }}>
             {host ? (
               <Button full disabled={!seated} onClick={start}>
-                {seated ? `Deal ${g.name}` : "Waiting for player two…"}
+                {seated ? `Distribuisci · ${g.name}` : "In attesa del secondo giocatore…"}
               </Button>
             ) : (
-              <Micro>{room.names.A} is setting the table — hold tight.</Micro>
+              <Micro>{room.names.A} sta preparando il tavolo — un attimo.</Micro>
             )}
           </div>
         </div>
@@ -1428,14 +1455,14 @@ function Game({ french, setFrench, savedRules, setGameRules }) {
           {seat === "A" ? (
             <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
               <Button full onClick={again}>
-                {room.game === "scopa" && !gs.matchDone ? "Next hand" : "Play again"}
+                {room.game === "scopa" && !gs.matchDone ? "Prossima mano" : "Gioca ancora"}
               </Button>
               <Button kind="line" onClick={() => publish({ ...room, status: "lobby", gs: null, log: [] })}>
-                Games
+                Giochi
               </Button>
             </div>
           ) : (
-            <Micro style={{ marginTop: 12 }}>{room.names.A} deals</Micro>
+            <Micro style={{ marginTop: 12 }}>distribuisce {room.names.A}</Micro>
           )}
         </div>
       )}
@@ -1492,21 +1519,21 @@ function Head({ room, link, onLeave, title, sound, setSound }) {
     >
       <div>
         <Micro>
-          {room.code} · {link === "live" ? "connected" : link === "waiting" ? "waiting" : "disconnected"}
+          {room.code} · {link === "live" ? "connesso" : link === "waiting" ? "in attesa" : "disconnesso"}
         </Micro>
-        <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em", marginTop: 2 }}>{title}</div>
+        <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em", marginTop: 2, fontFamily: BRAND }}>{title}</div>
       </div>
       <div style={{ display: "flex", gap: 14 }}>
         {link === "lost" && (
           <button onClick={() => window.location.reload()} style={{ ...plain, color: T.ink, fontWeight: 700 }}>
-            Reconnect
+            Riconnetti
           </button>
         )}
         <button onClick={() => setSound(!sound)} style={plain}>
-          {sound ? "Sound on" : "Sound off"}
+          {sound ? "Audio on" : "Audio off"}
         </button>
         <button onClick={onLeave} style={plain}>
-          Leave
+          Esci
         </button>
       </div>
     </div>
@@ -1640,7 +1667,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
   };
 
   const tally = isScopa ? gs.scores : { A: gs.piles.A.length, B: gs.piles.B.length };
-  const unit = isScopa ? "pts" : "cards";
+  const unit = isScopa ? "punti" : "carte";
   const a = room.anim;
   const taken = a && a.kind !== "lay" && a.card ? { id: a.card, s: a.card[0], v: +a.card.slice(1) } : null;
 
@@ -1665,12 +1692,12 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
       {/* table */}
       <div style={{ margin: "18px 0", minHeight: 108 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-          <Micro>Table</Micro>
-          <Micro>{gs.deck.length} left</Micro>
+          <Micro>Tavolo</Micro>
+          <Micro>{gs.deck.length} nel mazzo</Micro>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 7, justifyContent: "center", minHeight: 78 }}>
           {gs.table.length === 0 && (
-            <Micro style={{ padding: "28px 0" }}>Swept clean</Micro>
+            <Micro style={{ padding: "28px 0" }}>tavolo pulito</Micro>
           )}
           {gs.table.map((c) => (
             <Card
@@ -1687,22 +1714,22 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
 
       {/* piles */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 10 }}>
-        <PileView room={room} gs={gs} seat={opp} label="their pile" faceUp={!isScopa} slamId={slamId} />
+        <PileView room={room} gs={gs} seat={opp} label="sua pila" faceUp={!isScopa} slamId={slamId} />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
           {taken && <Card card={taken} size="sm" rot={0} slam={slamId === taken.id} />}
           <div className={!gs.done && mine ? "turn" : ""}>
             <Micro style={{ textAlign: "center", color: !gs.done && mine ? T.ink : T.ink60 }}>
-              {gs.done ? "hand over" : mine ? "your move" : "waiting"}
+              {gs.done ? "mano finita" : mine ? "tocca a te" : "aspetta"}
             </Micro>
           </div>
         </div>
-        <PileView room={room} gs={gs} seat={seat} label="your pile" faceUp={!isScopa} slamId={slamId} right />
+        <PileView room={room} gs={gs} seat={seat} label="tua pila" faceUp={!isScopa} slamId={slamId} right />
       </div>
 
       {/* choice */}
       {pick && (
         <div className="fade" style={{ border: `1px solid ${T.ink}`, borderRadius: 4, padding: 12, marginTop: 16 }}>
-          <Micro>{isScopa ? "Choose the capture" : "Choose"}</Micro>
+          <Micro>{isScopa ? "Scegli la presa" : "Scegli"}</Micro>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
             {pick.opts.map((opt, i) => {
               const ids = isScopa ? opt : opt.ids;
@@ -1724,7 +1751,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
                 >
                   {steal ? (
                     <span style={{ fontSize: 13, fontWeight: 600 }}>
-                      Steal the pile — {gs.piles[other(seat)].length} cards
+                      Ruba il mazzo — {gs.piles[other(seat)].length} carte
                     </span>
                   ) : (
                     gs.table
@@ -1735,7 +1762,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
               );
             })}
             <button onClick={() => setPick(null)} style={{ ...plain, textAlign: "left", marginTop: 2 }}>
-              cancel
+              annulla
             </button>
           </div>
         </div>
@@ -1745,7 +1772,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
       <div style={{ marginTop: 22 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
           <div style={{ fontSize: 14, fontWeight: 600 }}>
-            {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>you</span>
+            {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
           </div>
           <Micro>
             {tally[seat]} {unit}
@@ -1765,7 +1792,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
               onClick={mine && !pick ? () => play(c) : undefined}
             />
           ))}
-          {gs.hands[seat].length === 0 && <Micro style={{ alignSelf: "center" }}>hand empty</Micro>}
+          {gs.hands[seat].length === 0 && <Micro style={{ alignSelf: "center" }}>mano vuota</Micro>}
         </div>
       </div>
     </div>
@@ -1795,12 +1822,12 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
   const flip = () => {
     if (mine && !gs.done) commit(camiciaFlip(gs, seat, room.opts));
   };
+  const label = gs.done ? "FINE" : !mine ? "ASPETTA" : gs.debt > 0 ? `PAGA ${gs.debt}` : "GIRA";
 
   // Slide the deck up to slam. Tapping still works (a near-zero swipe), and the
   // pile is collected automatically when the exchange is won — no take gesture.
   const [dragY, setDragY] = useState(0);
   const startY = useRef(null);
-  const label = gs.done ? "OVER" : !mine ? "WAIT" : gs.debt > 0 ? `PAY ${gs.debt}` : "SLAM";
   const pointY = (e) => (e.touches && e.touches[0] ? e.touches[0].clientY : e.clientY);
   const onStart = (e) => {
     if (!mine || gs.done) return;
@@ -1833,7 +1860,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
       {/* the middle */}
       <div style={{ margin: "16px 0", minHeight: 148, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 96 }}>
-          {shown.length === 0 && <Micro>nothing down yet</Micro>}
+          {shown.length === 0 && <Micro>niente in mezzo</Micro>}
           {shown.map((c, i) => (
             <div key={c.id} style={{ marginLeft: i ? -26 : 0, zIndex: i }}>
               <Card
@@ -1854,14 +1881,14 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
           >
             {gs.done
               ? gs.win
-                ? `${who(room, gs.win)} takes the lot`
-                : "Locked in a loop — called a draw"
+                ? `${who(room, gs.win)} prende tutto`
+                : "Bloccati in un ciclo — pareggio"
               : gs.debt > 0
-              ? `${who(room, gs.turn)} owes ${gs.debt}`
-              : `${who(room, gs.turn)} to turn`}
+              ? `${who(room, gs.turn)} deve ${gs.debt}`
+              : `gira ${who(room, gs.turn)}`}
           </div>
           <Micro style={{ marginTop: 5 }}>
-            {gs.center.length} in the middle · {attack}
+            {gs.center.length} in mezzo · {attack}
           </Micro>
         </div>
       </div>
@@ -1869,9 +1896,9 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
       {/* your packet + slide-up dock */}
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 8 }}>
         <div style={{ fontSize: 14, fontWeight: 600 }}>
-          {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>you</span>
+          {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
         </div>
-        <Micro>{gs.decks[seat].length} left</Micro>
+        <Micro>{gs.decks[seat].length} carte</Micro>
       </div>
 
       <div
@@ -1900,7 +1927,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
         }}
       >
         <Micro style={{ position: "absolute", top: 10, left: 0, right: 0, textAlign: "center" }}>
-          {gs.done ? "hand over" : mine ? "slide the deck up to slam" : "opponent’s turn"}
+          {gs.done ? "mano finita" : mine ? "trascina il mazzo in su per giocare" : "tocca all’altro"}
         </Micro>
         <div
           style={{
@@ -1921,7 +1948,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
       </div>
 
       <Micro style={{ textAlign: "center", marginTop: 10 }}>
-        hands {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
+        mani {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
       </Micro>
     </div>
   );
@@ -1932,8 +1959,8 @@ function Summary({ room, gs }) {
   if (room.game === "scopa" && gs.summary)
     return (
       <div>
-        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.02em", marginBottom: 10 }}>
-          {gs.matchDone ? `${who(room, gs.scores.A > gs.scores.B ? "A" : "B")} wins the match` : "Hand scored"}
+        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.02em", marginBottom: 10, fontFamily: BRAND }}>
+          {gs.matchDone ? `${who(room, gs.scores.A > gs.scores.B ? "A" : "B")} vince la partita` : "Mano contata"}
         </div>
         {gs.summary.lines.map((l, i) => (
           <div
@@ -1969,21 +1996,21 @@ function Summary({ room, gs }) {
   if (room.game === "ruba" && gs.summary)
     return (
       <div>
-        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.02em" }}>
-          {gs.summary.win ? `${who(room, gs.summary.win)} wins the hand` : "Dead even"}
+        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.02em", fontFamily: BRAND }}>
+          {gs.summary.win ? `${who(room, gs.summary.win)} vince la mano` : "Perfetto pari"}
         </div>
         <Micro style={{ marginTop: 6 }}>
-          {who(room, "A")} {gs.summary.a} — {who(room, "B")} {gs.summary.b} · hands {gs.tally.A}–{gs.tally.B}
+          {who(room, "A")} {gs.summary.a} — {who(room, "B")} {gs.summary.b} · mani {gs.tally.A}–{gs.tally.B}
         </Micro>
       </div>
     );
   return (
     <div>
-      <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.02em" }}>
-        {gs.win ? `${who(room, gs.win)} wins` : "Called a draw"}
+      <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.02em", fontFamily: BRAND }}>
+        {gs.win ? `${who(room, gs.win)} vince` : "Pareggio"}
       </div>
       <Micro style={{ marginTop: 6 }}>
-        hands {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
+        mani {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
       </Micro>
     </div>
   );

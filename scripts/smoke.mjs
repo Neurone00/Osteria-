@@ -24,9 +24,10 @@ for (const style of mount.querySelectorAll("style")) style.remove();
 const text = mount.textContent.replace(/\s+/g, " ").trim();
 const nodes = mount.querySelectorAll("*").length;
 
-// The lobby is what an arriving player sees, so these are the things that have
-// to be on screen before anyone can start a table.
-const wanted = ["Osteria", "Open a table", "Join", "Scopa", "Rubamazzo", "Straccia camicia"];
+// The home screen is what an arriving player sees first: the wordmark, the name
+// field and the two ways onto a table. Games and rules are chosen later, in the
+// lobby, so they are not expected here.
+const wanted = ["Osteria", "Apri un tavolo", "oppure", "Entra"];
 const missing = wanted.filter((w) => !text.includes(w));
 
 console.log(`mounted ${nodes} nodes`);
