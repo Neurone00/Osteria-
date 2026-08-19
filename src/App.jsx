@@ -489,6 +489,32 @@ async function dropSession() {
   } catch {}
 }
 
+/* Local preferences that outlive a single table: the card face and each game's
+   last-used house rules. Same artifact-safe pattern as the session — private
+   window.storage inside the Claude artifact, localStorage on a self-hosted
+   build (Cloudflare, a plain static host), never localStorage when
+   window.storage exists. */
+const PREFS = "osteria:prefs";
+async function savePrefs(p) {
+  try {
+    const v = JSON.stringify(p);
+    if (hasStore()) await window.storage.set(PREFS, v, false);
+    else localStorage.setItem(PREFS, v);
+  } catch {}
+}
+async function loadPrefs() {
+  try {
+    if (hasStore()) {
+      const r = await window.storage.get(PREFS, false);
+      return r ? JSON.parse(r.value) : null;
+    }
+    const v = localStorage.getItem(PREFS);
+    return v ? JSON.parse(v) : null;
+  } catch {
+    return null;
+  }
+}
+
 /* Same-origin WebSocket relay — the Cloudflare Worker in ./worker. If it isn't
    there (a plain static host), the app falls back to PeerJS on its own. */
 function relayUrl(code) {
@@ -649,6 +675,57 @@ function Ghost({ size = "sm" }) {
   return <div style={{ width: w, height: h, border: `1px dashed ${T.ink30}`, borderRadius: 4, flexShrink: 0 }} />;
 }
 
+/* A physical stack of cards: the height of the pile encodes the count, so the
+   amount reads at a glance without doing arithmetic. faceUp shows the top card
+   (rubamazzo), otherwise a face-down deck (scopa piles, camicia packets). The
+   pile grows up and toward `right` so it leans into the middle of the table. */
+function Stack({ n, top, faceUp, size = "sm", right, slamId, grow = true }) {
+  const [w, h] = SZ[size];
+  if (!n) return <Ghost size={size} />;
+  const layers = Math.min(n, 14);
+  const dx = 1.5;
+  const dy = 2.3;
+  const spanX = (layers - 1) * dx;
+  const spanY = (layers - 1) * dy;
+  return (
+    <div style={{ position: "relative", width: w + spanX, height: h + (grow ? spanY : 0), flexShrink: 0 }}>
+      {Array.from({ length: layers }).map((_, i) => {
+        const isTop = i === layers - 1;
+        const style = {
+          position: "absolute",
+          left: right ? spanX - i * dx : i * dx,
+          top: grow ? spanY - i * dy : 0,
+        };
+        if (isTop) {
+          return (
+            <div key="top" style={style}>
+              {faceUp && top ? (
+                <Card card={top} size={size} rot={0} slam={slamId === top.id} />
+              ) : (
+                <Back size={size} />
+              )}
+            </div>
+          );
+        }
+        return (
+          <div
+            key={i}
+            style={{
+              ...style,
+              width: w,
+              height: h,
+              borderRadius: 4,
+              background: faceUp ? T.paper : T.ink,
+              border: `1px solid ${faceUp ? T.line : "rgba(255,255,255,0.10)"}`,
+              boxShadow: "0 1px 2px rgba(18,18,18,0.10)",
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 /* ═══════════════════════════ chrome ═══════════════════════════ */
 const Micro = ({ children, style }) => (
   <div
@@ -695,7 +772,7 @@ function Rule() {
 }
 
 const CSS = `
-html,body{overscroll-behavior:none;margin:0}
+html,body{overscroll-behavior:none;margin:0;overflow-x:hidden}
 .app{min-height:100vh;min-height:100dvh}
 *{box-sizing:border-box}
 button{font-family:inherit}
@@ -730,16 +807,35 @@ input{font-family:inherit}
 export default function App() {
   // Card face is a personal, per-device choice — kept out of the shared room so
   // each player sees their own deck. It lives above the game so every screen,
-  // including the home preview, renders through the same provider.
+  // including the home preview, renders through the same provider. Both it and
+  // each game's last-used house rules persist locally (see savePrefs).
   const [french, setFrench] = useState(false);
+  const [savedRules, setSavedRules] = useState({});
+  const booted = useRef(false);
+  useEffect(() => {
+    (async () => {
+      const p = await loadPrefs();
+      if (!p) return;
+      if (typeof p.french === "boolean") setFrench(p.french);
+      if (p.rules && typeof p.rules === "object") setSavedRules(p.rules);
+    })();
+  }, []);
+  useEffect(() => {
+    if (!booted.current) {
+      booted.current = true;
+      return;
+    }
+    savePrefs({ french, rules: savedRules });
+  }, [french, savedRules]);
+  const setGameRules = (game, opts) => setSavedRules((r) => ({ ...r, [game]: opts }));
   return (
     <SuitCtx.Provider value={french}>
-      <Game french={french} setFrench={setFrench} />
+      <Game french={french} setFrench={setFrench} savedRules={savedRules} setGameRules={setGameRules} />
     </SuitCtx.Provider>
   );
 }
 
-function Game({ french, setFrench }) {
+function Game({ french, setFrench, savedRules, setGameRules }) {
   const [screen, setScreen] = useState("home");
   const [name, setName] = useState("");
   const [codeIn, setCodeIn] = useState("");
@@ -979,7 +1075,7 @@ function Game({ french, setFrench }) {
       names: { A: name.trim() || "Host", B: null },
       status: "lobby",
       game: "scopa",
-      opts: { ...GAMES.scopa.def },
+      opts: { ...GAMES.scopa.def, ...(savedRules.scopa || {}) },
       gs: null,
       log: [],
       anim: null,
@@ -1122,7 +1218,7 @@ function Game({ french, setFrench }) {
   // The host picks the game and its house rules in the lobby, before anything is
   // dealt; both are synced so the guest sees the table being set. Dealing just
   // flips the room to play with whatever is already staged in room.game/opts.
-  const pickGame = (game) => publish({ ...room, game, opts: { ...GAMES[game].def } });
+  const pickGame = (game) => publish({ ...room, game, opts: { ...GAMES[game].def, ...(savedRules[game] || {}) } });
   const start = () => publish({ ...room, status: "play", gs: newGame(room.game, room.opts), log: [], anim: null });
 
   const newGame = (game, o, prev) =>
@@ -1138,7 +1234,11 @@ function Game({ french, setFrench }) {
     publish({ ...room, gs: fresh, log: [], anim: null });
   };
 
-  const setOpt = (k, val) => publish({ ...room, opts: { ...room.opts, [k]: val } });
+  const setOpt = (k, val) => {
+    const opts = { ...room.opts, [k]: val };
+    publish({ ...room, opts });
+    setGameRules(room.game, opts); // remember this game's rules for next time
+  };
 
   /* ═════════ boot ═════════ */
   if (booting)
@@ -1445,6 +1545,10 @@ function Segmented({ options, value, onPick, style }) {
             disabled={!onPick}
             style={{
               flex: 1,
+              minWidth: 0,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
               border: "none",
               background: on ? T.ink : "transparent",
               color: on ? T.bg : T.ink60,
@@ -1673,14 +1777,8 @@ function PileView({ room, gs, seat, label, faceUp, slamId, right }) {
   const top = pile[pile.length - 1];
   return (
     <div style={{ textAlign: right ? "right" : "left" }}>
-      <div style={{ display: "flex", justifyContent: right ? "flex-end" : "flex-start" }}>
-        {pile.length === 0 ? (
-          <Ghost size="sm" />
-        ) : faceUp && top ? (
-          <Card card={top} size="sm" rot={0} slam={slamId === top.id} />
-        ) : (
-          <Back size="sm" stack />
-        )}
+      <div style={{ display: "flex", justifyContent: right ? "flex-end" : "flex-start", alignItems: "flex-end" }}>
+        <Stack n={pile.length} top={top} faceUp={faceUp} size="sm" right={right} slamId={slamId} />
       </div>
       <Micro style={{ marginTop: 5 }}>
         {label} {pile.length}
@@ -1693,29 +1791,47 @@ function PileView({ room, gs, seat, label, faceUp, slamId, right }) {
 function Camicia({ room, gs, seat, mine, slamId, commit }) {
   const opp = other(seat);
   const shown = gs.center.slice(-5);
-  const flip = () => commit(camiciaFlip(gs, seat, room.opts));
   const attack = room.opts.intl ? "A 4 · R 3 · C 2 · F 1" : "A 1 · 2 due · 3 tre";
+  const flip = () => {
+    if (mine && !gs.done) commit(camiciaFlip(gs, seat, room.opts));
+  };
+
+  // Slide the deck up to slam. Tapping still works (a near-zero swipe), and the
+  // pile is collected automatically when the exchange is won — no take gesture.
+  const [dragY, setDragY] = useState(0);
+  const startY = useRef(null);
+  const label = gs.done ? "OVER" : !mine ? "WAIT" : gs.debt > 0 ? `PAY ${gs.debt}` : "SLAM";
+  const pointY = (e) => (e.touches && e.touches[0] ? e.touches[0].clientY : e.clientY);
+  const onStart = (e) => {
+    if (!mine || gs.done) return;
+    startY.current = pointY(e);
+  };
+  const onMove = (e) => {
+    if (startY.current == null) return;
+    setDragY(Math.max(-70, Math.min(0, pointY(e) - startY.current)));
+  };
+  const onEnd = (e) => {
+    if (startY.current == null) return;
+    if (e.cancelable) e.preventDefault();
+    const moved = dragY;
+    startY.current = null;
+    setDragY(0);
+    if (mine && !gs.done && (moved < -36 || Math.abs(moved) < 8)) flip();
+  };
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      {/* opponent packet */}
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
         <div style={{ fontSize: 14, fontWeight: 600 }}>{who(room, opp)}</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
           <Micro>{gs.decks[opp].length}</Micro>
-          {gs.decks[opp].length ? <Back size="xs" stack /> : <Ghost size="xs" />}
+          <Stack n={gs.decks[opp].length} faceUp={false} size="xs" right />
         </div>
       </div>
 
-      <div
-        style={{
-          margin: "22px 0",
-          minHeight: 150,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
+      {/* the middle */}
+      <div style={{ margin: "16px 0", minHeight: 148, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 96 }}>
           {shown.length === 0 && <Micro>nothing down yet</Micro>}
           {shown.map((c, i) => (
@@ -1750,35 +1866,60 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
         </div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+      {/* your packet + slide-up dock */}
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 8 }}>
         <div style={{ fontSize: 14, fontWeight: 600 }}>
           {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>you</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Micro>{gs.decks[seat].length}</Micro>
-          {gs.decks[seat].length ? <Back size="xs" stack /> : <Ghost size="xs" />}
-        </div>
+        <Micro>{gs.decks[seat].length} left</Micro>
       </div>
 
-      <button
-        onClick={flip}
-        disabled={!mine}
+      <div
+        onTouchStart={onStart}
+        onTouchMove={onMove}
+        onTouchEnd={onEnd}
+        onMouseDown={onStart}
+        onMouseMove={onMove}
+        onMouseUp={onEnd}
         style={{
-          width: "100%",
-          padding: "22px 0",
-          background: mine ? T.ink : "transparent",
-          color: mine ? T.bg : T.ink30,
-          border: `1px solid ${mine ? T.ink : T.line}`,
-          borderRadius: 4,
-          fontSize: 20,
-          fontWeight: 700,
-          letterSpacing: "0.16em",
-          cursor: mine ? "pointer" : "default",
+          position: "relative",
+          height: 152,
+          borderRadius: 8,
+          border: `1px dashed ${mine ? T.ink30 : T.line}`,
+          background: mine ? "rgba(18,18,18,0.02)" : "transparent",
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "center",
+          padding: "0 0 12px",
+          overflow: "hidden",
+          touchAction: "none",
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          cursor: mine && !gs.done ? "grab" : "default",
           WebkitTapHighlightColor: "transparent",
         }}
       >
-        {gs.done ? "OVER" : mine ? (gs.debt > 0 ? `PAY ${gs.debt}` : "SLAM") : "WAIT"}
-      </button>
+        <Micro style={{ position: "absolute", top: 10, left: 0, right: 0, textAlign: "center" }}>
+          {gs.done ? "hand over" : mine ? "slide the deck up to slam" : "opponent’s turn"}
+        </Micro>
+        <div
+          style={{
+            transform: `translateY(${dragY}px)`,
+            transition: startY.current == null ? "transform 220ms cubic-bezier(.2,.9,.25,1)" : "none",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 8,
+            opacity: gs.decks[seat].length ? 1 : 0.4,
+          }}
+        >
+          <Stack n={gs.decks[seat].length} faceUp={false} size="md" />
+          <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.16em", color: mine && !gs.done ? T.ink : T.ink30 }}>
+            {label}
+          </div>
+        </div>
+      </div>
+
       <Micro style={{ textAlign: "center", marginTop: 10 }}>
         hands {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
       </Micro>
