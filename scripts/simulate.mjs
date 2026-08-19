@@ -37,6 +37,7 @@ const EXPORTS = [
   "dealCamicia", "camiciaFlip", "demand",
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
+  "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
 const modPath = join(dir, "rules.mjs");
@@ -241,6 +242,34 @@ function playPerudo() {
   return steps;
 }
 
+/* ── yahtzee ────────────────────────────────────────────────── */
+function playYahtzee() {
+  let g = R.dealYahtzee("A", { A: 0, B: 0 });
+  const KEYS = R.YCATS.map((c) => c.k);
+  let steps = 0;
+  const MAX = 3000;
+  while (!g.done) {
+    if (++steps > MAX) return fail("yahtzee", `no end after ${MAX} steps`);
+    const seat = g.turn;
+    const empty = KEYS.filter((k) => !(k in g.scores[seat]));
+    if (!g.rolled || (g.rollsLeft > 0 && Math.random() < 0.5)) {
+      const res = R.yahtRoll(g, seat);
+      if (res) {
+        g = res.g;
+        continue;
+      }
+    }
+    if (!empty.length) return fail("yahtzee", `${seat} has no empty category but game not done`);
+    const res = R.yahtScore(g, seat, empty[Math.floor(Math.random() * empty.length)]);
+    if (!res) return fail("yahtzee", "score refused after a roll");
+    g = res.g;
+  }
+  for (const s of ["A", "B"])
+    if (Object.keys(g.scores[s]).length !== 13) fail("yahtzee", `${s} filled ${Object.keys(g.scores[s]).length}/13 boxes`);
+  if (g.win == null && g.summary.a !== g.summary.b) fail("yahtzee", "no winner but totals differ");
+  return steps;
+}
+
 /* ── prepared deck (shuffle + cut ritual) ───────────────────── */
 // A deck the players shuffled by tapping and cut by dragging is dealt exactly as
 // prepared. Check it still holds all 40 cards through a whole game.
@@ -274,6 +303,7 @@ const runs = [
   ["camicia, international (A4 R3 C2 F1)", () => playCamicia({ intl: true })],
   ["briscola", () => playBriscola()],
   ["perudo", () => playPerudo()],
+  ["yahtzee", () => playYahtzee()],
 ];
 
 console.log(`Osteria — ${DEALS} deals per variant\n`);

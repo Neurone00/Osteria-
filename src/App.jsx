@@ -128,6 +128,14 @@ const GAMES = {
     opts: [],
     def: {},
   },
+  yahtzee: {
+    name: "Yahtzee",
+    tag: "cinque dadi, tre tiri",
+    line: "Tira fino a tre volte tenendo i dadi che vuoi, poi segna in una casella. Più punti in tredici turni.",
+    dice: true,
+    opts: [],
+    def: {},
+  },
 };
 const isCard = (game) => !GAMES[game].dice;
 
@@ -598,6 +606,116 @@ function perudoNext(gs, seat) {
   g.bid = null;
   g.reveal = null;
   return { g, kind: "lay", ev: { t: "next" } };
+}
+
+/* ── yahtzee ───────────────────────────────────────────────────
+   Five dice, up to three rolls a turn (keep between rolls), then score into one
+   of thirteen boxes. Thirteen turns each; +35 upper bonus at 63. Higher total wins. */
+const YCATS = [
+  { k: "uno", label: "Uno", up: 1 },
+  { k: "due", label: "Due", up: 2 },
+  { k: "tre", label: "Tre", up: 3 },
+  { k: "quattro", label: "Quattro", up: 4 },
+  { k: "cinque", label: "Cinque", up: 5 },
+  { k: "sei", label: "Sei", up: 6 },
+  { k: "tris", label: "Tris" },
+  { k: "poker", label: "Poker" },
+  { k: "full", label: "Full" },
+  { k: "scala", label: "Scala" },
+  { k: "scalona", label: "Scalona" },
+  { k: "cinquina", label: "Cinquina" },
+  { k: "chance", label: "Chance" },
+];
+function yahtValue(cat, dice) {
+  if (!dice.length || dice.some((d) => !d)) return 0;
+  const cnt = {};
+  for (const d of dice) cnt[d] = (cnt[d] || 0) + 1;
+  const sum = dice.reduce((s, d) => s + d, 0);
+  const counts = Object.values(cnt);
+  const has = (f) => cnt[f] > 0;
+  const face = { uno: 1, due: 2, tre: 3, quattro: 4, cinque: 5, sei: 6 };
+  if (cat in face) return (cnt[face[cat]] || 0) * face[cat];
+  switch (cat) {
+    case "tris":
+      return counts.some((c) => c >= 3) ? sum : 0;
+    case "poker":
+      return counts.some((c) => c >= 4) ? sum : 0;
+    case "full":
+      return counts.includes(3) && counts.includes(2) ? 25 : 0;
+    case "scala":
+      return [[1, 2, 3, 4], [2, 3, 4, 5], [3, 4, 5, 6]].some((s) => s.every(has)) ? 30 : 0;
+    case "scalona":
+      return [[1, 2, 3, 4, 5], [2, 3, 4, 5, 6]].some((s) => s.every(has)) ? 40 : 0;
+    case "cinquina":
+      return counts.some((c) => c === 5) ? 50 : 0;
+    case "chance":
+      return sum;
+    default:
+      return 0;
+  }
+}
+function yahtTotal(sc) {
+  let upper = 0;
+  let total = 0;
+  for (const c of YCATS) {
+    if (c.k in sc) {
+      total += sc[c.k];
+      if (c.up) upper += sc[c.k];
+    }
+  }
+  const bonus = upper >= 63 ? 35 : 0;
+  return { total: total + bonus, upper, bonus };
+}
+function dealYahtzee(dealer, tally) {
+  return {
+    turn: dealer,
+    dice: [0, 0, 0, 0, 0],
+    keep: [false, false, false, false, false],
+    rollsLeft: 3,
+    rolled: false,
+    scores: { A: {}, B: {} },
+    dealer,
+    tally: tally || { A: 0, B: 0 },
+    summary: null,
+    done: false,
+    matchDone: false,
+    win: null,
+  };
+}
+function yahtRoll(gs, seat) {
+  const g = clone(gs);
+  if (g.turn !== seat || g.rollsLeft <= 0 || g.done) return null;
+  g.dice = g.dice.map((d, i) => (g.rolled && g.keep[i] ? d : 1 + Math.floor(Math.random() * 6)));
+  g.rollsLeft -= 1;
+  g.rolled = true;
+  return { g, kind: "take", ev: { t: "roll" } };
+}
+function yahtToggle(gs, seat, i) {
+  const g = clone(gs);
+  if (g.turn !== seat || !g.rolled || g.done) return null;
+  g.keep[i] = !g.keep[i];
+  return { g, kind: "lay", ev: { t: "keep" } };
+}
+function yahtScore(gs, seat, cat) {
+  const g = clone(gs);
+  if (g.turn !== seat || !g.rolled || g.done || cat in g.scores[seat]) return null;
+  g.scores[seat][cat] = yahtValue(cat, g.dice);
+  g.turn = other(seat);
+  g.dice = [0, 0, 0, 0, 0];
+  g.keep = [false, false, false, false, false];
+  g.rollsLeft = 3;
+  g.rolled = false;
+  if (Object.keys(g.scores.A).length === 13 && Object.keys(g.scores.B).length === 13) {
+    const a = yahtTotal(g.scores.A).total;
+    const b = yahtTotal(g.scores.B).total;
+    const w = a === b ? null : a > b ? "A" : "B";
+    if (w) g.tally[w] += 1;
+    g.summary = { a, b, win: w };
+    g.done = true;
+    g.matchDone = true;
+    g.win = w;
+  }
+  return { g, kind: "scopa", ev: { t: "score", cat } };
 }
 
 /* ═══════════════════════════ feedback ═══════════════════════════ */
@@ -2017,6 +2135,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealBriscola(dealer, cont?.tally || null, deck)
       : game === "perudo"
       ? dealPerudo(dealer, cont?.tally || null)
+      : game === "yahtzee"
+      ? dealYahtzee(dealer, cont?.tally || null)
       : dealCamicia(cont?.tally || null, deck);
 
   const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });
@@ -2309,6 +2429,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Briscola room={room} gs={gs} seat={seat} opp={opp} mine={mine} slamId={slamId} commit={commit} showScores={showScores} />
       ) : room.game === "perudo" ? (
         <Perudo room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+      ) : room.game === "yahtzee" ? (
+        <Yahtzee room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : (
         <Board
           room={room}
@@ -3266,6 +3388,108 @@ const stepBtn = {
   WebkitTapHighlightColor: "transparent",
 };
 
+/* ── yahtzee ── */
+function Yahtzee({ room, gs, seat, mine, commit }) {
+  const opp = other(seat);
+  const [motionOn, setMotionOn] = useState(false);
+  const myScore = gs.scores[seat];
+  const oppScore = gs.scores[opp];
+  const myTotal = yahtTotal(myScore);
+  const oppTotal = yahtTotal(oppScore);
+  const canRoll = mine && gs.rollsLeft > 0 && !gs.done;
+  const canScore = mine && gs.rolled && !gs.done;
+  const doRoll = () => {
+    if (mine && gs.rollsLeft > 0 && !gs.done) commit(yahtRoll(gs, seat));
+  };
+  useShake(doRoll, motionOn && canRoll);
+  const tapRoll = async () => {
+    if (!motionOn) setMotionOn(await requestMotion());
+    doRoll();
+  };
+
+  return (
+    <div>
+      {/* opponent */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
+        <Micro>
+          {oppTotal.total} punti · {Object.keys(oppScore).length}/13
+        </Micro>
+      </div>
+
+      {/* dice + roll */}
+      <div style={{ margin: "16px 0 6px", textAlign: "center" }}>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", minHeight: 58, alignItems: "flex-end" }}>
+          {gs.dice.map((d, i) => (
+            <div key={i} style={{ transform: gs.keep[i] ? "translateY(-7px)" : "none", transition: "transform 150ms ease" }}>
+              <Die
+                v={d}
+                size={48}
+                hi={gs.keep[i]}
+                roll={gs.rolled && !!d}
+                onClick={mine && gs.rolled ? () => commit(yahtToggle(gs, seat, i)) : undefined}
+              />
+            </div>
+          ))}
+        </div>
+        <Micro style={{ marginTop: 8, minHeight: 14 }}>{gs.rolled && canRoll ? "tocca i dadi da tenere" : ""}</Micro>
+        <div style={{ marginTop: 10 }}>
+          {mine && !gs.done ? (
+            gs.rollsLeft > 0 ? (
+              <Button full onClick={tapRoll}>
+                {gs.rolled ? `Ritira · ${gs.rollsLeft} rimasti` : "Lancia i dadi — scuoti o tocca"}
+              </Button>
+            ) : (
+              <Micro>segna un punteggio qui sotto</Micro>
+            )
+          ) : (
+            <Micro>tocca a {who(room, opp)}</Micro>
+          )}
+        </div>
+      </div>
+
+      {/* your scorecard */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
+        {YCATS.map((cat) => {
+          const filled = cat.k in myScore;
+          const preview = !filled && canScore ? yahtValue(cat.k, gs.dice) : null;
+          const tappable = !filled && canScore;
+          return (
+            <button
+              key={cat.k}
+              disabled={!tappable}
+              onClick={() => tappable && commit(yahtScore(gs, seat, cat.k))}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 6,
+                border: `1px solid ${tappable ? T.ink : T.line}`,
+                background: filled ? "transparent" : tappable ? "rgba(18,18,18,0.03)" : "transparent",
+                borderRadius: 8,
+                padding: "9px 11px",
+                cursor: tappable ? "pointer" : "default",
+                WebkitTapHighlightColor: "transparent",
+              }}
+            >
+              <span style={{ fontSize: 13, color: filled ? T.ink60 : T.ink }}>{cat.label}</span>
+              <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 15, color: filled ? T.ink : preview != null ? T.ink30 : T.line }}>
+                {filled ? myScore[cat.k] : preview != null ? preview : "–"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
+        <span style={{ color: T.ink60 }}>
+          Bonus {myTotal.upper}/63{myTotal.bonus ? " +35" : ""}
+        </span>
+        <span>Totale {myTotal.total}</span>
+      </div>
+    </div>
+  );
+}
+
 /* ── the finale ── */
 const SUIT_COLS = ["#A8842A", "#A5342F", "#2C557E", "#3A6B4A"];
 function Confetti() {
@@ -3523,14 +3747,15 @@ function Summary({ room, gs }) {
         </div>
       </div>
     );
-  if ((room.game === "ruba" || room.game === "briscola") && gs.summary)
+  if ((room.game === "ruba" || room.game === "briscola" || room.game === "yahtzee") && gs.summary)
     return (
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 22, fontWeight: 700, fontFamily: BRAND }}>
           {gs.summary.a} <span style={{ color: T.ink30 }}>—</span> {gs.summary.b}
         </div>
         <Micro style={{ marginTop: 4 }}>
-          {who(room, "A")} · {who(room, "B")} {room.game === "briscola" ? " · punti su 120" : ""} · mani {gs.tally.A}–{gs.tally.B}
+          {who(room, "A")} · {who(room, "B")}
+          {room.game === "briscola" ? " · punti su 120" : room.game === "yahtzee" ? " · punti totali" : ""} · mani {gs.tally.A}–{gs.tally.B}
         </Micro>
       </div>
     );
