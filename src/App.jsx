@@ -1057,6 +1057,7 @@ export default function App() {
   const [french, setFrench] = useState(false);
   const [savedRules, setSavedRules] = useState({});
   const [name, setName] = useState("");
+  const [showScores, setShowScores] = useState(false); // live points/cards-taken, off by default
   const booted = useRef(false);
   useEffect(() => {
     (async () => {
@@ -1065,6 +1066,7 @@ export default function App() {
       if (typeof p.french === "boolean") setFrench(p.french);
       if (p.rules && typeof p.rules === "object") setSavedRules(p.rules);
       if (typeof p.name === "string") setName(p.name);
+      if (typeof p.showScores === "boolean") setShowScores(p.showScores);
     })();
   }, []);
   useEffect(() => {
@@ -1072,8 +1074,8 @@ export default function App() {
       booted.current = true;
       return;
     }
-    savePrefs({ french, rules: savedRules, name });
-  }, [french, savedRules, name]);
+    savePrefs({ french, rules: savedRules, name, showScores });
+  }, [french, savedRules, name, showScores]);
   const setGameRules = (game, opts) => setSavedRules((r) => ({ ...r, [game]: opts }));
   return (
     <SuitCtx.Provider value={french}>
@@ -1084,12 +1086,14 @@ export default function App() {
         setGameRules={setGameRules}
         name={name}
         setName={setName}
+        showScores={showScores}
+        setShowScores={setShowScores}
       />
     </SuitCtx.Provider>
   );
 }
 
-function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
+function Game({ french, setFrench, savedRules, setGameRules, name, setName, showScores, setShowScores }) {
   const [screen, setScreen] = useState("home");
   const [codeIn, setCodeIn] = useState("");
   const [seat, setSeat] = useState("A");
@@ -1722,6 +1726,17 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
           <Micro style={{ marginTop: 20 }}>Carte · sul tuo telefono</Micro>
           <FaceToggle french={french} setFrench={setFrench} />
 
+          <Micro style={{ marginTop: 20 }}>Punti e prese · sul tuo telefono</Micro>
+          <Segmented
+            options={[
+              { v: false, label: "Nascondi" },
+              { v: true, label: "Mostra" },
+            ]}
+            value={showScores}
+            onPick={(v) => setShowScores(v)}
+            style={{ marginTop: 8 }}
+          />
+
           <div style={{ marginTop: 24 }}>
             {host ? (
               <Button full disabled={!seated} onClick={start}>
@@ -1761,9 +1776,9 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
       <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title={conf.name} />
 
       {room.game === "camicia" ? (
-        <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} />
+        <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} showScores={showScores} />
       ) : room.game === "briscola" ? (
-        <Briscola room={room} gs={gs} seat={seat} opp={opp} mine={mine} slamId={slamId} commit={commit} />
+        <Briscola room={room} gs={gs} seat={seat} opp={opp} mine={mine} slamId={slamId} commit={commit} showScores={showScores} />
       ) : (
         <Board
           room={room}
@@ -1775,6 +1790,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
           pick={pick}
           setPick={setPick}
           commit={commit}
+          showScores={showScores}
         />
       )}
 
@@ -2010,7 +2026,7 @@ function HomeDeck() {
 }
 
 /* ── scopa / rubamazzo board ── */
-function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
+function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showScores }) {
   const isScopa = room.game === "scopa";
   const o = room.opts;
 
@@ -2038,10 +2054,12 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
-          <Micro style={{ marginTop: 2 }}>
-            {tally[opp]} {unit}
-            {isScopa && gs.scope[opp] ? ` · ${gs.scope[opp]} scopa` : ""}
-          </Micro>
+          {showScores && (
+            <Micro style={{ marginTop: 2 }}>
+              {tally[opp]} {unit}
+              {isScopa && gs.scope[opp] ? ` · ${gs.scope[opp]} scopa` : ""}
+            </Micro>
+          )}
         </div>
         <div style={{ display: "flex", gap: 3 }}>
           {gs.hands[opp].map((c) => (
@@ -2148,10 +2166,12 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
           <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>
             {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
           </div>
-          <Micro>
-            {tally[seat]} {unit}
-            {isScopa && gs.scope[seat] ? ` · ${gs.scope[seat]} scopa` : ""}
-          </Micro>
+          {showScores && (
+            <Micro>
+              {tally[seat]} {unit}
+              {isScopa && gs.scope[seat] ? ` · ${gs.scope[seat]} scopa` : ""}
+            </Micro>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "center", minHeight: 96 }}>
           {gs.hands[seat].map((c) => (
@@ -2191,7 +2211,7 @@ function PileView({ room, gs, seat, label, faceUp, slamId, right }) {
 }
 
 /* ── straccia camicia ── */
-function Camicia({ room, gs, seat, mine, slamId, commit }) {
+function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
   const opp = other(seat);
   const shown = gs.center.slice(-5);
   const attack = room.opts.intl ? "A 4 · R 3 · C 2 · F 1" : "A 1 · 2 due · 3 tre";
@@ -2323,21 +2343,21 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
         </div>
       </div>
 
-      <Micro style={{ textAlign: "center", marginTop: 10 }}>
-        mani {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
-      </Micro>
+      {showScores && (
+        <Micro style={{ textAlign: "center", marginTop: 10 }}>
+          mani {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
+        </Micro>
+      )}
     </div>
   );
 }
 
 /* ── briscola ── */
-function Briscola({ room, gs, seat, opp, mine, slamId, commit }) {
+function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
   const french = useContext(SuitCtx);
   const play = (card) => {
     if (mine) commit(briscolaPlay(gs, seat, card.id));
   };
-  const myPts = brisPoints(gs.piles[seat]);
-  const oppPts = brisPoints(gs.piles[opp]);
   const a = room.anim;
   const played = a && a.card ? { id: a.card, s: a.card[0], v: +a.card.slice(1) } : null;
   const nameRow = (s, you) => (
@@ -2346,7 +2366,7 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit }) {
         {who(room, s)}
         {you && <span style={{ color: T.ink30, fontWeight: 400 }}> tu</span>}
       </div>
-      <Micro>{brisPoints(gs.piles[s])} punti</Micro>
+      {showScores && <Micro>{brisPoints(gs.piles[s])} punti</Micro>}
     </div>
   );
 
