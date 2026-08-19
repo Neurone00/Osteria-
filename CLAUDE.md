@@ -4,8 +4,14 @@ Context for anyone — human or agent — picking this repo up cold.
 
 ## What this is
 
-Osteria: three Italian card games (Scopa, Rubamazzo, Straccia camicia) for **two players on two devices**, joined
-by a four-letter table code. Aiming at a playable MVP hosted on Cloudflare, not a product.
+Osteria: six two-player games for **two players on two devices**, joined by a four-letter table code (or a QR /
+shared link). Four card games — Scopa, Rubamazzo, Straccia camicia, Briscola — and two dice games — Perudo and
+Yahtzee (shake-to-throw via DeviceMotion). Card games start with a hands-on shuffle (tap to shuffle, seeded by
+tap timing) and cut (drag) ritual. Hosted on Cloudflare (worker + Durable Object), a playable MVP, not a product.
+
+The interface is Italian, Jackbox-minimal on the home screen, with a per-device deck-face choice (Napoletane or
+French/Lombard) and a default-off "show points" toggle. Rules engines live in `src/App.jsx` and are exercised by
+`scripts/simulate.mjs`; keep adding coverage there for every new game.
 
 Read `README.md` first — it documents the rules as implemented, with the reasoning behind the variant choices.
 Those rules were researched against Italian sources and verified by simulation; **don't "fix" them from memory.**

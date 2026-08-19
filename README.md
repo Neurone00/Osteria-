@@ -1,11 +1,20 @@
 # Osteria
 
-Three Italian card games for two people on two devices, joined by a four-letter table code.
-One player opens a table, the other types the code. No accounts, no lobby lists, no server of your own.
+Six two-player games for two people on two devices, joined by a four-letter table code — or by scanning a QR /
+opening a shared link. One player opens a table, the other joins. No accounts, no lobby lists, no server of your own.
 
-- **Scopa** (three cards) — with settebello, primiera, and optional napola, rebello and asso piglia tutto
+- **Scopa** (three cards) — with settebello, primiera, and optional napola, rebello, asso piglia tutto, asso in pila
 - **Rubamazzo** — take the table, or steal the whole pile off your opponent
 - **Straccia camicia** — no decisions at all, just nerve and the order of the deck
+- **Briscola** — trump-suit trick-taking, 120 points over twenty tricks
+- **Perudo** (dice) — five hidden dice each, bid on a face across all dice or call Dudo; shake to roll
+- **Yahtzee** (dice) — three rolls a turn, thirteen scoring boxes, the +35 upper bonus; shake to roll
+
+Card games begin with a shuffle-and-cut ritual: one player taps the deck to shuffle (the randomness is seeded by
+the rhythm of their taps), the other drags to cut. Dice games throw on a phone shake (or a tap).
+
+Cards land with a slam: overshoot animation, screen jolt, a synthesised thwack, and a haptic tap on phones.
+Sound and haptics can be turned off in the header; the whole motion set respects `prefers-reduced-motion`.
 
 Cards land with a slam: overshoot animation, screen jolt, a synthesised thwack, and a haptic tap on phones.
 Sound and haptics can be turned off in the header; the whole motion set respects `prefers-reduced-motion`.
