@@ -70,7 +70,15 @@ npm run bundle     # regenerate standalone/index.html
 npm run deploy     # bundle + wrangler deploy
 npm run tail       # live Worker logs
 npx wrangler deploy --dry-run --outdir=/tmp/w   # validates config without touching the account
+npm test           # smoke test + rules simulation
 ```
+
+`scripts/smoke.mjs` boots the built page in jsdom and checks the lobby renders — it catches the white
+screen that a rules test can't. `scripts/simulate.mjs` plays 300 random deals of each of the six variants
+and checks the 40 cards are always accounted for, that no seat is ever stuck, and that every hand ends.
+It reads the rules straight out of `src/App.jsx` — slicing the file from the react import to the feedback
+banner and evaluating that as a module — precisely so `App.jsx` does not have to grow an import of a
+`rules.js` and lose the artifact invariant above.
 
 ## Known gaps
 
@@ -81,10 +89,10 @@ Roughly in the order worth doing:
 2. **Hands live in the shared state object.** A determined opponent can read yours off the wire. Fine among
    friends, wrong for anything competitive. Fixing it properly means moving rule enforcement into the Durable
    Object and sending each player a redacted view — a real refactor, not a patch.
-3. **The rules engines are welded into `App.jsx`.** Extracting them into `src/rules.js` would make them
-   importable by a test file. There is no test suite; the engines were verified by an ad-hoc simulation that
-   played 900 random deals checking for card leaks, stuck states and non-terminating hands. Recreating that as
-   `scripts/simulate.mjs` is cheap and worth it before touching any rule.
+3. ~~**The rules engines are welded into `App.jsx`.**~~ Done, without moving them: `scripts/simulate.mjs`
+   slices the rules region out of `App.jsx` at test time and plays 300 random deals of each variant.
+   Extracting to `src/rules.js` and importing it back would have broken the no-imports-beyond-react
+   invariant, so the test reaches into the file instead of the file reaching out to a module.
 4. **Reconnect is a page reload.** The "Reconnect" control in the header reloads and rejoins from the saved
    session. A proper WebSocket retry with backoff would be smoother.
 5. **No spectators, no more than two seats, no rematch history beyond the running tally.** All deliberate.

@@ -63,7 +63,14 @@ The full Vite project below is the same app, for when you want to edit it.
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # static site in dist/
+npm test           # jsdom boot check, then 300 random deals of each variant
 ```
+
+`npm test` is two things. `scripts/smoke.mjs` mounts the built page in jsdom and checks the lobby is on
+screen. `scripts/simulate.mjs` plays 300 random deals of each of the six variants — both scopa rule sets,
+both rubamazzo, both camicia — asserting that all 40 cards are accounted for after every single play, that
+no seat is ever left on turn with nothing it can do, that every hand terminates, and that each scopa
+scoreboard adds up to the lines that explain it.
 
 ## Put it online
 

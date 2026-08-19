@@ -11,7 +11,10 @@
     "bundle": "node scripts/build-standalone.mjs",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
-    "predeploy": "npm run bundle"
+    "predeploy": "npm run bundle",
+    "simulate": "node scripts/simulate.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "npm run smoke && npm run simulate"
   },
   "dependencies": {
     "jsdom": "^30.0.1",
