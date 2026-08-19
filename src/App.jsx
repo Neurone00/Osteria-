@@ -2371,19 +2371,23 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             </>
           )}
 
-          <Micro style={{ marginTop: 20 }}>Carte · sul tuo telefono</Micro>
-          <FaceToggle french={french} setFrench={setFrench} />
+          {isCard(room.game) && (
+            <>
+              <Micro style={{ marginTop: 20 }}>Carte · sul tuo telefono</Micro>
+              <FaceToggle french={french} setFrench={setFrench} />
 
-          <Micro style={{ marginTop: 20 }}>Punti e prese · sul tuo telefono</Micro>
-          <Segmented
-            options={[
-              { v: false, label: "Nascondi" },
-              { v: true, label: "Mostra" },
-            ]}
-            value={showScores}
-            onPick={(v) => setShowScores(v)}
-            style={{ marginTop: 8 }}
-          />
+              <Micro style={{ marginTop: 20 }}>Punti e prese · sul tuo telefono</Micro>
+              <Segmented
+                options={[
+                  { v: false, label: "Nascondi" },
+                  { v: true, label: "Mostra" },
+                ]}
+                value={showScores}
+                onPick={(v) => setShowScores(v)}
+                style={{ marginTop: 8 }}
+              />
+            </>
+          )}
 
           <div style={{ marginTop: 24 }}>
             {host ? (
