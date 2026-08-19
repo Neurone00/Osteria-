@@ -186,7 +186,9 @@ function scopaPlay(gs, seat, cardId, take, o) {
   if (i < 0) return null;
   const card = g.hands[seat].splice(i, 1)[0];
   let kind = "lay";
-  let note = `cala il ${lbl(card.v)} di ${SUIT[card.s].name.toLowerCase()}`;
+  // ev is a structured event; the client renders it into a sentence using the
+  // reader's own deck names, so the nomenclature always matches what they see.
+  let ev = { t: "lay", v: card.v, s: card.s };
   if (take && take.length) {
     const onlyAce = g.table.length === 1 && g.table[0].v === 1;
     const aceSweep = o.asso && card.v === 1 && !onlyAce;
@@ -198,10 +200,10 @@ function scopaPlay(gs, seat, cardId, take, o) {
     if (g.table.length === 0 && !finalPlay && !aceSweep) {
       g.scope[seat] += 1;
       kind = "scopa";
-      note = `svuota il tavolo — scopa`;
+      ev = { t: "scopa" };
     } else {
       kind = "take";
-      note = `prende ${got.map((c) => lbl(c.v)).join("+")} con il ${lbl(card.v)}`;
+      ev = { t: "take", v: card.v, s: card.s, got: got.map((c) => c.v) };
     }
   } else if (o.acepile && card.v === 1) {
     // House rule: an asso played with nothing to capture is banked straight to
@@ -210,7 +212,7 @@ function scopaPlay(gs, seat, cardId, take, o) {
     g.piles[seat].push(card);
     g.last = seat;
     kind = "take";
-    note = `incassa l’asso`;
+    ev = { t: "bank" };
   } else g.table.push(card);
   g.turn = other(seat);
 
@@ -232,7 +234,7 @@ function scopaPlay(gs, seat, cardId, take, o) {
       g.matchDone = (A >= o.target || B >= o.target) && A !== B;
     }
   }
-  return { g, kind, note, card };
+  return { g, kind, ev, card };
 }
 
 /* ── rubamazzo ─────────────────────────────────────────────── */
@@ -290,11 +292,11 @@ function rubaPlay(gs, seat, cardId, opt) {
   if (i < 0) return null;
   const card = g.hands[seat].splice(i, 1)[0];
   let kind = "lay";
-  let note = `cala il ${lbl(card.v)} di ${SUIT[card.s].name.toLowerCase()}`;
+  let ev = { t: "lay", v: card.v, s: card.s };
   if (opt && opt.type === "steal") {
     const pile = g.piles[other(seat)];
     kind = "scopa";
-    note = `ruba un mazzo di ${pile.length} con il ${lbl(card.v)}`;
+    ev = { t: "steal", v: card.v, s: card.s, n: pile.length };
     g.piles[seat] = [...g.piles[seat], ...pile, card];
     g.piles[other(seat)] = [];
     g.last = seat;
@@ -304,7 +306,7 @@ function rubaPlay(gs, seat, cardId, opt) {
     g.piles[seat].push(...got, card);
     g.last = seat;
     kind = "take";
-    note = `prende ${got.length} con il ${lbl(card.v)}`;
+    ev = { t: "rtake", v: card.v, s: card.s, n: got.length };
   } else g.table.push(card);
   g.turn = other(seat);
 
@@ -327,7 +329,7 @@ function rubaPlay(gs, seat, cardId, opt) {
       g.matchDone = true;
     }
   }
-  return { g, kind, note, card };
+  return { g, kind, ev, card };
 }
 
 /* ── straccia camicia ──────────────────────────────────────── */
@@ -358,13 +360,13 @@ function camiciaFlip(gs, seat, o) {
   g.flips++;
   const d = demand(card.v, o.intl);
   let kind = "lay";
-  let note = `gira il ${lbl(card.v)}`;
+  let ev = { t: "turn", v: card.v, s: card.s };
   if (d > 0) {
     g.owed = seat;
     g.debt = d;
     g.turn = other(seat);
     kind = "take";
-    note = `gira il ${lbl(card.v)} — ${d} da pagare`;
+    ev = { t: "attack", v: card.v, s: card.s, d };
   } else if (g.debt > 0) {
     g.debt -= 1;
     if (g.debt === 0) {
@@ -373,7 +375,7 @@ function camiciaFlip(gs, seat, o) {
       g.center = [];
       g.turn = g.owed;
       kind = "scopa";
-      note = `paga l’ultima — ${n} carte cambiano mano`;
+      ev = { t: "pay", n };
       g.owed = null;
     }
   } else g.turn = other(seat);
@@ -389,7 +391,7 @@ function camiciaFlip(gs, seat, o) {
     g.matchDone = true;
     g.win = null;
   }
-  return { g, kind, note, card };
+  return { g, kind, ev, card };
 }
 
 /* ═══════════════════════════ feedback ═══════════════════════════ */
@@ -582,8 +584,39 @@ function loadPeerJs() {
 const SuitCtx = createContext(false);
 const FR_SUIT = { D: { g: "♦", c: "#B23A2E" }, C: { g: "♥", c: "#B23A2E" }, S: { g: "♠", c: "#15181C" }, B: { g: "♣", c: "#15181C" } };
 const FR_RANK = { 1: "A", 8: "J", 9: "Q", 10: "K" };
+const FR_SUIT_NAME = { D: "quadri", C: "cuori", S: "picche", B: "fiori" };
 const VS_TEXT = String.fromCharCode(0xfe0e); // force text (not emoji) rendering of ♦♥♠♣
 const faceLbl = (v, french) => (french ? FR_RANK[v] || String(v) : lbl(v));
+const suitName = (s, french) => (french ? FR_SUIT_NAME[s] : SUIT[s].name.toLowerCase());
+
+// Render a move event into a sentence using the READER's deck, so the log always
+// matches the card names that reader sees (Napoletane A/F/C/R vs Francesi A/J/Q/K).
+function describe(ev, french) {
+  if (!ev) return "";
+  const r = (v) => faceLbl(v, french);
+  switch (ev.t) {
+    case "lay":
+      return `cala il ${r(ev.v)} di ${suitName(ev.s, french)}`;
+    case "take":
+      return `prende ${ev.got.map(r).join("+")} con il ${r(ev.v)}`;
+    case "scopa":
+      return "svuota il tavolo — scopa";
+    case "bank":
+      return "incassa l’asso";
+    case "steal":
+      return `ruba un mazzo di ${ev.n} con il ${r(ev.v)}`;
+    case "rtake":
+      return `prende ${ev.n} con il ${r(ev.v)}`;
+    case "turn":
+      return `gira il ${r(ev.v)}`;
+    case "attack":
+      return `gira il ${r(ev.v)} — ${ev.d} da pagare`;
+    case "pay":
+      return `paga l’ultima — ${ev.n} carte cambiano mano`;
+    default:
+      return "";
+  }
+}
 
 function Pip({ suit, size = 20 }) {
   const french = useContext(SuitCtx);
@@ -770,6 +803,43 @@ function Stack({ n, top, faceUp, size = "sm", right, slamId, grow = true }) {
   );
 }
 
+/* A deck seen with a bit of depth: the top card floats over a visible block of
+   card edges whose height grows with the count. Reads as a real, live pile and
+   uses the vertical room a flat stack wastes. */
+function Deck3D({ n, top, faceUp, size = "sm", slamId, live }) {
+  const [w, h] = SZ[size];
+  if (!n) return <Ghost size={size} />;
+  const layers = Math.min(n, 26);
+  const dy = 1.9; // thickness contributed by each visible edge
+  const thickness = (layers - 1) * dy;
+  return (
+    <div style={{ position: "relative", width: w, height: h + thickness, flexShrink: 0 }}>
+      {Array.from({ length: layers - 1 }, (_, i) => i)
+        .reverse()
+        .map((i) => (
+          <div
+            key={i}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: (i + 1) * dy,
+              width: w,
+              height: h,
+              borderRadius: 7,
+              background: faceUp ? "#F2EFE8" : "#0e0e0e",
+              borderBottom: `1px solid ${faceUp ? "rgba(18,18,18,0.14)" : "rgba(255,255,255,0.05)"}`,
+              borderLeft: `1px solid ${faceUp ? "rgba(18,18,18,0.06)" : "transparent"}`,
+              boxShadow: "-1px 1px 1px rgba(18,18,18,0.05)",
+            }}
+          />
+        ))}
+      <div className={live ? "floaty" : ""} style={{ position: "absolute", left: 0, top: 0 }}>
+        {faceUp && top ? <Card card={top} size={size} rot={0} slam={slamId === top.id} /> : <Back size={size} />}
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════════════ chrome ═══════════════════════════ */
 const Micro = ({ children, style }) => (
   <div
@@ -824,13 +894,12 @@ html,body{overscroll-behavior:none;margin:0;overflow-x:hidden}
 button{font-family:inherit}
 input{font-family:inherit}
 @keyframes slamIn{
- 0%{transform:translate(var(--dx,0),-140px) rotate(calc(var(--r) * 3)) scale(1.9);opacity:0}
- 46%{transform:translate(0,6px) rotate(var(--r)) scale(1.04);opacity:1}
- 62%{transform:translate(0,0) rotate(var(--r)) scale(0.985)}
- 78%{transform:translate(0,-2px) rotate(var(--r)) scale(1.006)}
- 100%{transform:translate(0,0) rotate(var(--r)) scale(1)}
+ 0%{transform:translateY(-120px) rotate(calc(var(--r) + 9deg)) scale(1.5);opacity:0}
+ 55%{opacity:1}
+ 74%{transform:translateY(0) rotate(var(--r)) scale(1.05)}
+ 100%{transform:translateY(0) rotate(var(--r)) scale(1)}
 }
-.slam{animation:slamIn 420ms cubic-bezier(.16,.9,.3,1) both;z-index:3}
+.slam{animation:slamIn 380ms cubic-bezier(.2,.72,.2,1) both;z-index:3}
 @keyframes jolt{
  0%{transform:translate(0,0)}22%{transform:translate(1.5px,-3px)}
  44%{transform:translate(-2px,2px)}66%{transform:translate(2px,1px)}
@@ -850,7 +919,11 @@ input{font-family:inherit}
 .pop{animation:pop 560ms cubic-bezier(.2,1.35,.35,1) both}
 @keyframes fall{0%{transform:translateY(-24px) rotate(0);opacity:0}12%{opacity:1}100%{transform:translateY(320px) rotate(340deg);opacity:0}}
 .confetti{animation:fall 1500ms ease-in forwards}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti{animation:none!important}}
+@keyframes flipy{0%{transform:rotateY(0)}50%{transform:rotateY(90deg)}100%{transform:rotateY(0)}}
+.flipy{animation:flipy 340ms ease-in-out both;transform-style:preserve-3d}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+.floaty{animation:floaty 3.4s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty{animation:none!important}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -1167,6 +1240,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
       opts: { ...GAMES.scopa.def, ...(savedRules.scopa || {}) },
       gs: null,
       log: [],
+      ev: null,
       anim: null,
     };
     setSeat("A");
@@ -1300,15 +1374,21 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
   /* ── moves ── */
   const commit = (res) => {
     if (!res) return;
-    const log = [`${who(room, seat)} ${res.note}`, ...room.log].slice(0, 3);
-    publish({ ...room, gs: res.g, log, anim: { id: uid(), kind: res.kind, card: res.card?.id, seat } });
+    // Store the move as a structured event, not a pre-formatted string, so each
+    // player's screen renders it with their own deck's nomenclature.
+    publish({
+      ...room,
+      gs: res.g,
+      ev: res.ev ? { seat, ...res.ev } : null,
+      anim: { id: uid(), kind: res.kind, card: res.card?.id, seat },
+    });
   };
 
   // The host picks the game and its house rules in the lobby, before anything is
   // dealt; both are synced so the guest sees the table being set. Dealing just
   // flips the room to play with whatever is already staged in room.game/opts.
   const pickGame = (game) => publish({ ...room, game, opts: { ...GAMES[game].def, ...(savedRules[game] || {}) } });
-  const start = () => publish({ ...room, status: "play", gs: newGame(room.game, room.opts), log: [], anim: null });
+  const start = () => publish({ ...room, status: "play", gs: newGame(room.game, room.opts), log: [], ev: null, anim: null });
 
   const newGame = (game, o, prev) =>
     game === "scopa"
@@ -1320,7 +1400,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
   const again = () => {
     const g = room.gs;
     const fresh = room.game === "scopa" && g.matchDone ? newGame("scopa", room.opts) : newGame(room.game, room.opts, g);
-    publish({ ...room, gs: fresh, log: [], anim: null });
+    publish({ ...room, gs: fresh, log: [], ev: null, anim: null });
   };
 
   const setOpt = (k, val) => {
@@ -1358,10 +1438,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
           }}
         >
           {/* wordmark — the one thing the eye lands on */}
-          <div style={{ display: "flex", justifyContent: "center", gap: 7, marginBottom: 2 }}>
-            {["D", "C", "S", "B"].map((s, i) => (
-              <Card key={s} card={{ id: s + "x", s, v: [1, 7, 10, 3][i] }} size="sm" rot={(i - 1.5) * 8} />
-            ))}
+          <div style={{ marginBottom: 2 }}>
+            <HomeDeck />
           </div>
           <h1
             style={{
@@ -1520,8 +1598,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
         />
       )}
 
-      {room.log[0] && (
-        <p style={{ color: T.ink60, fontSize: 12, textAlign: "center", marginTop: 14, minHeight: 16 }}>{room.log[0]}</p>
+      {room.ev && !gs.done && (
+        <p style={{ color: T.ink60, fontSize: 12, textAlign: "center", marginTop: 14, minHeight: 16 }}>
+          {who(room, room.ev.seat)} {describe(room.ev, french)}
+        </p>
       )}
 
       {gs.done && (
@@ -1533,7 +1613,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
               <Button full onClick={again}>
                 {room.game === "scopa" && !gs.matchDone ? "Prossima mano" : "Gioca ancora"}
               </Button>
-              <Button kind="line" onClick={() => publish({ ...room, status: "lobby", gs: null, log: [] })}>
+              <Button kind="line" onClick={() => publish({ ...room, status: "lobby", gs: null, log: [], ev: null })}>
                 Giochi
               </Button>
             </div>
@@ -1724,6 +1804,31 @@ function FaceToggle({ french, setFrench }) {
   );
 }
 
+const rnd = (n) => Math.floor(Math.random() * n);
+const randCard = () => {
+  const s = ["D", "C", "S", "B"][rnd(4)];
+  return { id: `${s}${1 + rnd(10)}-${uid()}`, s, v: 1 + rnd(10) };
+};
+/* The home flourish: four cards dealt fresh on every visit, each flipping to a
+   new card when you tap it. Pure decoration, so it lives entirely in local state. */
+function HomeDeck() {
+  const [cards, setCards] = useState(() => [0, 1, 2, 3].map(() => randCard()));
+  const [spin, setSpin] = useState([0, 0, 0, 0]);
+  const flip = (i) => {
+    setSpin((s) => s.map((x, j) => (j === i ? x + 1 : x)));
+    setTimeout(() => setCards((cs) => cs.map((c, j) => (j === i ? randCard() : c))), 170);
+  };
+  return (
+    <div style={{ display: "flex", justifyContent: "center", gap: 7, perspective: 640 }}>
+      {cards.map((c, i) => (
+        <div key={`${i}-${spin[i]}`} className="flipy">
+          <Card card={c} size="sm" rot={(i - 1.5) * 8} onClick={() => flip(i)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ── scopa / rubamazzo board ── */
 function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
   const isScopa = room.game === "scopa";
@@ -1789,7 +1894,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
       </div>
 
       {/* piles */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
         <PileView room={room} gs={gs} seat={opp} label="sua pila" faceUp={!isScopa} slamId={slamId} />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
           {taken && <Card card={taken} size="sm" rot={0} slam={slamId === taken.id} />}
@@ -1893,12 +1998,14 @@ function PileView({ room, gs, seat, label, faceUp, slamId, right }) {
   const top = pile[pile.length - 1];
   return (
     <div style={{ textAlign: right ? "right" : "left" }}>
-      <div style={{ display: "flex", justifyContent: right ? "flex-end" : "flex-start", alignItems: "flex-end" }}>
-        <Stack n={pile.length} top={top} faceUp={faceUp} size="sm" right={right} slamId={slamId} />
+      <div style={{ display: "flex", justifyContent: right ? "flex-end" : "flex-start", alignItems: "flex-start" }}>
+        {faceUp ? (
+          <Deck3D n={pile.length} top={top} faceUp size="sm" slamId={slamId} live />
+        ) : (
+          <Stack n={pile.length} top={top} faceUp={faceUp} size="sm" right={right} slamId={slamId} />
+        )}
       </div>
-      <Micro style={{ marginTop: 5 }}>
-        {label} {pile.length}
-      </Micro>
+      <Micro style={{ marginTop: 5 }}>{label}</Micro>
     </div>
   );
 }
@@ -1942,7 +2049,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
         <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
           <Micro>{gs.decks[opp].length}</Micro>
-          <Stack n={gs.decks[opp].length} faceUp={false} size="xs" right />
+          <Deck3D n={gs.decks[opp].length} faceUp={false} size="xs" live />
         </div>
       </div>
 
@@ -2029,7 +2136,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
             opacity: gs.decks[seat].length ? 1 : 0.4,
           }}
         >
-          <Stack n={gs.decks[seat].length} faceUp={false} size="md" />
+          <Deck3D n={gs.decks[seat].length} faceUp={false} size="md" live />
           <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.16em", color: mine && !gs.done ? T.ink : T.ink30 }}>
             {label}
           </div>
