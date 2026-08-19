@@ -443,6 +443,44 @@ function buzz(kind) {
     navigator.vibrate?.(kind === "scopa" ? [24, 36, 40] : kind === "take" ? [20] : [12]);
   } catch {}
 }
+/* The finale sting: a rising fanfare for the winner, a short fall for the loser,
+   one soft note on a draw. Seat-relative, so each phone plays its own. */
+function winSound(outcome, on) {
+  if (!on || !outcome) return;
+  try {
+    AC = AC || new (window.AudioContext || window.webkitAudioContext)();
+    if (AC.state === "suspended") AC.resume();
+    const t = AC.currentTime + 0.02;
+    const notes = outcome === "win" ? [523.25, 659.25, 783.99, 1046.5] : outcome === "lose" ? [415.3, 311.13] : [587.33];
+    const step = outcome === "win" ? 0.12 : 0.17;
+    notes.forEach((f, i) => {
+      const o = AC.createOscillator();
+      const g = AC.createGain();
+      o.type = outcome === "win" ? "triangle" : "sine";
+      const ts = t + i * step;
+      o.frequency.setValueAtTime(f, ts);
+      g.gain.setValueAtTime(0.0001, ts);
+      g.gain.exponentialRampToValueAtTime(outcome === "win" ? 0.24 : 0.16, ts + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ts + (outcome === "win" ? 0.44 : 0.5));
+      o.connect(g).connect(AC.destination);
+      o.start(ts);
+      o.stop(ts + 0.7);
+    });
+    if (outcome === "win") {
+      // a little bell shimmer on top
+      const b = AC.createOscillator();
+      const bg = AC.createGain();
+      b.type = "sine";
+      b.frequency.setValueAtTime(1568, t + 0.36);
+      bg.gain.setValueAtTime(0.0001, t + 0.36);
+      bg.gain.exponentialRampToValueAtTime(0.12, t + 0.4);
+      bg.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+      b.connect(bg).connect(AC.destination);
+      b.start(t + 0.36);
+      b.stop(t + 0.95);
+    }
+  } catch {}
+}
 
 /* ═══════════════════════════ network ═══════════════════════════ */
 const K = (c) => `osteria:${c}`;
@@ -622,8 +660,10 @@ function Card({ card, size = "md", onClick, active, dim, slam, rot, enter }) {
         border: `1px solid ${active ? T.ink : T.line}`,
         outline: active ? `2px solid ${T.ink}` : "none",
         outlineOffset: -3,
-        borderRadius: 4,
-        boxShadow: `0 ${dim ? 1 : 2}px ${dim ? 3 : 7}px rgba(18,18,18,${dim ? 0.06 : 0.13})`,
+        borderRadius: 7,
+        boxShadow: active
+          ? `0 6px 16px rgba(18,18,18,0.18)`
+          : `0 ${dim ? 1 : 2}px ${dim ? 3 : 7}px rgba(18,18,18,${dim ? 0.06 : 0.12})`,
         transform: `rotate(${r}deg) translateY(${active ? -10 : 0}px)`,
         transition: "transform 150ms cubic-bezier(.2,.9,.25,1), box-shadow 150ms",
         opacity: dim ? 0.5 : 1,
@@ -662,21 +702,21 @@ function Back({ size = "sm", stack }) {
       style={{
         width: w,
         height: h,
-        borderRadius: 4,
+        borderRadius: 7,
         background: T.ink,
         boxShadow: stack ? `2px 2px 0 ${T.bgDeep}, 3px 3px 0 ${T.ink}` : "0 1px 3px rgba(18,18,18,0.15)",
         position: "relative",
         flexShrink: 0,
       }}
     >
-      <div style={{ position: "absolute", inset: 5, border: `1px solid rgba(255,255,255,0.32)`, borderRadius: 2 }} />
+      <div style={{ position: "absolute", inset: 5, border: `1px solid rgba(255,255,255,0.32)`, borderRadius: 3 }} />
     </div>
   );
 }
 
 function Ghost({ size = "sm" }) {
   const [w, h] = SZ[size];
-  return <div style={{ width: w, height: h, border: `1px dashed ${T.ink30}`, borderRadius: 4, flexShrink: 0 }} />;
+  return <div style={{ width: w, height: h, border: `1px dashed ${T.ink30}`, borderRadius: 7, flexShrink: 0 }} />;
 }
 
 /* A physical stack of cards: the height of the pile encodes the count, so the
@@ -718,7 +758,7 @@ function Stack({ n, top, faceUp, size = "sm", right, slamId, grow = true }) {
               ...style,
               width: w,
               height: h,
-              borderRadius: 4,
+              borderRadius: 7,
               background: faceUp ? T.paper : T.ink,
               border: `1px solid ${faceUp ? T.line : "rgba(255,255,255,0.10)"}`,
               boxShadow: "0 1px 2px rgba(18,18,18,0.10)",
@@ -806,7 +846,11 @@ input{font-family:inherit}
 @keyframes swap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .swap{animation:swap 260ms ease-out both}
 .lift{transition:background 240ms ease, box-shadow 240ms ease, border-color 240ms ease}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap{animation:none!important}}
+@keyframes pop{0%{transform:scale(.4) rotate(-4deg);opacity:0}55%{transform:scale(1.14) rotate(1.5deg);opacity:1}72%{transform:scale(.95)}86%{transform:scale(1.02)}100%{transform:scale(1) rotate(0)}}
+.pop{animation:pop 560ms cubic-bezier(.2,1.35,.35,1) both}
+@keyframes fall{0%{transform:translateY(-24px) rotate(0);opacity:0}12%{opacity:1}100%{transform:translateY(320px) rotate(340deg);opacity:0}}
+.confetti{animation:fall 1500ms ease-in forwards}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti{animation:none!important}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -915,6 +959,37 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
       clearTimeout(t2);
     };
   }, [room?.anim?.id]);
+
+  /* ── the finale, from this seat's point of view ── */
+  const fgs = room?.gs;
+  const decided = !!(fgs && fgs.done && (room.game === "scopa" ? fgs.matchDone : true));
+  const winnerSeat =
+    !fgs || !fgs.done
+      ? null
+      : room.game === "scopa"
+      ? fgs.scores.A === fgs.scores.B
+        ? null
+        : fgs.scores.A > fgs.scores.B
+        ? "A"
+        : "B"
+      : room.game === "ruba"
+      ? fgs.summary?.win ?? null
+      : fgs.win ?? null;
+  const outcome = !decided ? null : winnerSeat == null ? "draw" : winnerSeat === seat ? "win" : "lose";
+  const finaleFired = useRef(false);
+  useEffect(() => {
+    if (!decided) {
+      finaleFired.current = false;
+      return;
+    }
+    if (finaleFired.current) return;
+    finaleFired.current = true;
+    const id = setTimeout(() => {
+      winSound(outcome, soundRef.current);
+      buzz(outcome === "win" ? "scopa" : "lay");
+    }, 220);
+    return () => clearTimeout(id);
+  }, [decided, outcome]);
 
   /* ── transports ── */
   const openStorage = useCallback(
@@ -1450,10 +1525,11 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
       )}
 
       {gs.done && (
-        <div className="fade" style={{ borderTop: `1px solid ${T.line}`, marginTop: 14, paddingTop: 14 }}>
+        <div className="fade" style={{ borderTop: `1px solid ${T.line}`, marginTop: 14, paddingTop: decided ? 6 : 14 }}>
+          {decided && <Finale outcome={outcome} />}
           <Summary room={room} gs={gs} />
           {seat === "A" ? (
-            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
               <Button full onClick={again}>
                 {room.game === "scopa" && !gs.matchDone ? "Prossima mano" : "Gioca ancora"}
               </Button>
@@ -1462,7 +1538,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName }) {
               </Button>
             </div>
           ) : (
-            <Micro style={{ marginTop: 12 }}>distribuisce {room.names.A}</Micro>
+            <Micro style={{ marginTop: 14, textAlign: "center" }}>distribuisce {room.names.A}</Micro>
           )}
         </div>
       )}
@@ -1676,7 +1752,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>{who(room, opp)}</div>
+          <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
           <Micro style={{ marginTop: 2 }}>
             {tally[opp]} {unit}
             {isScopa && gs.scope[opp] ? ` · ${gs.scope[opp]} scopa` : ""}
@@ -1717,10 +1793,23 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
         <PileView room={room} gs={gs} seat={opp} label="sua pila" faceUp={!isScopa} slamId={slamId} />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
           {taken && <Card card={taken} size="sm" rot={0} slam={slamId === taken.id} />}
-          <div className={!gs.done && mine ? "turn" : ""}>
-            <Micro style={{ textAlign: "center", color: !gs.done && mine ? T.ink : T.ink60 }}>
-              {gs.done ? "mano finita" : mine ? "tocca a te" : "aspetta"}
-            </Micro>
+          <div
+            className={!gs.done && mine ? "turn" : ""}
+            style={{
+              fontFamily: BRAND,
+              fontSize: 12,
+              fontWeight: 600,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              padding: "5px 13px",
+              borderRadius: 999,
+              whiteSpace: "nowrap",
+              background: !gs.done && mine ? T.ink : "transparent",
+              color: !gs.done && mine ? T.bg : T.ink60,
+              border: `1px solid ${!gs.done && mine ? T.ink : T.line}`,
+            }}
+          >
+            {gs.done ? "mano finita" : mine ? "tocca a te" : "aspetta"}
           </div>
         </div>
         <PileView room={room} gs={gs} seat={seat} label="tua pila" faceUp={!isScopa} slamId={slamId} right />
@@ -1728,7 +1817,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
 
       {/* choice */}
       {pick && (
-        <div className="fade" style={{ border: `1px solid ${T.ink}`, borderRadius: 4, padding: 12, marginTop: 16 }}>
+        <div className="fade" style={{ border: `1px solid ${T.ink}`, borderRadius: 10, padding: 13, marginTop: 16 }}>
           <Micro>{isScopa ? "Scegli la presa" : "Scegli"}</Micro>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
             {pick.opts.map((opt, i) => {
@@ -1744,8 +1833,8 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
                     gap: 6,
                     border: `1px solid ${T.line}`,
                     background: T.paper,
-                    borderRadius: 4,
-                    padding: 8,
+                    borderRadius: 8,
+                    padding: 9,
                     cursor: "pointer",
                   }}
                 >
@@ -1771,7 +1860,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit }) {
       {/* hand */}
       <div style={{ marginTop: 22 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>
             {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
           </div>
           <Micro>
@@ -1850,7 +1939,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
     <div>
       {/* opponent packet */}
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>{who(room, opp)}</div>
+        <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
           <Micro>{gs.decks[opp].length}</Micro>
           <Stack n={gs.decks[opp].length} faceUp={false} size="xs" right />
@@ -1895,7 +1984,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
 
       {/* your packet + slide-up dock */}
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 8 }}>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>
           {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
         </div>
         <Micro>{gs.decks[seat].length} carte</Micro>
@@ -1954,14 +2043,66 @@ function Camicia({ room, gs, seat, mine, slamId, commit }) {
   );
 }
 
-/* ── summaries ── */
+/* ── the finale ── */
+const SUIT_COLS = ["#A8842A", "#A5342F", "#2C557E", "#3A6B4A"];
+function Confetti() {
+  return (
+    <div aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" }}>
+      {Array.from({ length: 16 }, (_, i) => (
+        <span
+          key={i}
+          className="confetti"
+          style={{
+            position: "absolute",
+            left: `${(i * 6.1 + 4) % 96}%`,
+            top: -14,
+            width: i % 3 ? 7 : 9,
+            height: i % 2 ? 9 : 7,
+            background: SUIT_COLS[i % 4],
+            borderRadius: i % 2 ? 2 : 0,
+            animationDelay: `${(i % 6) * 80}ms`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+function Finale({ outcome }) {
+  const win = outcome === "win";
+  const draw = outcome === "draw";
+  const word = win ? "Vittoria" : draw ? "Pareggio" : "Sconfitta";
+  const color = win ? "#B8862B" : draw ? T.ink60 : T.ink30;
+  return (
+    <div style={{ position: "relative", textAlign: "center", padding: "6px 0 14px", overflow: "hidden" }}>
+      {win && <Confetti />}
+      <div
+        className="pop"
+        style={{
+          position: "relative",
+          fontFamily: BRAND,
+          fontWeight: 700,
+          fontSize: "clamp(48px, 17vw, 80px)",
+          lineHeight: 0.95,
+          letterSpacing: "-0.01em",
+          color,
+        }}
+      >
+        {word}
+      </div>
+    </div>
+  );
+}
+
+/* ── summaries — the detail under the finale, no repeated headline ── */
 function Summary({ room, gs }) {
   if (room.game === "scopa" && gs.summary)
     return (
       <div>
-        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.02em", marginBottom: 10, fontFamily: BRAND }}>
-          {gs.matchDone ? `${who(room, gs.scores.A > gs.scores.B ? "A" : "B")} vince la partita` : "Mano contata"}
-        </div>
+        {!gs.matchDone && (
+          <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.01em", marginBottom: 10, fontFamily: BRAND }}>
+            Mano contata
+          </div>
+        )}
         {gs.summary.lines.map((l, i) => (
           <div
             key={i}
@@ -1980,8 +2121,9 @@ function Summary({ room, gs }) {
             borderTop: `1px solid ${T.line}`,
             marginTop: 10,
             paddingTop: 8,
-            fontSize: 15,
+            fontSize: 16,
             fontWeight: 600,
+            fontFamily: BRAND,
           }}
         >
           <span>
@@ -1995,23 +2137,13 @@ function Summary({ room, gs }) {
     );
   if (room.game === "ruba" && gs.summary)
     return (
-      <div>
-        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.02em", fontFamily: BRAND }}>
-          {gs.summary.win ? `${who(room, gs.summary.win)} vince la mano` : "Perfetto pari"}
-        </div>
-        <Micro style={{ marginTop: 6 }}>
-          {who(room, "A")} {gs.summary.a} — {who(room, "B")} {gs.summary.b} · mani {gs.tally.A}–{gs.tally.B}
-        </Micro>
-      </div>
+      <Micro style={{ textAlign: "center" }}>
+        {who(room, "A")} {gs.summary.a} — {who(room, "B")} {gs.summary.b} · mani {gs.tally.A}–{gs.tally.B}
+      </Micro>
     );
   return (
-    <div>
-      <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.02em", fontFamily: BRAND }}>
-        {gs.win ? `${who(room, gs.win)} vince` : "Pareggio"}
-      </div>
-      <Micro style={{ marginTop: 6 }}>
-        mani {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
-      </Micro>
-    </div>
+    <Micro style={{ textAlign: "center" }}>
+      mani {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
+    </Micro>
   );
 }
