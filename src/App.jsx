@@ -3779,7 +3779,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
   const taken = a && a.kind !== "lay" && a.card ? { id: a.card, s: a.card[0], v: +a.card.slice(1) } : null;
 
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
@@ -3798,8 +3798,8 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
         </div>
       </div>
 
-      {/* table */}
-      <div style={{ margin: "18px 0", minHeight: 108 }}>
+      {/* table — grows to fill the middle */}
+      <div style={{ flex: 1, margin: "18px 0", minHeight: 108, display: "flex", flexDirection: "column", justifyContent: "center" }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
           <Micro>Tavolo</Micro>
           <Micro>{gs.deck.length} nel mazzo</Micro>
@@ -4093,7 +4093,7 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
   );
 
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         {nameRow(opp, false)}
@@ -4104,8 +4104,8 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
         </div>
       </div>
 
-      {/* trump + stock, and the trick in play */}
-      <div style={{ position: "relative", minHeight: 168, margin: "16px 0", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      {/* trump + stock, and the trick in play — grows to fill the middle */}
+      <div style={{ position: "relative", flex: 1, minHeight: 168, margin: "16px 0", display: "flex", alignItems: "center", justifyContent: "center" }}>
         {/* briscola + stock, pinned left */}
         <div style={{ position: "absolute", left: 0, top: 8, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
           {gs.deck.length > 0 ? (
@@ -4198,7 +4198,7 @@ function Perudo({ room, gs, seat, mine, commit }) {
   const total = gs.counts.A + gs.counts.B;
 
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
       {/* opponent packet */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
@@ -4209,8 +4209,8 @@ function Perudo({ room, gs, seat, mine, commit }) {
         </div>
       </div>
 
-      {/* the standing bid / reveal / prompt */}
-      <div style={{ minHeight: 150, margin: "16px 0", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
+      {/* the standing bid / reveal / prompt — grows to fill the middle */}
+      <div style={{ flex: 1, minHeight: 150, margin: "16px 0", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
         {gs.phase === "reveal" ? (
           <div style={{ textAlign: "center", width: "100%" }}>
             <div className="pop" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: gs.reveal.loser === seat ? T.ink30 : "#B8862B" }}>
