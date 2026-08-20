@@ -2032,6 +2032,8 @@ input{font-family:inherit}
 .recdot{width:9px;height:9px;border-radius:50%;background:${T.ink};display:inline-block;animation:recbob 1s ease-in-out infinite}
 @keyframes deckbob{0%,100%{transform:rotateX(26deg) translateZ(0)}50%{transform:rotateX(23deg) translateZ(4px)}}
 .deckbob{animation:deckbob 3.6s ease-in-out infinite}
+@keyframes freshpulse{0%{box-shadow:0 0 0 2px #2C557E,0 0 0 0 rgba(44,85,126,.5)}40%{box-shadow:0 0 0 2px #2C557E,0 0 16px 3px rgba(44,85,126,.55)}100%{box-shadow:0 0 0 2px #2C557E,0 4px 11px rgba(44,85,126,.42)}}
+.freshcard{animation:freshpulse 900ms ease-out}
 @media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob{animation:none!important}}
 `;
 
@@ -4063,14 +4065,14 @@ const s40Sorted = (cards, by = "seme") => {
     })
     .map((c) => c.id);
 };
-function S40Card({ card, w = 32, h = 46, sel, dim, onClick }) {
+function S40Card({ card, w = 32, h = 46, sel, dim, fresh, onClick }) {
   const style = {
     width: w,
     height: h,
     borderRadius: 5,
     background: "#fff",
-    border: `1px solid ${sel ? "#B8862B" : T.line}`,
-    boxShadow: sel ? "0 6px 13px rgba(18,18,18,0.22)" : "0 1px 3px rgba(18,18,18,0.14)",
+    border: `1px solid ${sel ? "#B8862B" : fresh ? "#2C557E" : T.line}`,
+    boxShadow: sel ? "0 6px 13px rgba(18,18,18,0.22)" : fresh ? "0 0 0 2px #2C557E, 0 4px 11px rgba(44,85,126,0.42)" : "0 1px 3px rgba(18,18,18,0.14)",
     position: "relative",
     flexShrink: 0,
     padding: 0,
@@ -4084,9 +4086,10 @@ function S40Card({ card, w = 32, h = 46, sel, dim, onClick }) {
     // <button> would otherwise swallow the click.
     pointerEvents: onClick ? "auto" : "none",
   };
+  const cls = fresh && !sel ? "freshcard" : "";
   if (card.joker && !card.rep)
     return (
-      <button onClick={onClick} disabled={!onClick} style={style}>
+      <button className={cls} onClick={onClick} disabled={!onClick} style={style}>
         <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "#B8862B", fontWeight: 800, fontSize: h * 0.4, fontFamily: BRAND }}>
           ★
         </span>
@@ -4097,14 +4100,14 @@ function S40Card({ card, w = 32, h = 46, sel, dim, onClick }) {
   const su = S40_SUIT[rep.s];
   if (card.joker)
     return (
-      <button onClick={onClick} disabled={!onClick} style={{ ...style, border: "1px solid #B8862B" }}>
+      <button className={cls} onClick={onClick} disabled={!onClick} style={{ ...style, border: `1px solid ${fresh && !sel ? "#2C557E" : "#B8862B"}` }}>
         <span style={{ position: "absolute", top: 2, left: 4, fontSize: h * 0.27, fontWeight: 800, color: su.c, lineHeight: 1, fontFamily: BRAND }}>{s40lbl(rep.v)}</span>
         <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", fontSize: h * 0.4, color: su.c }}>{su.g}</span>
         <span style={{ position: "absolute", bottom: 1, right: 3, fontSize: h * 0.22, color: "#B8862B", fontWeight: 800 }}>★</span>
       </button>
     );
   return (
-    <button onClick={onClick} disabled={!onClick} style={style}>
+    <button className={cls} onClick={onClick} disabled={!onClick} style={style}>
       <span style={{ position: "absolute", top: 2, left: 4, fontSize: h * 0.27, fontWeight: 800, color: su.c, lineHeight: 1, fontFamily: BRAND }}>
         {s40lbl(card.v)}
       </span>
@@ -4119,11 +4122,13 @@ function Scala({ room, gs, seat, mine, commit }) {
   const [staged, setStaged] = useState([]);
   const [hint, setHint] = useState("");
   const [jokerAsk, setJokerAsk] = useState(null); // { options:[{rank,suit}], done:(rep)=>void }
+  const [drewId, setDrewId] = useState(null); // the card just pescata — highlighted until the turn ends
   useEffect(() => {
     setSel([]);
     setStaged([]);
     setHint("");
     setJokerAsk(null);
+    setDrewId(null);
   }, [gs.turn, gs.phase, gs.done]);
   const selKey = sel.join(",");
   useEffect(() => {
@@ -4190,6 +4195,17 @@ function Scala({ room, gs, seat, mine, commit }) {
   }, [handKey]);
   const laid = order.map((id) => hand.find((c) => c.id === id)).filter(Boolean);
   const ordered = laid.length === hand.length ? laid : hand;
+
+  // The pescata: when exactly one card appears in hand, flag it as just-drawn.
+  const prevIds = useRef(null);
+  useEffect(() => {
+    const ids = hand.map((c) => c.id);
+    if (prevIds.current) {
+      const added = ids.filter((id) => !prevIds.current.includes(id));
+      if (added.length === 1) setDrewId(added[0]);
+    }
+    prevIds.current = ids;
+  }, [handKey]);
 
   const cardDown = (e, id) => {
     drag.current = { id, sx: e.clientX, sy: e.clientY, moved: false, pid: e.pointerId };
@@ -4372,7 +4388,7 @@ function Scala({ room, gs, seat, mine, commit }) {
               filter: dragId === c.id ? "drop-shadow(0 9px 15px rgba(18,18,18,0.3))" : "none",
             }}
           >
-            <S40Card card={c} w={42} h={60} sel={sel.includes(c.id)} dim={stagedIds.has(c.id) && dragId !== c.id} onClick={() => {}} />
+            <S40Card card={c} w={42} h={60} sel={sel.includes(c.id)} fresh={c.id === drewId} dim={stagedIds.has(c.id) && dragId !== c.id} onClick={() => {}} />
           </div>
         ))}
       </div>
