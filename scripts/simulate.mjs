@@ -38,7 +38,7 @@ const EXPORTS = [
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
-  "makeS40Deck", "analyzeMeld", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
+  "makeS40Deck", "analyzeMeld", "s40JokerRuns", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
 const modPath = join(dir, "rules.mjs");
@@ -387,6 +387,27 @@ function s40MeldTests() {
     const ok = kind === false ? !r.ok : r.ok && r.kind === kind && r.value === val;
     if (!ok) fail("scala meld", `${JSON.stringify(cards)} → ${JSON.stringify(r)}`);
   }
+  // pinned jokers (rep): analyzeMeld must honour the chosen value
+  const JR = (s, v) => ({ joker: true, rep: { s, v } });
+  const repCases = [
+    [[C("H", 5), JR("H", 6), C("H", 7)], "run", 18], // joker = 6H
+    [[C("H", 5), C("H", 6), JR("H", 4)], "run", 15], // joker = 4H (low end)
+    [[C("H", 5), C("H", 6), JR("H", 7)], "run", 18], // joker = 7H (high end)
+    [[C("H", 5), JR("S", 6), C("H", 7)], false, 0], // wrong-suit pin breaks the run
+    [[C("H", 13), C("D", 13), JR("S", 13)], "set", 30], // joker completes the set
+  ];
+  for (const [cards, kind, val] of repCases) {
+    const r = R.analyzeMeld(cards);
+    const ok = kind === false ? !r.ok : r.ok && r.kind === kind && r.value === val;
+    if (!ok) fail("scala rep meld", `${JSON.stringify(cards)} → ${JSON.stringify(r)}`);
+  }
+  // joker placement enumeration: ambiguous → 2 options, gap-fill → 1, set → 0
+  const ranks = (cards) => R.s40JokerRuns(cards).map((o) => o.rank).sort((a, b) => a - b);
+  const eq = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  if (!eq(ranks([C("H", 5), C("H", 6), JK]), [4, 7])) fail("scala joker opts", "5-6-J should offer 4 or 7");
+  if (!eq(ranks([C("H", 5), JK, C("H", 7)]), [6])) fail("scala joker opts", "5-_-7 should offer only 6");
+  if (!eq(ranks([C("H", 13), C("D", 13), JK]), [])) fail("scala joker opts", "a set has no run placement");
+  if (!eq(ranks([C("H", 1), C("H", 2), JK]), [3])) fail("scala joker opts", `A-2-J should offer only 3, got ${ranks([C("H", 1), C("H", 2), JK])}`);
 }
 
 /* ── prepared deck (shuffle + cut ritual) ───────────────────── */

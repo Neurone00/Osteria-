@@ -736,10 +736,13 @@ function yahtScore(gs, seat, cat) {
 const s40SlotVal = (r) => (r === 14 ? 11 : r === 1 ? 1 : r >= 11 ? 10 : r); // r 1..14, 1=ace low 14=ace high
 const s40SetVal = (v) => (v === 1 ? 11 : v >= 11 ? 10 : v);
 const s40Score = (c) => (c.joker ? 25 : c.v === 1 ? 11 : c.v >= 11 ? 10 : c.v);
+// A joker with `rep:{s,v}` is pinned: it counts as that exact card. Only a
+// joker with no rep is "free" and auto-placed (the simulator never pins).
 function analyzeMeld(cards) {
-  const jokers = cards.filter((c) => c.joker).length;
-  const nats = cards.filter((c) => !c.joker);
-  if (cards.length < 3 || jokers > 1 || nats.length === 0) return { ok: false };
+  const free = cards.filter((c) => c.joker && !c.rep).length;
+  const totalJokers = cards.filter((c) => c.joker).length;
+  const nats = cards.map((c) => (c.joker && c.rep ? { s: c.rep.s, v: c.rep.v } : c)).filter((c) => !c.joker);
+  if (cards.length < 3 || totalJokers > 1 || nats.length === 0) return { ok: false };
   if (nats.every((c) => c.v === nats[0].v)) {
     const suits = new Set(nats.map((c) => c.s));
     if (suits.size === nats.length && cards.length <= 4) return { ok: true, kind: "set", value: cards.length * s40SetVal(nats[0].v) };
@@ -755,7 +758,7 @@ function analyzeMeld(cards) {
         const natSet = new Set(pos);
         let gaps = 0;
         for (let r = lo; r <= hi; r++) if (!natSet.has(r)) gaps++;
-        if (gaps !== jokers) continue;
+        if (gaps !== free) continue;
         let value = 0;
         for (let r = lo; r <= hi; r++) value += s40SlotVal(r);
         return { ok: true, kind: "run", value };
@@ -763,6 +766,32 @@ function analyzeMeld(cards) {
     }
   }
   return { ok: false };
+}
+// Distinct slots a single free joker could occupy in a valid run of `cards`,
+// each { rank, suit }. Length ≥ 2 means the placement is ambiguous → ask.
+function s40JokerRuns(cards) {
+  if (cards.filter((c) => c.joker && !c.rep).length !== 1) return [];
+  const nats = cards.map((c) => (c.joker && c.rep ? { s: c.rep.s, v: c.rep.v } : c)).filter((c) => !c.joker);
+  if (nats.length === 0 || !nats.every((c) => c.s === nats[0].s)) return [];
+  const suit = nats[0].s;
+  const out = [];
+  const seen = new Set();
+  for (const aceHigh of [false, true]) {
+    const pos = nats.map((c) => (c.v === 1 ? (aceHigh ? 14 : 1) : c.v)).sort((a, b) => a - b);
+    if (new Set(pos).size !== pos.length) continue;
+    const len = cards.length;
+    for (let lo = pos[pos.length - 1] - len + 1; lo <= pos[0]; lo++) {
+      const hi = lo + len - 1;
+      if (lo < 1 || hi > 14 || pos[0] < lo || pos[pos.length - 1] > hi) continue;
+      const natSet = new Set(pos);
+      const gaps = [];
+      for (let r = lo; r <= hi; r++) if (!natSet.has(r)) gaps.push(r);
+      if (gaps.length !== 1 || seen.has(gaps[0])) continue;
+      seen.add(gaps[0]);
+      out.push({ rank: gaps[0], suit });
+    }
+  }
+  return out;
 }
 function makeS40Deck() {
   const d = [];
@@ -832,6 +861,7 @@ function s40Open(gs, seat, melds) {
     if (m.ids.some((id) => used.has(id))) return null;
     const cards = s40ById(g.hands[seat], m.ids);
     if (cards.some((c) => !c)) return null;
+    s40ApplyReps(cards, m.reps);
     const a = analyzeMeld(cards);
     if (!a.ok) return null;
     value += a.value;
@@ -845,11 +875,18 @@ function s40Open(gs, seat, melds) {
   s40CheckOut(g, seat);
   return { g, kind: "scopa", ev: { t: "open", value } };
 }
-function s40Meld(gs, seat, ids) {
+// Pin the chosen value onto a joker before analysis, so the melded card
+// carries what it stands for. reps: { [jokerId]: {s,v} }.
+function s40ApplyReps(cards, reps) {
+  if (!reps) return;
+  for (const c of cards) if (c.joker && reps[c.id]) c.rep = reps[c.id];
+}
+function s40Meld(gs, seat, ids, reps) {
   const g = clone(gs);
   if (g.phase !== "meld" || g.turn !== seat || !g.opened[seat] || g.done) return null;
   const cards = s40ById(g.hands[seat], ids);
   if (cards.some((c) => !c)) return null;
+  s40ApplyReps(cards, reps);
   const a = analyzeMeld(cards);
   if (!a.ok) return null;
   const set = new Set(ids);
@@ -858,12 +895,13 @@ function s40Meld(gs, seat, ids) {
   s40CheckOut(g, seat);
   return { g, kind: "lay", ev: { t: "meld" } };
 }
-function s40LayOff(gs, seat, cardId, meldId) {
+function s40LayOff(gs, seat, cardId, meldId, rep) {
   const g = clone(gs);
   if (g.phase !== "meld" || g.turn !== seat || !g.opened[seat] || g.done) return null;
   const card = g.hands[seat].find((c) => c.id === cardId);
   const meld = g.melds.find((m) => m.id === meldId);
   if (!card || !meld) return null;
+  if (rep && card.joker) card.rep = rep;
   const a = analyzeMeld([...meld.cards, card]);
   if (!a.ok) return null;
   meld.cards = [...meld.cards, card];
@@ -3844,7 +3882,7 @@ function S40Card({ card, w = 32, h = 46, sel, dim, onClick }) {
     // <button> would otherwise swallow the click.
     pointerEvents: onClick ? "auto" : "none",
   };
-  if (card.joker)
+  if (card.joker && !card.rep)
     return (
       <button onClick={onClick} disabled={!onClick} style={style}>
         <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "#B8862B", fontWeight: 800, fontSize: h * 0.4, fontFamily: BRAND }}>
@@ -3852,7 +3890,17 @@ function S40Card({ card, w = 32, h = 46, sel, dim, onClick }) {
         </span>
       </button>
     );
-  const su = S40_SUIT[card.s];
+  // A pinned joker wears the face of the card it stands for, with a ★ corner.
+  const rep = card.joker ? card.rep : card;
+  const su = S40_SUIT[rep.s];
+  if (card.joker)
+    return (
+      <button onClick={onClick} disabled={!onClick} style={{ ...style, border: "1px solid #B8862B" }}>
+        <span style={{ position: "absolute", top: 2, left: 4, fontSize: h * 0.27, fontWeight: 800, color: su.c, lineHeight: 1, fontFamily: BRAND }}>{s40lbl(rep.v)}</span>
+        <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", fontSize: h * 0.4, color: su.c }}>{su.g}</span>
+        <span style={{ position: "absolute", bottom: 1, right: 3, fontSize: h * 0.22, color: "#B8862B", fontWeight: 800 }}>★</span>
+      </button>
+    );
   return (
     <button onClick={onClick} disabled={!onClick} style={style}>
       <span style={{ position: "absolute", top: 2, left: 4, fontSize: h * 0.27, fontWeight: 800, color: su.c, lineHeight: 1, fontFamily: BRAND }}>
@@ -3868,13 +3916,18 @@ function Scala({ room, gs, seat, mine, commit }) {
   const [sel, setSel] = useState([]);
   const [staged, setStaged] = useState([]);
   const [hint, setHint] = useState("");
+  const [jokerAsk, setJokerAsk] = useState(null); // { options:[{rank,suit}], done:(rep)=>void }
   useEffect(() => {
     setSel([]);
     setStaged([]);
     setHint("");
+    setJokerAsk(null);
   }, [gs.turn, gs.phase, gs.done]);
   const selKey = sel.join(",");
-  useEffect(() => setHint(""), [selKey, staged.length]);
+  useEffect(() => {
+    setHint("");
+    setJokerAsk(null);
+  }, [selKey, staged.length]);
   const hand = gs.hands[seat];
   const stagedIds = new Set(staged.flatMap((m) => m.ids));
   const selCards = sel.map((id) => hand.find((c) => c.id === id)).filter(Boolean);
@@ -3890,7 +3943,15 @@ function Scala({ room, gs, seat, mine, commit }) {
     if (mine && gs.phase === "draw") commit(s40Draw(gs, seat, source));
   };
   const layOff = (meldId) => {
-    if (opened && sel.length === 1 && gs.phase === "meld") commit(s40LayOff(gs, seat, sel[0], meldId));
+    if (!(opened && sel.length === 1 && gs.phase === "meld")) return;
+    const meld = gs.melds.find((m) => m.id === meldId);
+    const card = hand.find((c) => c.id === sel[0]);
+    if (card && card.joker && meld) {
+      const opts = s40JokerRuns([...meld.cards, card]);
+      if (opts.length >= 2) return setJokerAsk({ options: opts, done: (rep) => commit(s40LayOff(gs, seat, sel[0], meldId, rep)) });
+      return commit(s40LayOff(gs, seat, sel[0], meldId, opts.length === 1 ? { s: opts[0].suit, v: opts[0].rank } : undefined));
+    }
+    commit(s40LayOff(gs, seat, sel[0], meldId));
   };
 
   // ── local hand order ──────────────────────────────────────────────
@@ -3982,11 +4043,25 @@ function Scala({ room, gs, seat, mine, commit }) {
   // Actions never dead-end: the buttons stay live during your meld turn and,
   // when a move isn't legal yet, say what's missing instead of greying out.
   const notAMeld = () => setHint(sel.length < 3 ? "Seleziona almeno 3 carte per un tris o una scala." : "Quelle carte non formano un tris né una scala.");
-  const doCala = () => (selMeld.ok ? commit(s40Meld(gs, seat, sel)) : notAMeld());
+  const jokerId = () => (selCards.find((c) => c.joker && !c.rep) || {}).id;
+  const doCala = () => {
+    if (!selMeld.ok) return notAMeld();
+    const opts = s40JokerRuns(selCards);
+    const jid = jokerId();
+    if (opts.length >= 2) return setJokerAsk({ options: opts, done: (rep) => commit(s40Meld(gs, seat, sel, { [jid]: rep })) });
+    commit(s40Meld(gs, seat, sel, opts.length === 1 ? { [jid]: { s: opts[0].suit, v: opts[0].rank } } : undefined));
+  };
+  const stageMeld = (reps) => {
+    const cards = selCards.map((c) => (reps && reps[c.id] ? { ...c, rep: reps[c.id] } : c));
+    setStaged((s) => [...s, { ids: sel, value: analyzeMeld(cards).value, reps }]);
+    setSel([]);
+  };
   const doAggiungi = () => {
     if (!selMeld.ok) return notAMeld();
-    setStaged((s) => [...s, { ids: sel, value: selMeld.value }]);
-    setSel([]);
+    const opts = s40JokerRuns(selCards);
+    const jid = jokerId();
+    if (opts.length >= 2) return setJokerAsk({ options: opts, done: (rep) => stageMeld({ [jid]: rep }) });
+    stageMeld(opts.length === 1 ? { [jid]: { s: opts[0].suit, v: opts[0].rank } } : undefined);
   };
   const doApri = () => (stagedTotal >= 40 ? commit(s40Open(gs, seat, staged)) : setHint(`Ti servono 40 punti per aprire — sei a ${stagedTotal}.`));
   const doScarta = () =>
@@ -4095,7 +4170,32 @@ function Scala({ room, gs, seat, mine, commit }) {
         <FloatBar>
           {!mine && <Micro style={{ textAlign: "center" }}>tocca a {who(room, opp)}</Micro>}
           {mine && gs.phase === "draw" && <Micro style={{ textAlign: "center" }}>pesca dal mazzo o dagli scarti</Micro>}
-          {mine && gs.phase === "meld" && (
+          {mine && gs.phase === "meld" && jokerAsk && (
+            <div>
+              <Micro style={{ textAlign: "center" }}>Il jolly rappresenta:</Micro>
+              <div style={{ display: "flex", gap: 8, marginTop: 10, justifyContent: "center", flexWrap: "wrap" }}>
+                {jokerAsk.options.map((o) => (
+                  <button
+                    key={`${o.suit}${o.rank}`}
+                    onClick={() => {
+                      const done = jokerAsk.done;
+                      setJokerAsk(null);
+                      done({ s: o.suit, v: o.rank });
+                    }}
+                    style={{ background: "transparent", border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "8px 12px", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}
+                  >
+                    <S40Card card={{ id: "opt", s: o.suit, v: o.rank }} w={34} h={48} />
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
+                <button onClick={() => setJokerAsk(null)} style={{ ...plain }}>
+                  annulla
+                </button>
+              </div>
+            </div>
+          )}
+          {mine && gs.phase === "meld" && !jokerAsk && (
             <div>
               <div style={{ minHeight: 16 }}>
                 <Micro style={{ textAlign: "center", color: hint || selMeld.ok ? T.ink : undefined }}>
