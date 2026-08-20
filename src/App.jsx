@@ -1762,12 +1762,15 @@ function Rule() {
 }
 
 // Home-screen "install this app" affordance. On Android/Chrome it fires the
-// captured beforeinstallprompt; on iOS (which has no prompt) it shows the
-// Add-to-Home steps. Hidden once installed, on desktop, and inside the artifact.
+// captured beforeinstallprompt; if that's dismissed or unavailable (Samsung
+// Internet, a throttled prompt) it falls back to the browser-menu steps. iOS
+// has no prompt at all, so it always shows the Add-to-Home steps. Hidden once
+// installed, on desktop, and inside the artifact.
 function InstallPrompt() {
   const [bip, setBip] = useState(typeof window !== "undefined" ? window.__osteriaBIP : null);
   const [installed, setInstalled] = useState(false);
-  const [showIos, setShowIos] = useState(false);
+  const [help, setHelp] = useState(false);
+  const [note, setNote] = useState("");
   useEffect(() => {
     const onAvail = () => setBip(window.__osteriaBIP);
     const onDone = () => {
@@ -1788,45 +1791,61 @@ function InstallPrompt() {
   if (standalone || installed) return null;
   const isIOS = /iP(hone|ad|od)/.test(ua) || (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
   const iosSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
+  const isAndroid = /Android/.test(ua);
+  const samsung = /SamsungBrowser/.test(ua);
+  if (!bip && !isIOS && !isAndroid) return null; // desktop: nothing to offer
+
+  const tap = async () => {
+    setNote("");
+    if (bip) {
+      // Fire the native prompt synchronously inside this gesture, then react.
+      try {
+        bip.prompt();
+        const res = await bip.userChoice;
+        setBip(null);
+        window.__osteriaBIP = null;
+        if (res && res.outcome === "accepted") setNote("Fatto! La trovi nella schermata Home.");
+        else setHelp(true);
+      } catch {
+        setBip(null);
+        window.__osteriaBIP = null;
+        setHelp(true);
+      }
+      return;
+    }
+    setHelp((v) => !v); // no prompt available → show manual steps
+  };
+
+  const steps = isIOS ? (
+    iosSafari ? (
+      <>
+        Tocca <b>Condividi</b> <span style={{ fontSize: 14 }}>􀈂</span> in basso, poi <b>“Aggiungi a Home”</b>.
+      </>
+    ) : (
+      <>
+        Apri questa pagina in <b>Safari</b>, poi <b>Condividi → “Aggiungi a Home”</b>.
+      </>
+    )
+  ) : samsung ? (
+    <>
+      Apri il menu <b>≡</b> del browser, poi <b>“Aggiungi pagina a” → “Schermata Home”</b>.
+    </>
+  ) : (
+    <>
+      Apri il menu <b>⋮</b> del browser, poi <b>“Installa app”</b> (o <b>“Aggiungi a schermata Home”</b>).
+    </>
+  );
 
   const link = { ...plain, display: "block", margin: "14px auto 0", textAlign: "center", color: T.ink, fontWeight: 600 };
-  if (bip)
-    return (
-      <button
-        style={link}
-        onClick={async () => {
-          const e = bip;
-          setBip(null);
-          window.__osteriaBIP = null;
-          try {
-            e.prompt();
-            await e.userChoice;
-          } catch {}
-        }}
-      >
+  return (
+    <div style={{ textAlign: "center" }}>
+      <button style={link} onClick={tap}>
         ⤓ Installa l’app
       </button>
-    );
-  if (isIOS)
-    return (
-      <div style={{ textAlign: "center" }}>
-        <button style={link} onClick={() => setShowIos((v) => !v)}>
-          ⤓ Installa l’app
-        </button>
-        {showIos && (
-          <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 250 }}>
-            {iosSafari ? (
-              <>
-                Tocca <b>Condividi</b> <span style={{ fontSize: 14 }}>􀈂</span> in basso, poi <b>“Aggiungi a Home”</b>.
-              </>
-            ) : (
-              <>Apri questa pagina in <b>Safari</b>, poi Condividi → “Aggiungi a Home”.</>
-            )}
-          </p>
-        )}
-      </div>
-    );
-  return null; // desktop / already-installable-elsewhere: nothing to show
+      {note && <p style={{ color: T.ink, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 260 }}>{note}</p>}
+      {help && !note && <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 260 }}>{steps}</p>}
+    </div>
+  );
 }
 
 // A gentle "are you sure" before leaving a table — losing a hand to a stray
