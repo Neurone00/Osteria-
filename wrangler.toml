@@ -8,15 +8,22 @@ compatibility_date = "2026-06-01"
 directory = "./standalone"
 binding = "ASSETS"
 
-# One Durable Object per table code.
+# One Durable Object per table code, plus a single shared lobby for "bump".
 [durable_objects]
-bindings = [{ name = "TABLE", class_name = "Table" }]
+bindings = [
+  { name = "TABLE", class_name = "Table" },
+  { name = "BUMP", class_name = "BumpLobby" },
+]
 
 # new_sqlite_classes (not new_classes) — SQLite-backed Durable Objects are the
 # ones available on the Workers free plan.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Table"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["BumpLobby"]
 
 [observability]
 enabled = true

@@ -1108,6 +1108,26 @@ function relayUrl(code) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${location.host}/room/${code.toUpperCase()}`;
 }
+function bumpUrl() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${location.host}/bump`;
+}
+// In-app QR scanning needs both a camera and the BarcodeDetector API (Chrome /
+// Android — including the S23; Safari lacks it and uses the native camera).
+const hasScanner = () =>
+  typeof window !== "undefined" && "BarcodeDetector" in window && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+// Pull a four-letter table code out of a scanned QR — a join URL (?t=CODE) or a
+// bare code.
+function codeFromScan(raw) {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw, typeof location !== "undefined" ? location.origin : "https://osteria");
+    const t = (u.searchParams.get("t") || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
+    if (t.length === 4) return t;
+  } catch {}
+  const m = String(raw).toUpperCase().replace(/[^A-Z]/g, "");
+  return m.length === 4 ? m : null;
+}
 
 function loadPeerJs() {
   if (window.Peer) return Promise.resolve(window.Peer);
@@ -1909,6 +1929,88 @@ function InstallPrompt() {
   );
 }
 
+// Full-screen camera QR scanner (BarcodeDetector). Reads the host's join QR and
+// hands back the four-letter code. Falls back to a hint if the camera is denied.
+function ScanQR({ onCode, onClose }) {
+  const videoRef = useRef(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let stream,
+      raf,
+      stop = false;
+    (async () => {
+      try {
+        const det = new window.BarcodeDetector({ formats: ["qr_code"] });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+        const v = videoRef.current;
+        if (!v || stop) return;
+        v.srcObject = stream;
+        await v.play().catch(() => {});
+        const tick = async () => {
+          if (stop) return;
+          try {
+            const found = await det.detect(v);
+            for (const b of found) {
+              const t = codeFromScan(b.rawValue);
+              if (t) {
+                onCode(t);
+                return;
+              }
+            }
+          } catch {}
+          raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+      } catch {
+        setErr("Consenti l’accesso alla fotocamera, poi riprova.");
+      }
+    })();
+    return () => {
+      stop = true;
+      if (raf) cancelAnimationFrame(raf);
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "#000", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+      <video ref={videoRef} muted playsInline style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+      <div style={{ position: "absolute", inset: 0, background: "radial-gradient(circle at center, transparent 120px, rgba(0,0,0,0.55) 190px)" }} />
+      <div style={{ position: "relative", width: 220, height: 220, borderRadius: 22, boxShadow: "0 0 0 3px rgba(255,255,255,0.9)", maxWidth: "70vw" }} />
+      <div style={{ position: "absolute", top: "calc(50% + 140px)", left: 0, right: 0, textAlign: "center", color: "#fff", fontFamily: BRAND, fontWeight: 600, fontSize: 16, padding: "0 24px" }}>
+        {err || "Inquadra il QR dell’altro telefono"}
+      </div>
+      <button
+        onClick={onClose}
+        style={{ position: "absolute", bottom: "calc(28px + env(safe-area-inset-bottom))", background: "#fff", color: "#111", border: "none", borderRadius: 12, padding: "13px 26px", fontFamily: BRAND, fontWeight: 700, fontSize: 16, cursor: "pointer" }}
+      >
+        Chiudi
+      </button>
+    </div>
+  );
+}
+
+// Bump waiting overlay — shown on both phones until the lobby pairs them.
+function BumpVeil({ show, onCancel }) {
+  if (!show) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(231,229,224,0.94)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", display: "grid", placeItems: "center", padding: 24 }}>
+      <div style={{ textAlign: "center", maxWidth: 320 }}>
+        <div style={{ fontSize: 44 }}>🤜🤛</div>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 12 }}>Bump!</div>
+        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 18px" }}>Premi Bump anche sull’altro telefono. Vi metto allo stesso tavolo.</p>
+        <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 20 }}>
+          <span className="recdot" style={{ animationDelay: "0ms" }} />
+          <span className="recdot" style={{ animationDelay: "140ms" }} />
+          <span className="recdot" style={{ animationDelay: "280ms" }} />
+        </div>
+        <Button kind="line" onClick={onCancel}>
+          Annulla
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // A gentle "are you sure" before leaving a table — losing a hand to a stray
 // thumb is exactly what this game set out to prevent. Warm, osteria-flavoured.
 function LeaveDialog({ show, onStay, onGo }) {
@@ -2096,6 +2198,9 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [booting, setBooting] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
   const [askLeave, setAskLeave] = useState(false);
+  const [bumping, setBumping] = useState(false); // waiting in the bump lobby
+  const [scanning, setScanning] = useState(false); // camera QR scanner open
+  const bumpRef = useRef(null);
 
   const roomRef = useRef(null);
   const netRef = useRef(null);
@@ -2357,8 +2462,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   );
 
   /* ── lifecycle ── */
-  const openTable = async () => {
-    const code = Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
+  const openTable = async (preCode) => {
+    const code = preCode || Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
     const fresh = {
       code,
       v: 0,
@@ -2461,6 +2566,77 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     } catch {
       setMsg("NFC non disponibile");
     }
+  };
+
+  // Bump: both phones tap Bump; the lobby pairs them into a fresh table.
+  const bump = () => {
+    if (hasStore()) return setMsg("Il bump funziona solo online.");
+    if (bumpRef.current) return;
+    let ws;
+    try {
+      ws = new WebSocket(bumpUrl());
+    } catch {
+      return setMsg("Bump non disponibile.");
+    }
+    bumpRef.current = ws;
+    setMsg("");
+    setBumping(true);
+    const stop = () => {
+      try {
+        ws.close();
+      } catch {}
+      bumpRef.current = null;
+    };
+    const timer = setTimeout(() => {
+      if (bumpRef.current === ws) {
+        stop();
+        setBumping(false);
+        setMsg("Nessuno ha bumpato. Riprova.");
+      }
+    }, 22000);
+    ws.onmessage = (e) => {
+      let d;
+      try {
+        d = JSON.parse(e.data);
+      } catch {
+        return;
+      }
+      if (d.type === "paired" && d.code) {
+        clearTimeout(timer);
+        bumpRef.current = null;
+        try {
+          ws.close();
+        } catch {}
+        setBumping(false);
+        if (d.host) openTable(d.code);
+        else {
+          setCodeIn(d.code);
+          joinTable(d.code);
+        }
+      }
+    };
+    ws.onclose = () => {
+      clearTimeout(timer);
+      if (bumpRef.current === ws) {
+        bumpRef.current = null;
+        setBumping(false);
+      }
+    };
+    ws.onerror = () => {
+      clearTimeout(timer);
+      stop();
+      setBumping(false);
+      setMsg("Bump non disponibile.");
+    };
+  };
+  const cancelBump = () => {
+    if (bumpRef.current) {
+      try {
+        bumpRef.current.close();
+      } catch {}
+      bumpRef.current = null;
+    }
+    setBumping(false);
   };
 
   const leave = () => {
@@ -2779,15 +2955,41 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 Entra
               </Button>
             </div>
-            {hasNfc() && (
-              <button onClick={readNfc} style={{ ...plain, display: "block", margin: "12px auto 0", textAlign: "center" }}>
-                ᯤ Leggi un tag NFC
-              </button>
-            )}
+
+            {/* quick-pair shortcuts */}
+            <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "6px 20px", marginTop: 14 }}>
+              {!hasStore() && (
+                <button onClick={bump} style={{ ...plain, color: T.ink, fontWeight: 600 }}>
+                  🤜 Bump
+                </button>
+              )}
+              {hasScanner() && (
+                <button onClick={() => setScanning(true)} style={{ ...plain, color: T.ink, fontWeight: 600 }}>
+                  ▣ Inquadra un QR
+                </button>
+              )}
+              {hasNfc() && (
+                <button onClick={readNfc} style={{ ...plain }}>
+                  ᯤ Tag NFC
+                </button>
+              )}
+            </div>
+
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
             {!hasStore() && <InstallPrompt />}
           </div>
         </div>
+        <BumpVeil show={bumping} onCancel={cancelBump} />
+        {scanning && (
+          <ScanQR
+            onClose={() => setScanning(false)}
+            onCode={(t) => {
+              setScanning(false);
+              setCodeIn(t);
+              joinTable(t);
+            }}
+          />
+        )}
       </Frame>
     );
 
