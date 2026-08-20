@@ -2165,7 +2165,7 @@ function LeaveDialog({ show, onStay, onGo }) {
 }
 
 // The end-of-game screen as a modal over everything: Vittoria / Sconfitta /
-// Pareggio (or the mid-match "Mano contata"), the score summary, and the two
+// Pareggio (or the mid-match "Punteggio"), the score summary, and the two
 // ways on — play again or back to the games.
 function FinaleModal({ show, decided, outcome, room, gs, seat, onAgain, onExit }) {
   if (!show) return null;
@@ -2173,7 +2173,7 @@ function FinaleModal({ show, decided, outcome, room, gs, seat, onAgain, onExit }
   const nextLabel = scopaLike(room.game) && !gs.matchDone ? "Prossima mano" : "Gioca ancora";
   const win = outcome === "win";
   const draw = outcome === "draw";
-  const head = !decided ? "Mano contata" : win ? "Vittoria!" : draw ? "Pareggio" : "Sconfitta";
+  const head = !decided ? "Punteggio" : win ? "Vittoria!" : draw ? "Pareggio" : "Sconfitta";
   const color = !decided ? T.ink : win ? "#B8862B" : draw ? T.ink60 : "#A5342F";
   const sub = !decided ? null : win ? "Offre l’oste 🍷" : draw ? "Pari e patta — nessuno paga" : "Ci sta una rivincita.";
   return (
@@ -5162,7 +5162,7 @@ function Summary({ room, gs }) {
       <div>
         {!gs.matchDone && (
           <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.01em", marginBottom: 10, fontFamily: BRAND }}>
-            Mano contata
+            Punteggio
           </div>
         )}
         {gs.summary.lines.map((l, i) => (
