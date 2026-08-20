@@ -1544,7 +1544,7 @@ function Pip({ suit, size = 20 }) {
   );
 }
 
-const SZ = { xs: [36, 52], sm: [46, 66], md: [58, 82], lg: [74, 104] };
+const SZ = { xs: [36, 52], sm: [46, 66], md: [58, 82], lg: [74, 104], xl: [96, 136] };
 
 function Card({ card, size = "md", onClick, active, dim, slam, rot, enter }) {
   const french = useContext(SuitCtx);
@@ -1706,6 +1706,67 @@ function Deck3D({ n, top, faceUp, size = "sm", slamId, live }) {
         ))}
       <div className={live ? "floaty" : ""} style={{ position: "absolute", left: 0, top: 0 }}>
         {faceUp && top ? <Card card={top} size={size} rot={0} slam={slamId === top.id} /> : <Back size={size} />}
+      </div>
+    </div>
+  );
+}
+
+/* A genuinely three-dimensional deck: the cards are stacked along the Z axis
+   inside a `perspective` scene and the whole block is tilted toward the viewer,
+   so the pile has real depth and foreshortening (not a flat screen-offset fake).
+   Count sets the height of the block. `lift` (0..1) raises it as you drag up. */
+function DeckBox({ n, size = "md", live, lift = 0, faceUp, top, slamId }) {
+  const [w, h] = SZ[size];
+  if (!n) return <Ghost size={size} />;
+  const layers = Math.min(n, 26);
+  const gap = 1.8; // Z distance between card faces
+  const depth = (layers - 1) * gap;
+  const tilt = 26; // degrees the block leans toward the viewer
+  const proj = Math.sin((tilt * Math.PI) / 180) * depth; // how tall the tilt reads
+  const rad = 7;
+  return (
+    <div style={{ width: w, height: Math.round(h + proj + 8), perspective: 620, flexShrink: 0, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div
+        className={live ? "deckbob" : ""}
+        style={{
+          position: "relative",
+          width: w,
+          height: h,
+          marginBottom: proj / 2,
+          transformStyle: "preserve-3d",
+          transform: `rotateX(${tilt}deg) translateZ(${lift * 26}px)`,
+          transformOrigin: "50% 100%",
+          transition: "transform 220ms cubic-bezier(.2,.9,.25,1)",
+        }}
+      >
+        {Array.from({ length: layers }).map((_, i) => {
+          const isTop = i === layers - 1;
+          const z = i * gap - depth / 2;
+          const shade = faceUp ? "#F2EFE8" : `hsl(28 6% ${5 + (i / layers) * 6}%)`;
+          if (isTop) {
+            return (
+              <div key="top" style={{ position: "absolute", inset: 0, transform: `translateZ(${z}px)` }}>
+                {faceUp && top ? <Card card={top} size={size} rot={0} slam={slamId === top.id} /> : <Back size={size} />}
+              </div>
+            );
+          }
+          return (
+            <div
+              key={i}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: w,
+                height: h,
+                borderRadius: rad,
+                transform: `translateZ(${z}px)`,
+                background: shade,
+                borderBottom: `1px solid ${faceUp ? "rgba(18,18,18,0.12)" : "rgba(255,255,255,0.05)"}`,
+                boxShadow: i === layers - 2 ? "0 8px 16px rgba(18,18,18,0.28)" : "none",
+              }}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -1969,7 +2030,9 @@ input{font-family:inherit}
 .dieroll{animation:dieroll 420ms ease-out}
 @keyframes recbob{0%,100%{transform:translateY(0);opacity:.4}50%{transform:translateY(-6px);opacity:1}}
 .recdot{width:9px;height:9px;border-radius:50%;background:${T.ink};display:inline-block;animation:recbob 1s ease-in-out infinite}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot{animation:none!important}}
+@keyframes deckbob{0%,100%{transform:rotateX(26deg) translateZ(0)}50%{transform:rotateX(23deg) translateZ(4px)}}
+.deckbob{animation:deckbob 3.6s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob{animation:none!important}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -3518,18 +3581,18 @@ function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
   };
 
   return (
-    <div>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
       {/* opponent packet */}
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
         <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
           <Micro>{gs.decks[opp].length}</Micro>
-          <Deck3D n={gs.decks[opp].length} faceUp={false} size="xs" live />
+          <DeckBox n={gs.decks[opp].length} size="sm" live={!mine && !gs.done} />
         </div>
       </div>
 
-      {/* the middle */}
-      <div style={{ margin: "16px 0", minHeight: 148, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+      {/* the middle — grows to fill the height between the two packets */}
+      <div style={{ flex: 1, margin: "16px 0", minHeight: 140, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 96 }}>
           {shown.length === 0 && <Micro>niente in mezzo</Micro>}
           {shown.map((c, i) => (
@@ -3580,16 +3643,15 @@ function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
         onMouseMove={onMove}
         onMouseUp={onEnd}
         style={{
-          position: "relative",
-          height: 152,
-          borderRadius: 8,
+          borderRadius: 12,
           border: `1px dashed ${mine ? T.ink30 : T.line}`,
           background: mine ? "rgba(18,18,18,0.02)" : "transparent",
           display: "flex",
-          alignItems: "flex-end",
-          justifyContent: "center",
-          padding: "0 0 12px",
-          overflow: "hidden",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "flex-start",
+          gap: 14,
+          padding: "16px 0 20px",
           touchAction: "none",
           userSelect: "none",
           WebkitUserSelect: "none",
@@ -3597,25 +3659,12 @@ function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
           WebkitTapHighlightColor: "transparent",
         }}
       >
-        <Micro style={{ position: "absolute", top: 10, left: 0, right: 0, textAlign: "center" }}>
-          {gs.done ? "mano finita" : mine ? "trascina il mazzo in su per giocare" : "tocca all’altro"}
-        </Micro>
-        <div
-          style={{
-            transform: `translateY(${dragY}px)`,
-            transition: startY.current == null ? "transform 220ms cubic-bezier(.2,.9,.25,1)" : "none",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 8,
-            opacity: gs.decks[seat].length ? 1 : 0.4,
-          }}
-        >
-          <Deck3D n={gs.decks[seat].length} faceUp={false} size="md" live />
-          <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.16em", color: mine && !gs.done ? T.ink : T.ink30 }}>
-            {label}
-          </div>
+        {/* the hint lives in normal flow — it can never sit under the deck */}
+        <Micro>{gs.done ? "mano finita" : mine ? "trascina il mazzo in su per giocare" : "tocca all’altro"}</Micro>
+        <div style={{ opacity: gs.decks[seat].length ? 1 : 0.4 }}>
+          <DeckBox n={gs.decks[seat].length} size="xl" live={mine && !gs.done} lift={mine ? -dragY / 70 : 0} />
         </div>
+        <div style={{ fontFamily: BRAND, fontSize: 20, fontWeight: 700, letterSpacing: "0.16em", color: mine && !gs.done ? T.ink : T.ink30 }}>{label}</div>
       </div>
 
       {showScores && (
