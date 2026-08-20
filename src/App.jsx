@@ -1989,6 +1989,22 @@ function ScanQR({ onCode, onClose }) {
   );
 }
 
+// A big shaking "Scopa!" across the middle of the table when someone clears it.
+function ScopaFlash({ id }) {
+  if (!id) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+      <div
+        key={id}
+        className="scopaflash"
+        style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(66px, 23vw, 150px)", color: "#A5342F", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.10)", whiteSpace: "nowrap" }}
+      >
+        Scopa<span style={{ color: T.ink }}>!</span>
+      </div>
+    </div>
+  );
+}
+
 // Bump waiting overlay — shown on both phones until the lobby pairs them.
 function BumpVeil({ show, onCancel }) {
   if (!show) return null;
@@ -2136,7 +2152,9 @@ input{font-family:inherit}
 .deckbob{animation:deckbob 3.6s ease-in-out infinite}
 @keyframes freshpulse{0%{box-shadow:0 0 0 2px #2C557E,0 0 0 0 rgba(44,85,126,.5)}40%{box-shadow:0 0 0 2px #2C557E,0 0 16px 3px rgba(44,85,126,.55)}100%{box-shadow:0 0 0 2px #2C557E,0 4px 11px rgba(44,85,126,.42)}}
 .freshcard{animation:freshpulse 900ms ease-out}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob{animation:none!important}}
+@keyframes scopaflash{0%{transform:scale(.3) rotate(-9deg);opacity:0}15%{transform:scale(1.14) rotate(3deg);opacity:1}27%{transform:scale(1) rotate(-3deg)}39%{transform:rotate(3deg)}51%{transform:rotate(-2.5deg)}63%{transform:rotate(2deg)}75%{transform:rotate(-1.5deg)}86%{transform:scale(1) rotate(0);opacity:1}100%{transform:scale(1.06);opacity:0}}
+.scopaflash{animation:scopaflash 1500ms cubic-bezier(.2,.9,.25,1) both}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash{animation:none!important}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -2195,6 +2213,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [sound, setSound] = useState(true);
   const [jolt, setJolt] = useState(false);
   const [slamId, setSlamId] = useState(null);
+  const [scopaFlash, setScopaFlash] = useState(0);
   const [booting, setBooting] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
   const [askLeave, setAskLeave] = useState(false);
@@ -2259,12 +2278,13 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     setJolt(true);
     slamSound(a.kind, soundRef.current);
     buzz(a.kind);
-    const t1 = setTimeout(() => setJolt(false), 200);
-    const t2 = setTimeout(() => setSlamId(null), 460);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
+    const timers = [setTimeout(() => setJolt(false), 200), setTimeout(() => setSlamId(null), 460)];
+    // A cleared table in scopa gets a big shaking "Scopa!" on both screens.
+    if (room.game === "scopa" && room.ev && room.ev.t === "scopa") {
+      setScopaFlash((n) => n + 1);
+      timers.push(setTimeout(() => setScopaFlash(0), 1500));
+    }
+    return () => timers.forEach(clearTimeout);
   }, [room?.anim?.id]);
 
   /* ── the finale, from this seat's point of view ── */
@@ -2854,8 +2874,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const start = () => (usesRitual(room.game) ? beginPrepare("A", null) : dealNow(dealGame(room.game, room.opts, "A", null)));
   const again = () => {
     const g = room.gs;
-    if (room.game === "scopa" && !g.matchDone) dealNow(dealGame("scopa", room.opts, other(g.dealer), { scores: g.scores }));
-    else if (room.game === "scopa") beginPrepare("A", null);
+    // Scopa runs the shuffle-and-cut ritual before every hand — mid-match the
+    // dealer alternates and the running scores carry over; a finished match
+    // starts fresh from seat A.
+    if (room.game === "scopa") beginPrepare(g.matchDone ? "A" : other(g.dealer), g.matchDone ? null : { scores: g.scores });
     else if (usesRitual(room.game)) beginPrepare(other(g.dealer), { tally: g.tally });
     else if (GAMES[room.game].big) dealNow(dealGame(room.game, room.opts, other(g.dealer), { tally: g.tally })); // scala
     else dealNow(dealGame(room.game, room.opts, g.win ? other(g.win) : "A", { tally: g.tally })); // dice
@@ -3160,6 +3182,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   return (
     <Frame jolt={jolt}>
       <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
+      <ScopaFlash id={scopaFlash} />
       <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />
       <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
 
