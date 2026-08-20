@@ -1160,6 +1160,43 @@ async function loadPrefs() {
   }
 }
 
+/* A running head-to-head record between two named players, kept locally (same
+   private storage as the prefs) so the same two people see their tally build up
+   across sessions. Keyed by the pair of names, normalised so case/spacing match. */
+const BOARD = "osteria:scoreboard";
+const nrm = (n) => (n || "").trim().toLowerCase();
+const pairKey = (a, b) => [nrm(a), nrm(b)].sort().join("␟");
+async function saveBoard(b) {
+  try {
+    const v = JSON.stringify(b);
+    if (hasStore()) await window.storage.set(BOARD, v, false);
+    else localStorage.setItem(BOARD, v);
+  } catch {}
+}
+async function loadBoard() {
+  try {
+    if (hasStore()) {
+      const r = await window.storage.get(BOARD, false);
+      return r ? JSON.parse(r.value) : {};
+    }
+    const v = localStorage.getItem(BOARD);
+    return v ? JSON.parse(v) : {};
+  } catch {
+    return {};
+  }
+}
+function recordWin(board, a, b, winner, game) {
+  const nb = JSON.parse(JSON.stringify(board || {}));
+  const pk = pairKey(a, b);
+  const rec = (nb[pk] = nb[pk] || { disp: {}, byGame: {} });
+  rec.disp[nrm(a)] = a;
+  rec.disp[nrm(b)] = b;
+  rec.byGame[game] = rec.byGame[game] || {};
+  const w = nrm(winner);
+  rec.byGame[game][w] = (rec.byGame[game][w] || 0) + 1;
+  return nb;
+}
+
 /* Same-origin WebSocket relay — the Cloudflare Worker in ./worker. If it isn't
    there (a plain static host), the app falls back to PeerJS on its own. */
 function relayUrl(code) {
@@ -2064,6 +2101,50 @@ function ScopaFlash({ id }) {
   );
 }
 
+// The running head-to-head between the two players at this table, big on the
+// games page, with a per-game breakdown. Reads the locally-kept board.
+function Scoreboard({ board, names }) {
+  const nA = names.A,
+    nB = names.B;
+  if (!nA || !nB) return null;
+  const rec = board[pairKey(nA, nB)];
+  const kA = nrm(nA),
+    kB = nrm(nB);
+  const games = rec ? Object.keys(rec.byGame).filter((g) => GAMES[g]) : [];
+  const wins = (k) => games.reduce((s, g) => s + (rec.byGame[g][k] || 0), 0);
+  const wA = wins(kA),
+    wB = wins(kB);
+  const big = (n, hi) => (
+    <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 46, lineHeight: 1, color: hi ? "#B8862B" : T.ink }}>{n}</span>
+  );
+  return (
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 16, padding: "14px 16px 16px", background: "rgba(18,18,18,0.02)" }}>
+      <Micro style={{ textAlign: "center" }}>Testa a testa</Micro>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 8 }}>
+        <div style={{ flex: 1, textAlign: "right", fontFamily: BRAND, fontWeight: 600, fontSize: 15, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nA}</div>
+        {big(wA, wA > wB)}
+        <span style={{ color: T.ink30, fontWeight: 600 }}>–</span>
+        {big(wB, wB > wA)}
+        <div style={{ flex: 1, textAlign: "left", fontFamily: BRAND, fontWeight: 600, fontSize: 15, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nB}</div>
+      </div>
+      {games.length ? (
+        <div style={{ marginTop: 12, borderTop: `1px solid ${T.line}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+          {games.map((g) => (
+            <div key={g} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.ink60 }}>
+              <span>{GAMES[g].name}</span>
+              <span style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>
+                {rec.byGame[g][kA] || 0} – {rec.byGame[g][kB] || 0}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <Micro style={{ textAlign: "center", marginTop: 10 }}>prima sfida — che vinca il migliore</Micro>
+      )}
+    </div>
+  );
+}
+
 // Solo-test control: one device plays both seats; tap to switch which side you
 // are, so you can drive the whole game yourself.
 function SoloBar({ seat, names, onFlip }) {
@@ -2419,7 +2500,16 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [askLeave, setAskLeave] = useState(false);
   const [bumping, setBumping] = useState(false); // waiting in the bump lobby
   const [scanning, setScanning] = useState(false); // camera QR scanner open
+  const [board, setBoard] = useState({}); // local head-to-head record between name pairs
   const bumpRef = useRef(null);
+  const boardRef = useRef({});
+  boardRef.current = board;
+  useEffect(() => {
+    loadBoard().then((b) => {
+      boardRef.current = b || {};
+      setBoard(b || {});
+    });
+  }, []);
 
   const roomRef = useRef(null);
   const netRef = useRef(null);
@@ -2524,6 +2614,13 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     }
     if (finaleFired.current) return;
     finaleFired.current = true;
+    // Record the match into the local head-to-head board (not in solo tests).
+    if (winnerSeat && !solo && room?.names?.A && room?.names?.B) {
+      const nb = recordWin(boardRef.current, room.names.A, room.names.B, room.names[winnerSeat], room.game);
+      boardRef.current = nb;
+      setBoard(nb);
+      saveBoard(nb);
+    }
     const id = setTimeout(() => {
       winSound(outcome, soundRef.current);
       buzz(outcome === "win" ? "scopa" : "lay");
@@ -3359,6 +3456,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             </div>
           )}
           {!seated && msg && <Micro style={{ marginTop: 8, textTransform: "none", letterSpacing: 0, fontSize: 12 }}>{msg}</Micro>}
+
+          {seated && (
+            <div style={{ marginTop: 16 }}>
+              <Scoreboard board={board} names={room.names} />
+            </div>
+          )}
 
           <Rule />
 
