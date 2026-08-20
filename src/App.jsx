@@ -3716,6 +3716,10 @@ function S40Card({ card, w = 32, h = 46, sel, dim, onClick }) {
     transition: "transform 130ms ease, box-shadow 130ms ease, border-color 130ms ease",
     opacity: dim ? 0.4 : 1,
     WebkitTapHighlightColor: "transparent",
+    // A non-interactive card must let taps fall through to a parent handler
+    // (the discard pile draws, a table meld receives a lay-off) — a disabled
+    // <button> would otherwise swallow the click.
+    pointerEvents: onClick ? "auto" : "none",
   };
   if (card.joker)
     return (
@@ -3760,6 +3764,81 @@ function Scala({ room, gs, seat, mine, commit }) {
   };
   const layOff = (meldId) => {
     if (opened && sel.length === 1 && gs.phase === "meld") commit(s40LayOff(gs, seat, sel[0], meldId));
+  };
+
+  // ── local hand order ──────────────────────────────────────────────
+  // How the cards are arranged is a per-device preference: it never leaves
+  // this client, never bumps v. `order` holds the ids; it reconciles with the
+  // real hand as cards are drawn, melded or discarded (new cards go to the end,
+  // gone cards drop out). Reordering is a pointer-drag; a tap still selects.
+  const [order, setOrder] = useState([]);
+  const [dragId, setDragId] = useState(null);
+  const drag = useRef(null);
+  const handRow = useRef(null);
+  const handKey = hand.map((c) => c.id).join(",");
+  useEffect(() => {
+    const ids = hand.map((c) => c.id);
+    setOrder((prev) => {
+      const keep = prev.filter((id) => ids.includes(id));
+      const add = ids.filter((id) => !keep.includes(id));
+      return keep.length === prev.length && add.length === 0 ? prev : [...keep, ...add];
+    });
+  }, [handKey]);
+  const laid = order.map((id) => hand.find((c) => c.id === id)).filter(Boolean);
+  const ordered = laid.length === hand.length ? laid : hand;
+
+  const cardDown = (e, id) => {
+    drag.current = { id, sx: e.clientX, sy: e.clientY, moved: false, pid: e.pointerId };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+  };
+  const cardMove = (e) => {
+    const s = drag.current;
+    if (!s) return;
+    if (!s.moved && Math.hypot(e.clientX - s.sx, e.clientY - s.sy) < 7) return;
+    if (!s.moved) {
+      s.moved = true;
+      setDragId(s.id);
+    }
+    e.preventDefault();
+    const row = handRow.current;
+    if (!row) return;
+    let best = null,
+      bestD = Infinity,
+      after = false;
+    for (const el of row.children) {
+      const cid = el.dataset.cid;
+      if (!cid || cid === s.id) continue;
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2,
+        cy = r.top + r.height / 2;
+      const d = Math.hypot(e.clientX - cx, e.clientY - cy);
+      if (d < bestD) {
+        bestD = d;
+        best = cid;
+        after = e.clientX > cx;
+      }
+    }
+    if (best == null) return;
+    setOrder((prev) => {
+      const arr = prev.filter((id) => id !== s.id);
+      let idx = arr.indexOf(best);
+      if (idx < 0) return prev;
+      if (after) idx += 1;
+      arr.splice(idx, 0, s.id);
+      return arr.join(",") === prev.join(",") ? prev : arr;
+    });
+  };
+  const cardUp = (e) => {
+    const s = drag.current;
+    drag.current = null;
+    setDragId(null);
+    if (!s) return;
+    try {
+      e.currentTarget.releasePointerCapture(s.pid);
+    } catch {}
+    if (!s.moved && mine && gs.phase === "meld") toggle(s.id);
   };
 
   const target = opened && sel.length === 1 && gs.phase === "meld";
@@ -3828,17 +3907,26 @@ function Scala({ room, gs, seat, mine, commit }) {
         </div>
         <Micro>{hand.length} carte</Micro>
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
-        {hand.map((c) => (
-          <S40Card
+      <div ref={handRow} style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", touchAction: "none" }}>
+        {ordered.map((c) => (
+          <div
             key={c.id}
-            card={c}
-            w={42}
-            h={60}
-            sel={sel.includes(c.id)}
-            dim={stagedIds.has(c.id)}
-            onClick={mine && gs.phase === "meld" ? () => toggle(c.id) : undefined}
-          />
+            data-cid={c.id}
+            onPointerDown={(e) => cardDown(e, c.id)}
+            onPointerMove={cardMove}
+            onPointerUp={cardUp}
+            onPointerCancel={cardUp}
+            style={{
+              touchAction: "none",
+              cursor: dragId === c.id ? "grabbing" : "grab",
+              transition: dragId ? "none" : "transform 130ms ease",
+              transform: dragId === c.id ? "scale(1.08)" : "none",
+              zIndex: dragId === c.id ? 5 : 1,
+              filter: dragId === c.id ? "drop-shadow(0 9px 15px rgba(18,18,18,0.3))" : "none",
+            }}
+          >
+            <S40Card card={c} w={42} h={60} sel={sel.includes(c.id)} dim={stagedIds.has(c.id) && dragId !== c.id} onClick={() => {}} />
+          </div>
         ))}
       </div>
 
