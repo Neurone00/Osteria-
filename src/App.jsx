@@ -2018,6 +2018,21 @@ function SoloBar({ seat, names, onFlip }) {
   );
 }
 
+// A simple titled bottom-of-mind modal sheet, dismissed by tapping outside.
+function Sheet({ title, onClose, children }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 82, background: "rgba(18,18,18,0.45)", display: "grid", placeItems: "center", padding: 20, overflowY: "auto" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "20px 20px 16px", maxWidth: 360, width: "100%", boxShadow: "0 24px 60px rgba(18,18,18,0.35)" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 19, color: T.ink, marginBottom: 12 }}>{title}</div>
+        {children}
+        <button onClick={onClose} style={{ ...plain, color: T.ink, fontWeight: 600, marginTop: 14, display: "block", width: "100%", textAlign: "center", padding: "8px 0" }}>
+          Chiudi
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Bump waiting overlay — shown on both phones until the lobby pairs them.
 function BumpVeil({ show, onCancel }) {
   if (!show) return null;
@@ -3653,67 +3668,6 @@ function Die({ v, size = 46, hidden, hi, on, onClick, roll }) {
     </div>
   );
 }
-// iOS 13+ gates motion behind a permission call that must run inside a user
-// gesture. Everywhere else (Android/Chrome, Samsung Internet, desktop) motion
-// flows freely — so `needsMotionGesture()` is false there and we can arm the
-// shake listener on mount without waiting for a tap.
-function hasMotion() {
-  return typeof window !== "undefined" && !!window.DeviceMotionEvent;
-}
-function needsMotionGesture() {
-  return hasMotion() && typeof window.DeviceMotionEvent.requestPermission === "function";
-}
-async function requestMotion() {
-  try {
-    if (needsMotionGesture()) return (await window.DeviceMotionEvent.requestPermission()) === "granted";
-    return hasMotion();
-  } catch {
-    return false;
-  }
-}
-function useShake(onShake, active) {
-  const cb = useRef(onShake);
-  cb.current = onShake;
-  useEffect(() => {
-    if (!active || typeof window === "undefined") return;
-    let last = 0,
-      px = null,
-      py = null,
-      pz = null;
-    const h = (e) => {
-      const a = e.accelerationIncludingGravity || e.acceleration;
-      if (!a) return;
-      if (px != null) {
-        // sum of per-axis change since the last reading — a shake spikes it well
-        // past a stationary hand (~0–3). 16 triggers on a firm flick without
-        // false-firing from small movements.
-        const d = Math.abs((a.x || 0) - px) + Math.abs((a.y || 0) - py) + Math.abs((a.z || 0) - pz);
-        const now = Date.now();
-        if (d > 16 && now - last > 650) {
-          last = now;
-          cb.current();
-        }
-      }
-      px = a.x || 0;
-      py = a.y || 0;
-      pz = a.z || 0;
-    };
-    window.addEventListener("devicemotion", h);
-    return () => window.removeEventListener("devicemotion", h);
-  }, [active]);
-}
-// Arm motion automatically where no permission gesture is required (Android,
-// desktop). On iOS the first tap still grants it. Returns [on, enableFromTap].
-function useMotionArm() {
-  const [on, setOn] = useState(false);
-  useEffect(() => {
-    if (hasMotion() && !needsMotionGesture()) setOn(true);
-  }, []);
-  const enableFromTap = async () => {
-    if (!on) setOn(await requestMotion());
-  };
-  return [on, enableFromTap];
-}
 
 /* ── scopa / rubamazzo board ── */
 function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showScores }) {
@@ -4132,18 +4086,12 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
 /* ── perudo ── */
 function Perudo({ room, gs, seat, mine, commit }) {
   const opp = other(seat);
-  const [motionOn, armMotion] = useMotionArm();
   const [bidQty, setBidQty] = useState(1);
   const [bidFace, setBidFace] = useState(2);
   const rolled = gs.rolled[seat];
   const canRoll = gs.phase === "roll" && mine && !rolled;
-  const doRoll = () => {
+  const tapRoll = () => {
     if (gs.phase === "roll" && gs.turn === seat && !gs.rolled[seat]) commit(perudoRoll(gs, seat));
-  };
-  useShake(doRoll, motionOn && canRoll);
-  const tapRoll = async () => {
-    await armMotion();
-    doRoll();
   };
   useEffect(() => {
     if (gs.phase === "bid" && gs.turn === seat) {
@@ -4222,7 +4170,7 @@ function Perudo({ room, gs, seat, mine, commit }) {
         {gs.phase === "roll" &&
           (mine && !rolled ? (
             <Button full onClick={tapRoll}>
-              Lancia i dadi — scuoti o tocca
+              Lancia i dadi
             </Button>
           ) : (
             <Micro style={{ textAlign: "center" }}>{rolled ? `aspetta ${who(room, opp)}` : `lancia ${who(room, gs.turn)}`}</Micro>
@@ -4291,20 +4239,16 @@ const stepBtn = {
 /* ── yahtzee ── */
 function Yahtzee({ room, gs, seat, mine, commit }) {
   const opp = other(seat);
-  const [motionOn, armMotion] = useMotionArm();
+  const [showOpp, setShowOpp] = useState(false); // peek at the opponent's card
+  const [showHelp, setShowHelp] = useState(false); // how scoring works
   const myScore = gs.scores[seat];
   const oppScore = gs.scores[opp];
   const myTotal = yahtTotal(myScore);
   const oppTotal = yahtTotal(oppScore);
   const canRoll = mine && gs.rollsLeft > 0 && !gs.done;
   const canScore = mine && gs.rolled && !gs.done;
-  const doRoll = () => {
+  const tapRoll = () => {
     if (mine && gs.rollsLeft > 0 && !gs.done) commit(yahtRoll(gs, seat));
-  };
-  useShake(doRoll, motionOn && canRoll);
-  const tapRoll = async () => {
-    await armMotion();
-    doRoll();
   };
 
   return (
@@ -4316,6 +4260,53 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
           {oppTotal.total} punti · {Object.keys(oppScore).length}/13
         </Micro>
       </div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 22, marginTop: 8 }}>
+        <button onClick={() => setShowOpp(true)} style={{ ...plain, color: T.ink, fontWeight: 600 }}>
+          📋 scheda di {who(room, opp)}
+        </button>
+        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600 }}>
+          ? come si conta
+        </button>
+      </div>
+
+      {showOpp && (
+        <Sheet title={`Scheda di ${who(room, opp)}`} onClose={() => setShowOpp(false)}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px" }}>
+            {YCATS.map((cat) => (
+              <div key={cat.k} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${T.line}` }}>
+                <span style={{ color: T.ink60 }}>{cat.label}</span>
+                <span style={{ fontWeight: 600, color: cat.k in oppScore ? T.ink : T.ink30 }}>{cat.k in oppScore ? oppScore[cat.k] : "–"}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, fontFamily: BRAND, fontWeight: 600, fontSize: 15 }}>
+            <span style={{ color: T.ink60 }}>Bonus {oppTotal.upper}/63{oppTotal.bonus ? " +35" : ""}</span>
+            <span>Totale {oppTotal.total}</span>
+          </div>
+        </Sheet>
+      )}
+      {showHelp && (
+        <Sheet title="Come si contano i punti" onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink80 || T.ink }}>
+            {[
+              ["Uno–Sei", "somma dei dadi di quel numero"],
+              ["Bonus", "+35 se in alto (Uno–Sei) arrivi a 63"],
+              ["Tris", "somma di tutti i dadi (almeno 3 uguali)"],
+              ["Poker", "somma di tutti i dadi (almeno 4 uguali)"],
+              ["Full", "25 — tre uguali più due uguali"],
+              ["Scala", "30 — quattro in fila"],
+              ["Scalona", "40 — cinque in fila"],
+              ["Cinquina", "50 — cinque uguali"],
+              ["Chance", "somma di tutti i dadi, sempre"],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0" }}>
+                <span style={{ fontWeight: 700, minWidth: 78, color: T.ink }}>{k}</span>
+                <span style={{ color: T.ink60 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Sheet>
+      )}
 
       {/* dice + roll */}
       <div style={{ margin: "16px 0 6px", textAlign: "center" }}>
@@ -4337,7 +4328,7 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
           {mine && !gs.done ? (
             gs.rollsLeft > 0 ? (
               <Button full onClick={tapRoll}>
-                {gs.rolled ? `Ritira · ${gs.rollsLeft} rimasti` : "Lancia i dadi — scuoti o tocca"}
+                {gs.rolled ? `Ritira · ${gs.rollsLeft} rimasti` : "Lancia i dadi"}
               </Button>
             ) : (
               <Micro>segna un punteggio qui sotto</Micro>
