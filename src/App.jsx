@@ -1708,6 +1708,28 @@ function Rule() {
   return <div style={{ height: 1, background: T.line, margin: "18px 0" }} />;
 }
 
+/* A bottom-pinned action strip, centred to the same 480 column as the app and
+   painted in the app's own paper-grey — a hairline, not a floating white card.
+   Reused by any board that keeps its controls in reach of the thumb. */
+function FloatBar({ children }) {
+  return (
+    <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 20, pointerEvents: "none" }}>
+      <div
+        style={{
+          maxWidth: 480,
+          margin: "0 auto",
+          pointerEvents: "auto",
+          background: T.bg,
+          borderTop: `1px solid ${T.line}`,
+          padding: "12px 16px calc(14px + env(safe-area-inset-bottom))",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 const CSS = `
 html,body{overscroll-behavior:none;margin:0;overflow-x:hidden}
 .app{min-height:100vh;min-height:100dvh}
@@ -2631,7 +2653,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         />
       )}
 
-      {room.ev && !gs.done && isCard(room.game) && (
+      {room.ev && !gs.done && isCard(room.game) && room.game !== "scala" && (
         <p style={{ color: T.ink60, fontSize: 12, textAlign: "center", marginTop: 14, minHeight: 16 }}>
           {who(room, room.ev.seat)} {describe(room.ev, french)}
         </p>
@@ -3740,8 +3762,13 @@ function Scala({ room, gs, seat, mine, commit }) {
     if (opened && sel.length === 1 && gs.phase === "meld") commit(s40LayOff(gs, seat, sel[0], meldId));
   };
 
+  const target = opened && sel.length === 1 && gs.phase === "meld";
+  const acting = mine && !gs.done;
+  // room for the floating action bar so the last cards never hide behind it
+  const padBottom = gs.done ? 8 : acting && gs.phase === "meld" ? 168 : 96;
+
   return (
-    <div>
+    <div style={{ paddingBottom: padBottom }}>
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
@@ -3751,38 +3778,35 @@ function Scala({ room, gs, seat, mine, commit }) {
       </div>
 
       {/* table melds */}
-      <div style={{ margin: "12px 0" }}>
-        <Micro>Tavolo</Micro>
-        <div style={{ display: "flex", gap: 12, overflowX: "auto", padding: "8px 2px", minHeight: 64 }}>
-          {gs.melds.length === 0 && <Micro style={{ padding: "18px 0" }}>ancora niente in tavola</Micro>}
-          {gs.melds.map((m) => {
-            const target = opened && sel.length === 1 && gs.phase === "meld";
-            return (
-              <div
-                key={m.id}
-                onClick={target ? () => layOff(m.id) : undefined}
-                style={{
-                  display: "flex",
-                  flexShrink: 0,
-                  padding: 4,
-                  borderRadius: 8,
-                  border: `1px solid ${target ? T.ink : "transparent"}`,
-                  cursor: target ? "pointer" : "default",
-                }}
-              >
-                {m.cards.map((c, i) => (
-                  <div key={c.id} style={{ marginLeft: i ? -16 : 0 }}>
-                    <S40Card card={c} w={26} h={38} />
-                  </div>
-                ))}
-              </div>
-            );
-          })}
+      <div style={{ margin: "10px 0" }}>
+        <Micro>Tavolo{target ? " · tocca una combinazione per attaccare" : ""}</Micro>
+        <div style={{ display: "flex", gap: 12, overflowX: "auto", padding: "8px 2px", minHeight: 70 }}>
+          {gs.melds.length === 0 && <Micro style={{ padding: "20px 0" }}>ancora niente in tavola</Micro>}
+          {gs.melds.map((m) => (
+            <div
+              key={m.id}
+              onClick={target ? () => layOff(m.id) : undefined}
+              style={{
+                display: "flex",
+                flexShrink: 0,
+                padding: 4,
+                borderRadius: 8,
+                border: `1px solid ${target ? T.ink : "transparent"}`,
+                cursor: target ? "pointer" : "default",
+              }}
+            >
+              {m.cards.map((c, i) => (
+                <div key={c.id} style={{ marginLeft: i ? -14 : 0 }}>
+                  <S40Card card={c} w={30} h={44} />
+                </div>
+              ))}
+            </div>
+          ))}
         </div>
       </div>
 
       {/* stock + discard */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 26, alignItems: "flex-end", margin: "4px 0 14px" }}>
+      <div style={{ display: "flex", justifyContent: "center", gap: 28, alignItems: "flex-end", margin: "2px 0 12px" }}>
         <div style={{ textAlign: "center" }}>
           <div onClick={() => draw("stock")} style={{ cursor: mine && gs.phase === "draw" ? "pointer" : "default", display: "inline-block", outline: mine && gs.phase === "draw" ? `2px solid ${T.ink}` : "none", outlineOffset: 3, borderRadius: 7 }}>
             <Back size="md" stack />
@@ -3804,13 +3828,13 @@ function Scala({ room, gs, seat, mine, commit }) {
         </div>
         <Micro>{hand.length} carte</Micro>
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, justifyContent: "center" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
         {hand.map((c) => (
           <S40Card
             key={c.id}
             card={c}
-            w={34}
-            h={48}
+            w={42}
+            h={60}
             sel={sel.includes(c.id)}
             dim={stagedIds.has(c.id)}
             onClick={mine && gs.phase === "meld" ? () => toggle(c.id) : undefined}
@@ -3818,61 +3842,63 @@ function Scala({ room, gs, seat, mine, commit }) {
         ))}
       </div>
 
-      {/* actions */}
-      <div style={{ marginTop: 16 }}>
-        {!mine && <Micro style={{ textAlign: "center" }}>tocca a {who(room, opp)}</Micro>}
-        {mine && gs.phase === "draw" && <Micro style={{ textAlign: "center" }}>pesca dal mazzo o dagli scarti</Micro>}
-        {mine && gs.phase === "meld" && (
-          <div>
-            {selMeld.ok && (
-              <Micro style={{ textAlign: "center", color: T.ink }}>
-                {selMeld.kind === "set" ? "tris" : "scala"} valida · {selMeld.value} punti
-              </Micro>
-            )}
-            {!opened && staged.length > 0 && (
-              <Micro style={{ textAlign: "center", marginTop: 4 }}>
-                apertura: {stagedTotal}/40{stagedTotal < 40 ? " — servono altre combinazioni" : " — puoi aprire"}
-              </Micro>
-            )}
-            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-              {opened ? (
-                <Button full disabled={!selMeld.ok} onClick={() => commit(s40Meld(gs, seat, sel))}>
-                  Cala
+      {/* pinned action strip */}
+      {!gs.done && (
+        <FloatBar>
+          {!mine && <Micro style={{ textAlign: "center" }}>tocca a {who(room, opp)}</Micro>}
+          {mine && gs.phase === "draw" && <Micro style={{ textAlign: "center" }}>pesca dal mazzo o dagli scarti</Micro>}
+          {mine && gs.phase === "meld" && (
+            <div>
+              <div style={{ minHeight: 16 }}>
+                {selMeld.ok ? (
+                  <Micro style={{ textAlign: "center", color: T.ink }}>
+                    {selMeld.kind === "set" ? "tris" : "scala"} valida · {selMeld.value} punti
+                  </Micro>
+                ) : !opened && staged.length > 0 ? (
+                  <Micro style={{ textAlign: "center" }}>
+                    apertura {stagedTotal}/40{stagedTotal < 40 ? " — servono altre combinazioni" : " — puoi aprire"}
+                  </Micro>
+                ) : (
+                  <Micro style={{ textAlign: "center" }}>{opened ? "cala, attacca o scarta" : "componi almeno 40 punti per aprire"}</Micro>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                {opened ? (
+                  <Button full disabled={!selMeld.ok} onClick={() => commit(s40Meld(gs, seat, sel))}>
+                    Cala
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      kind="line"
+                      disabled={!selMeld.ok}
+                      onClick={() => {
+                        setStaged((s) => [...s, { ids: sel, value: selMeld.value }]);
+                        setSel([]);
+                      }}
+                    >
+                      Aggiungi
+                    </Button>
+                    <Button full disabled={stagedTotal < 40} onClick={() => commit(s40Open(gs, seat, staged))}>
+                      Apri {staged.length ? `· ${stagedTotal}` : ""}
+                    </Button>
+                  </>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+                <Button kind="line" full disabled={sel.length !== 1} onClick={() => commit(s40Discard(gs, seat, sel[0]))}>
+                  Scarta
                 </Button>
-              ) : (
-                <>
-                  <Button
-                    kind="line"
-                    disabled={!selMeld.ok}
-                    onClick={() => {
-                      setStaged((s) => [...s, { ids: sel, value: selMeld.value }]);
-                      setSel([]);
-                    }}
-                  >
-                    Aggiungi
-                  </Button>
-                  <Button full disabled={stagedTotal < 40} onClick={() => commit(s40Open(gs, seat, staged))}>
-                    Apri {staged.length ? `· ${stagedTotal}` : ""}
-                  </Button>
-                </>
-              )}
+                {!opened && staged.length > 0 && (
+                  <button onClick={() => setStaged([])} style={{ ...plain, whiteSpace: "nowrap" }}>
+                    annulla
+                  </button>
+                )}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-              <Button kind="line" full disabled={sel.length !== 1} onClick={() => commit(s40Discard(gs, seat, sel[0]))}>
-                Scarta
-              </Button>
-              {!opened && staged.length > 0 && (
-                <button onClick={() => setStaged([])} style={{ ...plain, whiteSpace: "nowrap" }}>
-                  annulla
-                </button>
-              )}
-            </div>
-            {opened && sel.length === 1 && (
-              <Micro style={{ textAlign: "center", marginTop: 8 }}>…o tocca una combinazione in tavola per attaccare</Micro>
-            )}
-          </div>
-        )}
-      </div>
+          )}
+        </FloatBar>
+      )}
     </div>
   );
 }
