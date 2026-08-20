@@ -3703,6 +3703,16 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
 /* ── scala 40 ── */
 const S40_SUIT = { H: { g: "♥", c: "#B23A2E" }, D: { g: "♦", c: "#B23A2E" }, C: { g: "♣", c: "#1A1A1A" }, S: { g: "♠", c: "#1A1A1A" } };
 const s40lbl = (v) => ({ 1: "A", 11: "J", 12: "Q", 13: "K" }[v] || String(v));
+// A readable resting order: suits grouped, colours alternating, rank ascending,
+// jokers last. Used for the default hand layout and the "ordina" reset.
+const S40_SUIT_ORD = { H: 0, S: 1, D: 2, C: 3 };
+const s40Key = (c) => (c.joker ? [4, 0] : [S40_SUIT_ORD[c.s], c.v]);
+const s40Before = (a, b) => {
+  const ka = s40Key(a),
+    kb = s40Key(b);
+  return ka[0] !== kb[0] ? ka[0] < kb[0] : ka[1] < kb[1];
+};
+const s40Sorted = (cards) => cards.slice().sort((a, b) => (s40Before(a, b) ? -1 : s40Before(b, a) ? 1 : 0)).map((c) => c.id);
 function S40Card({ card, w = 32, h = 46, sel, dim, onClick }) {
   const style = {
     width: w,
@@ -3783,12 +3793,23 @@ function Scala({ room, gs, seat, mine, commit }) {
   const drag = useRef(null);
   const handRow = useRef(null);
   const handKey = hand.map((c) => c.id).join(",");
+  const cardOf = (id) => hand.find((c) => c.id === id);
   useEffect(() => {
     const ids = hand.map((c) => c.id);
     setOrder((prev) => {
       const keep = prev.filter((id) => ids.includes(id));
       const add = ids.filter((id) => !keep.includes(id));
-      return keep.length === prev.length && add.length === 0 ? prev : [...keep, ...add];
+      if (keep.length === prev.length && add.length === 0) return prev;
+      if (keep.length === 0) return s40Sorted(hand); // first layout: fully sorted
+      // a drawn card slots into its sorted place without disturbing the rest
+      const next = keep.slice();
+      for (const id of add) {
+        const c = cardOf(id);
+        let i = 0;
+        while (i < next.length && !s40Before(c, cardOf(next[i]))) i++;
+        next.splice(i, 0, id);
+      }
+      return next;
     });
   }, [handKey]);
   const laid = order.map((id) => hand.find((c) => c.id === id)).filter(Boolean);
@@ -3925,7 +3946,12 @@ function Scala({ room, gs, seat, mine, commit }) {
         <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
           {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
         </div>
-        <Micro>{hand.length} carte</Micro>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+          <button onClick={() => setOrder(s40Sorted(hand))} style={{ ...plain }}>
+            ordina
+          </button>
+          <Micro>{hand.length} carte</Micro>
+        </div>
       </div>
       <div ref={handRow} style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", touchAction: "none" }}>
         {ordered.map((c) => (
