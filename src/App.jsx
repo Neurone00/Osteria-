@@ -4293,9 +4293,30 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
   const tapRoll = () => {
     if (mine && gs.rollsLeft > 0 && !gs.done) commit(yahtRoll(gs, seat));
   };
+  // Five of a kind → a big "Yahtzee!" flash for both players, once per roll.
+  const [yflash, setYflash] = useState(0);
+  const yseen = useRef(null);
+  const diceKey = gs.dice.join(",");
+  const isYahtzee = gs.rolled && gs.dice.length === 5 && gs.dice.every((d) => d && d === gs.dice[0]);
+  useEffect(() => {
+    if (isYahtzee && yseen.current !== diceKey) {
+      yseen.current = diceKey;
+      setYflash((n) => n + 1);
+      const t = setTimeout(() => setYflash(0), 1700);
+      return () => clearTimeout(t);
+    }
+    if (!isYahtzee) yseen.current = null;
+  }, [diceKey, gs.rolled]);
 
   return (
     <div>
+      {yflash > 0 && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+          <div key={yflash} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(56px, 19vw, 132px)", color: "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap" }}>
+            Yahtzee!
+          </div>
+        </div>
+      )}
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
