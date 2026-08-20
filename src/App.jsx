@@ -1711,6 +1711,40 @@ function Rule() {
   return <div style={{ height: 1, background: T.line, margin: "18px 0" }} />;
 }
 
+// Full-screen veil while the socket is down — auto-reconnect runs underneath,
+// with a manual retry in case focus events never fire.
+function ReconnectVeil({ show, busy, onRetry }) {
+  if (!show) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 60,
+        background: "rgba(231,229,224,0.86)",
+        backdropFilter: "blur(3px)",
+        WebkitBackdropFilter: "blur(3px)",
+        display: "grid",
+        placeItems: "center",
+        padding: 24,
+      }}
+    >
+      <div style={{ textAlign: "center", maxWidth: 320 }}>
+        <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 18 }}>
+          <span className="recdot" style={{ animationDelay: "0ms" }} />
+          <span className="recdot" style={{ animationDelay: "140ms" }} />
+          <span className="recdot" style={{ animationDelay: "280ms" }} />
+        </div>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 20, color: T.ink }}>Riconnessione…</div>
+        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px 0 20px" }}>Connessione persa. Riprendo il tavolo appena torna la rete.</p>
+        <Button full soft={busy} onClick={onRetry}>
+          {busy ? "Riconnetto…" : "Riconnetti ora"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /* A bottom-pinned action strip, centred to the same 480 column as the app and
    painted in the app's own paper-grey — a hairline, not a floating white card.
    Reused by any board that keeps its controls in reach of the thumb. */
@@ -1771,7 +1805,9 @@ input{font-family:inherit}
 .floaty{animation:floaty 3.4s ease-in-out infinite}
 @keyframes dieroll{0%{transform:rotate(0) scale(1)}25%{transform:rotate(-16deg) scale(1.08)}50%{transform:rotate(14deg) scale(1.04)}75%{transform:rotate(-8deg) scale(1.02)}100%{transform:rotate(0) scale(1)}}
 .dieroll{animation:dieroll 420ms ease-out}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll{animation:none!important}}
+@keyframes recbob{0%,100%{transform:translateY(0);opacity:.4}50%{transform:translateY(-6px);opacity:1}}
+.recdot{width:9px;height:9px;border-radius:50%;background:${T.ink};display:inline-block;animation:recbob 1s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot{animation:none!important}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -1831,10 +1867,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [jolt, setJolt] = useState(false);
   const [slamId, setSlamId] = useState(null);
   const [booting, setBooting] = useState(true);
+  const [reconnecting, setReconnecting] = useState(false);
 
   const roomRef = useRef(null);
   const netRef = useRef(null);
   const relayRef = useRef(false);
+  const reconnectingRef = useRef(false);
   const seenAnim = useRef(null);
   const soundRef = useRef(true);
   const seatRef = useRef("A");
@@ -2208,6 +2246,63 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     setScreen("home");
   };
 
+  /* ── reconnect without a reload ──────────────────────────────────────
+     A phone that sleeps or backgrounds the tab drops the socket. Rather than
+     stranding the player on a dead "disconnesso", we re-open the transport in
+     place — automatically when the window regains focus, or from the veil's
+     button — and let the Durable Object replay the stored hand. */
+  const reconnect = useCallback(async () => {
+    const cur = roomRef.current;
+    if (reconnectingRef.current || !cur) return;
+    reconnectingRef.current = true;
+    setReconnecting(true);
+    setLink("waiting");
+    try {
+      netRef.current?.close?.();
+    } catch {}
+    const code = cur.code;
+    const host = seatRef.current === "A";
+    const nm = cur.names?.[seatRef.current] || "";
+    let ok = false;
+    if (hasStore()) {
+      openStorage(code);
+      ok = true;
+    } else {
+      ok = await openRelay(code, host, nm);
+      if (!ok) {
+        try {
+          await openPeer(code, host, nm);
+          ok = true;
+        } catch {
+          ok = false;
+        }
+      }
+    }
+    // the host re-pushes the current hand so a reconnecting guest re-syncs
+    if (ok && host) setTimeout(() => netRef.current?.send(roomRef.current), relayRef.current ? 250 : 900);
+    if (!ok) setLink("lost");
+    reconnectingRef.current = false;
+    setReconnecting(false);
+  }, [openRelay, openPeer, openStorage]);
+
+  useEffect(() => {
+    if (booting || !room) return;
+    const tryReconnect = () => {
+      if (document.visibilityState !== "hidden" && !reconnectingRef.current && (link === "lost" || link === "waiting")) reconnect();
+    };
+    const onVis = () => {
+      if (document.visibilityState === "visible") tryReconnect();
+    };
+    window.addEventListener("focus", tryReconnect);
+    window.addEventListener("online", tryReconnect);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("focus", tryReconnect);
+      window.removeEventListener("online", tryReconnect);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [booting, room, link, reconnect]);
+
   useEffect(() => () => netRef.current?.close(), []);
 
   /* ── rejoin after a reload ───────────────────────────────────────── */
@@ -2493,7 +2588,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     const g = GAMES[room.game];
     return (
       <Frame jolt={false}>
-        <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title="Al tavolo" />
+        <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
+        <Head room={room} link={link} onLeave={leave} onReconnect={reconnect} sound={sound} setSound={setSound} title="Al tavolo" />
         <div className="fade">
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
             <div>
@@ -2611,7 +2707,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   if (room.status === "prep" && room.prep)
     return (
       <Frame jolt={false}>
-        <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title="Prepara il mazzo" />
+        <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
+        <Head room={room} link={link} onLeave={leave} onReconnect={reconnect} sound={sound} setSound={setSound} title="Prepara il mazzo" />
         <Prepare
           room={room}
           seat={seat}
@@ -2629,7 +2726,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
 
   return (
     <Frame jolt={jolt}>
-      <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title={conf.name} />
+      <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
+      <Head room={room} link={link} onLeave={leave} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />
 
       {room.game === "camicia" ? (
         <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} showScores={!!room.scores} />
@@ -2719,7 +2817,7 @@ function Frame({ children, jolt }) {
   );
 }
 
-function Head({ room, link, onLeave, title, sound, setSound }) {
+function Head({ room, link, onLeave, onReconnect, title, sound, setSound }) {
   return (
     <div
       style={{
@@ -2739,7 +2837,7 @@ function Head({ room, link, onLeave, title, sound, setSound }) {
       </div>
       <div style={{ display: "flex", gap: 14 }}>
         {link === "lost" && (
-          <button onClick={() => window.location.reload()} style={{ ...plain, color: T.ink, fontWeight: 700 }}>
+          <button onClick={() => (onReconnect ? onReconnect() : window.location.reload())} style={{ ...plain, color: T.ink, fontWeight: 700 }}>
             Riconnetti
           </button>
         )}
@@ -3703,16 +3801,28 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
 /* ── scala 40 ── */
 const S40_SUIT = { H: { g: "♥", c: "#B23A2E" }, D: { g: "♦", c: "#B23A2E" }, C: { g: "♣", c: "#1A1A1A" }, S: { g: "♠", c: "#1A1A1A" } };
 const s40lbl = (v) => ({ 1: "A", 11: "J", 12: "Q", 13: "K" }[v] || String(v));
-// A readable resting order: suits grouped, colours alternating, rank ascending,
-// jokers last. Used for the default hand layout and the "ordina" reset.
+// Two readable restings orders, jokers last either way. "seme" groups by suit
+// (colours alternating) then rank; "numero" groups by rank then suit. Used for
+// the sort buttons and the default layout; a drawn card slots in by suit.
 const S40_SUIT_ORD = { H: 0, S: 1, D: 2, C: 3 };
-const s40Key = (c) => (c.joker ? [4, 0] : [S40_SUIT_ORD[c.s], c.v]);
+const s40KeySuit = (c) => (c.joker ? [9, 99] : [S40_SUIT_ORD[c.s], c.v]);
+const s40KeyNum = (c) => (c.joker ? [99, 9] : [c.v, S40_SUIT_ORD[c.s]]);
 const s40Before = (a, b) => {
-  const ka = s40Key(a),
-    kb = s40Key(b);
+  const ka = s40KeySuit(a),
+    kb = s40KeySuit(b);
   return ka[0] !== kb[0] ? ka[0] < kb[0] : ka[1] < kb[1];
 };
-const s40Sorted = (cards) => cards.slice().sort((a, b) => (s40Before(a, b) ? -1 : s40Before(b, a) ? 1 : 0)).map((c) => c.id);
+const s40Sorted = (cards, by = "seme") => {
+  const key = by === "numero" ? s40KeyNum : s40KeySuit;
+  return cards
+    .slice()
+    .sort((a, b) => {
+      const ka = key(a),
+        kb = key(b);
+      return ka[0] - kb[0] || ka[1] - kb[1];
+    })
+    .map((c) => c.id);
+};
 function S40Card({ card, w = 32, h = 46, sel, dim, onClick }) {
   const style = {
     width: w,
@@ -3947,10 +4057,14 @@ function Scala({ room, gs, seat, mine, commit }) {
           {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
         </div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-          <button onClick={() => setOrder(s40Sorted(hand))} style={{ ...plain }}>
-            ordina
+          <span style={{ ...plain, color: T.ink30 }}>ordina:</span>
+          <button onClick={() => setOrder(s40Sorted(hand, "numero"))} style={{ ...plain, color: T.ink }}>
+            numero
           </button>
-          <Micro>{hand.length} carte</Micro>
+          <button onClick={() => setOrder(s40Sorted(hand, "seme"))} style={{ ...plain, color: T.ink }}>
+            seme
+          </button>
+          <Micro>{hand.length}</Micro>
         </div>
       </div>
       <div ref={handRow} style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", touchAction: "none" }}>
