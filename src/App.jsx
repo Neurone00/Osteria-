@@ -2005,6 +2005,19 @@ function ScopaFlash({ id }) {
   );
 }
 
+// Solo-test control: one device plays both seats; tap to switch which side you
+// are, so you can drive the whole game yourself.
+function SoloBar({ seat, names, onFlip }) {
+  return (
+    <button
+      onClick={onFlip}
+      style={{ width: "100%", background: "rgba(18,18,18,0.05)", border: `1px dashed ${T.ink30}`, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontFamily: BRAND, fontWeight: 600, fontSize: 13, color: T.ink, cursor: "pointer", display: "flex", justifyContent: "center", gap: 8, alignItems: "center", WebkitTapHighlightColor: "transparent" }}
+    >
+      🧪 Solo · sei {names[seat] || seat} — tocca per passare all’altro
+    </button>
+  );
+}
+
 // Bump waiting overlay — shown on both phones until the lobby pairs them.
 function BumpVeil({ show, onCancel }) {
   if (!show) return null;
@@ -2231,14 +2244,18 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const typedName = useRef(false); // did the user type their name (vs it coming from prefs)?
   const deepJoined = useRef(false);
   const deepRef = useRef(undefined);
+  const soloRef = useRef(false);
   if (deepRef.current === undefined) {
     try {
-      const t = (new URLSearchParams(location.search).get("t") || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
+      const q = new URLSearchParams(location.search);
+      const t = (q.get("t") || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
       deepRef.current = t.length === 4 ? t : null;
+      soloRef.current = q.has("solo") || q.has("test");
     } catch {
       deepRef.current = null;
     }
   }
+  const [solo, setSolo] = useState(false); // one device drives both seats — for testing
   roomRef.current = room;
   soundRef.current = sound;
   seatRef.current = seat;
@@ -2512,6 +2529,34 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     setScreen("table");
   };
 
+  // Solo test: a local two-seat table on one device, no network. `publish`
+  // already updates local state and just no-ops on the null transport, so the
+  // tester flips sides with the seat toggle and plays both hands.
+  const openSolo = () => {
+    const code = "SOLO";
+    const fresh = {
+      code,
+      v: 0,
+      ts: Date.now(),
+      names: { A: name.trim() || "Uno", B: "Due" },
+      status: "lobby",
+      game: "scopa",
+      opts: { ...GAMES.scopa.def, ...(savedRules.scopa || {}) },
+      scores: showScores,
+      gs: null,
+      log: [],
+      ev: null,
+      anim: null,
+    };
+    netRef.current = null;
+    setSolo(true);
+    setSeat("A");
+    roomRef.current = fresh;
+    setRoom(fresh);
+    setLink("live");
+    setScreen("table");
+  };
+
   const joinTable = async (forceCode) => {
     const code = (typeof forceCode === "string" ? forceCode : codeIn).trim().toUpperCase();
     if (code.length !== 4) return setMsg("Il codice è di quattro lettere.");
@@ -2667,6 +2712,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     setRoom(null);
     setPick(null);
     setMsg("");
+    setSolo(false);
     setScreen("home");
   };
 
@@ -2997,6 +3043,11 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               )}
             </div>
 
+            {soloRef.current && (
+              <button onClick={openSolo} style={{ ...plain, display: "block", margin: "14px auto 0", color: T.ink, fontWeight: 600 }}>
+                🧪 Prova da solo
+              </button>
+            )}
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
             {!hasStore() && <InstallPrompt />}
           </div>
@@ -3043,6 +3094,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
         <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title="Al tavolo" />
+        {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
         <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
         <div className="fade">
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
@@ -3163,6 +3215,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
         <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title="Prepara il mazzo" />
+        {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
         <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
         <Prepare
           room={room}
@@ -3184,6 +3237,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
       <ScopaFlash id={scopaFlash} />
       <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />
+      {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
       <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
 
       {room.game === "camicia" ? (
