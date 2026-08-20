@@ -2115,7 +2115,26 @@ function InstallPrompt() {
   const iosSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
   const isAndroid = /Android/.test(ua);
   const samsung = /SamsungBrowser/.test(ua);
+  // In-app browsers (a link tapped inside WhatsApp, Instagram, Facebook, TikTok,
+  // …) run in a plain WebView: no install prompt ever fires and their menu has
+  // no "Install app" — the only way out is to reopen the page in a real browser.
+  // The tell is the Android WebView `; wv)` token, plus the known app markers.
+  const inApp =
+    !bip &&
+    (/; wv\)/.test(ua) || // Android System WebView — real Chrome/Samsung never carry this
+      /FBAN|FBAV|FB_IAB|Instagram|MicroMessenger|Line\/|Snapchat|musical_ly|BytedanceWebview|Twitter|Pinterest/.test(ua));
+
   if (!bip && !isIOS && !isAndroid) return null; // desktop: nothing to offer
+
+  // Hand the current page to Chrome (Android intent). If Chrome isn't the
+  // default this is the reliable way to escape a WebView.
+  const openInChrome = () => {
+    try {
+      const host = location.host,
+        path = location.pathname + location.search;
+      location.href = `intent://${host}${path}#Intent;scheme=https;package=com.android.chrome;end`;
+    } catch {}
+  };
 
   const tap = async () => {
     setNote("");
@@ -2135,37 +2154,56 @@ function InstallPrompt() {
       }
       return;
     }
+    if (inApp && isAndroid) {
+      openInChrome(); // leave the WebView; the real browser can install
+      return;
+    }
     setHelp((v) => !v); // no prompt available → show manual steps
   };
 
-  const steps = isIOS ? (
-    iosSafari ? (
+  const steps =
+    inApp && isAndroid ? (
       <>
-        Tocca <b>Condividi</b> <span style={{ fontSize: 14 }}>􀈂</span> in basso, poi <b>“Aggiungi a Home”</b>.
+        Stai aprendo il gioco <b>dentro un’altra app</b> (WhatsApp, Instagram…), che non può installare.
+        Tocca <b>⋮</b> in alto e scegli <b>“Apri in Chrome”</b>, poi da lì <b>“Installa app”</b>.
+      </>
+    ) : inApp && isIOS ? (
+      <>
+        Stai aprendo il gioco <b>dentro un’altra app</b>. Tocca <b>⋯</b> e scegli <b>“Apri in Safari”</b>,
+        poi <b>Condividi → “Aggiungi a Home”</b>.
+      </>
+    ) : isIOS ? (
+      iosSafari ? (
+        <>
+          Tocca <b>Condividi</b> <span style={{ fontSize: 14 }}>􀈂</span> in basso, poi <b>“Aggiungi a Home”</b>.
+        </>
+      ) : (
+        <>
+          Apri questa pagina in <b>Safari</b>, poi <b>Condividi → “Aggiungi a Home”</b>.
+        </>
+      )
+    ) : samsung ? (
+      <>
+        Apri il menu <b>≡</b> del browser, poi <b>“Aggiungi pagina a” → “Schermata Home”</b>.
       </>
     ) : (
       <>
-        Apri questa pagina in <b>Safari</b>, poi <b>Condividi → “Aggiungi a Home”</b>.
+        Apri il menu <b>⋮</b> del browser, poi <b>“Installa app”</b> (o <b>“Aggiungi a schermata Home”</b>).
       </>
-    )
-  ) : samsung ? (
-    <>
-      Apri il menu <b>≡</b> del browser, poi <b>“Aggiungi pagina a” → “Schermata Home”</b>.
-    </>
-  ) : (
-    <>
-      Apri il menu <b>⋮</b> del browser, poi <b>“Installa app”</b> (o <b>“Aggiungi a schermata Home”</b>).
-    </>
-  );
+    );
 
   const link = { ...plain, display: "block", margin: "14px auto 0", textAlign: "center", color: T.ink, fontWeight: 600 };
+  const label = inApp && isAndroid ? "⤴ Apri in Chrome per installare" : "⤓ Installa l’app";
+  // In-app browsers can't install, so lead with the way out rather than a button
+  // that would appear to do nothing.
+  const showSteps = (help || (inApp && !bip)) && !note;
   return (
     <div style={{ textAlign: "center" }}>
       <button style={link} onClick={tap}>
-        ⤓ Installa l’app
+        {label}
       </button>
-      {note && <p style={{ color: T.ink, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 260 }}>{note}</p>}
-      {help && !note && <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 260 }}>{steps}</p>}
+      {note && <p style={{ color: T.ink, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 280 }}>{note}</p>}
+      {showSteps && <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 280 }}>{steps}</p>}
     </div>
   );
 }
