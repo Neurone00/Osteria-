@@ -35,7 +35,7 @@ const EXPORTS = [
   "dealScopa", "scopaOptions", "scopaPlay", "scoreScopa", "primiera",
   "dealRuba", "rubaOptions", "rubaPlay",
   "dealCamicia", "camiciaFlip", "demand",
-  "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed",
+  "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed", "peppaShuffle", "peppaReady",
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
@@ -190,15 +190,35 @@ function playPeppa() {
   };
   check("peppa deal");
   let steps = 0;
-  const MAX = 400;
+  let draws = 0;
+  const MAX = 800;
   while (!g.done) {
-    if (++steps > MAX) return fail("peppa", `no end after ${MAX} draws`);
+    if (++steps > MAX) return fail("peppa", `no end after ${MAX} steps`);
+    if (g.phase === "arrange") {
+      // the holder (other than the drawer) shuffles a few times, then presents
+      const holder = other(g.turn);
+      const rounds = Math.floor(Math.random() * 3);
+      for (let k = 0; k < rounds; k++) {
+        const s = R.peppaShuffle(g, holder);
+        if (!s) return fail("peppa", "peppaShuffle refused the holder in the arrange beat");
+        g = s.g;
+        check("peppa arrange");
+      }
+      // the drawer must not be able to act during the arrange beat
+      const early = R.peppaDraw(g, g.turn, 0);
+      if (early) return fail("peppa", "peppaDraw was allowed before the hand was presented");
+      const r = R.peppaReady(g, holder);
+      if (!r) return fail("peppa", "peppaReady refused the holder");
+      g = r.g;
+      continue;
+    }
     const seat = g.turn;
     const src = g.hands[other(seat)];
     if (!src.length) return fail("peppa", `${seat} on turn but opponent has no cards — stuck`);
     const res = R.peppaDraw(g, seat, Math.floor(Math.random() * src.length));
     if (!res) return fail("peppa", "peppaDraw refused a valid slot");
     g = res.g;
+    draws++;
     check("peppa mid-hand");
   }
   if (g.win == null) return fail("peppa", "ended with no winner");
@@ -206,7 +226,7 @@ function playPeppa() {
   if (g.hands[g.win].length !== 0) fail("peppa", `${g.win} 'won' still holding ${g.hands[g.win].length} cards`);
   if (g.hands[loser].length !== 1 || g.hands[loser][0].id !== "S9")
     fail("peppa", `loser should hold only the Peppa (S9), holds ${JSON.stringify(g.hands[loser].map((c) => c.id))}`);
-  return steps;
+  return draws;
 }
 const other = (s) => (s === "A" ? "B" : "A");
 
