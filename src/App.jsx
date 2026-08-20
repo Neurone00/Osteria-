@@ -14,6 +14,8 @@ const T = {
 // Fonts by the host page, with a rounded system fallback if it can't (e.g. the
 // offline artifact). Body copy stays on the neutral system stack.
 const BRAND = "'Fredoka', 'Baloo 2', ui-rounded, 'Segoe UI Rounded', system-ui, -apple-system, sans-serif";
+// One dim behind every modal dialog, so they all sit on the same scrim.
+const SCRIM = "rgba(18,18,18,0.85)";
 const SUIT = {
   D: { name: "Denari", c: "#A8842A" },
   C: { name: "Coppe", c: "#A5342F" },
@@ -1145,9 +1147,10 @@ function relayUrl(code) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${location.host}/room/${code.toUpperCase()}`;
 }
-function bumpUrl() {
+function bumpUrl(coords) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}/bump`;
+  const q = coords ? `?lat=${coords.lat.toFixed(5)}&lng=${coords.lng.toFixed(5)}` : "";
+  return `${proto}//${location.host}/bump${q}`;
 }
 // In-app QR scanning needs both a camera and the BarcodeDetector API (Chrome /
 // Android — including the S23; Safari lacks it and uses the native camera).
@@ -2058,7 +2061,7 @@ function SoloBar({ seat, names, onFlip }) {
 // A simple titled bottom-of-mind modal sheet, dismissed by tapping outside.
 function Sheet({ title, onClose, children }) {
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 82, background: "rgba(18,18,18,0.45)", display: "grid", placeItems: "center", padding: 20, overflowY: "auto" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 82, background: SCRIM, display: "grid", placeItems: "center", padding: 20, overflowY: "auto" }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "20px 20px 16px", maxWidth: 360, width: "100%", boxShadow: "0 24px 60px rgba(18,18,18,0.35)" }}>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 19, color: T.ink, marginBottom: 12 }}>{title}</div>
         {children}
@@ -2070,15 +2073,42 @@ function Sheet({ title, onClose, children }) {
   );
 }
 
-// Bump waiting overlay — shown on both phones until the lobby pairs them.
+// Bump waiting overlay — the pieces shake harder and the phone buzzes harder as
+// the ~3s match window fills, building to the bump.
 function BumpVeil({ show, onCancel }) {
+  const [off, setOff] = useState({ x: 0, y: 0, r: 0 });
+  useEffect(() => {
+    if (!show || typeof window === "undefined") return;
+    let raf,
+      start = performance.now(),
+      lastBuzz = 0;
+    const loop = (now) => {
+      const p = Math.min(1, (now - start) / 3000); // 0 → 1 over the window
+      const mag = 1.5 + p * p * 13;
+      setOff({ x: (Math.random() * 2 - 1) * mag, y: (Math.random() * 2 - 1) * mag * 0.5, r: (Math.random() * 2 - 1) * p * 5 });
+      if (now - lastBuzz > 190 - p * 150) {
+        lastBuzz = now;
+        try {
+          navigator.vibrate?.(Math.round(6 + p * p * 45));
+        } catch {}
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(raf);
+      try {
+        navigator.vibrate?.(0);
+      } catch {}
+    };
+  }, [show]);
   if (!show) return null;
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(231,229,224,0.94)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", display: "grid", placeItems: "center", padding: 24 }}>
-      <div style={{ textAlign: "center", maxWidth: 320 }}>
+      <div style={{ textAlign: "center", maxWidth: 320, transform: `translate(${off.x}px, ${off.y}px) rotate(${off.r}deg)` }}>
         <div style={{ fontSize: 44 }}>🤜🤛</div>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 12 }}>Bump!</div>
-        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 18px" }}>Premi Bump anche sull’altro telefono. Vi metto allo stesso tavolo.</p>
+        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 18px" }}>Avvicinate i telefoni e premete Bump insieme.</p>
         <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 20 }}>
           <span className="recdot" style={{ animationDelay: "0ms" }} />
           <span className="recdot" style={{ animationDelay: "140ms" }} />
@@ -2097,7 +2127,7 @@ function BumpVeil({ show, onCancel }) {
 function LeaveDialog({ show, onStay, onGo }) {
   if (!show) return null;
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(18,18,18,0.42)", display: "grid", placeItems: "center", padding: 24 }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 70, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "26px 22px 20px", maxWidth: 340, width: "100%", textAlign: "center", boxShadow: "0 20px 50px rgba(18,18,18,0.3)" }}>
         <div style={{ fontSize: 34 }}>🍷</div>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 8 }}>Già ti alzi dal tavolo?</div>
@@ -2130,7 +2160,7 @@ function FinaleModal({ show, decided, outcome, room, gs, seat, onAgain, onExit }
   const color = !decided ? T.ink : win ? "#B8862B" : draw ? T.ink60 : "#A5342F";
   const sub = !decided ? null : win ? "Offre l’oste 🍷" : draw ? "Pari e patta — nessuno paga" : "Ci sta una rivincita.";
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(18,18,18,0.5)", display: "grid", placeItems: "center", padding: 20, overflowY: "auto" }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 90, background: SCRIM, display: "grid", placeItems: "center", padding: 20, overflowY: "auto" }}>
       <div className="fade" style={{ position: "relative", background: T.bg, border: `1px solid ${T.line}`, borderRadius: 20, padding: "22px 20px", maxWidth: 360, width: "100%", boxShadow: "0 24px 60px rgba(18,18,18,0.35)", overflow: "hidden" }}>
         {decided && win && <Confetti />}
         <div className="pop" style={{ position: "relative", textAlign: "center", fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(40px, 13vw, 66px)", lineHeight: 0.98, color, letterSpacing: "-0.01em" }}>
@@ -2164,7 +2194,7 @@ function EndGameOverlay({ room, seat, onAgree, onDecline, onCancel }) {
   if (!req) return null;
   const mineReq = req.by === seat;
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 78, background: "rgba(18,18,18,0.45)", display: "grid", placeItems: "center", padding: 24 }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 78, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "24px 22px 20px", maxWidth: 340, width: "100%", textAlign: "center", boxShadow: "0 20px 50px rgba(18,18,18,0.3)" }}>
         {mineReq ? (
           <>
@@ -2771,69 +2801,88 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const bump = () => {
     if (hasStore()) return setMsg("Il bump funziona solo online.");
     if (bumpRef.current) return;
-    let ws;
-    try {
-      ws = new WebSocket(bumpUrl());
-    } catch {
-      return setMsg("Bump non disponibile.");
-    }
-    bumpRef.current = ws;
     setMsg("");
     setBumping(true);
-    const stop = () => {
+    // Grab a rough location (best-effort) so the lobby can match by proximity,
+    // then open the socket. Whether or not location comes back, the match window
+    // is short — both must bump within a few seconds.
+    const connect = (coords) => {
+      if (!bumpRef.current && bumpRef.current !== "pending") return; // cancelled while locating
+      let ws;
       try {
-        ws.close();
-      } catch {}
-      bumpRef.current = null;
-    };
-    const timer = setTimeout(() => {
-      if (bumpRef.current === ws) {
-        stop();
-        setBumping(false);
-        setMsg("Nessuno ha bumpato. Riprova.");
-      }
-    }, 22000);
-    ws.onmessage = (e) => {
-      let d;
-      try {
-        d = JSON.parse(e.data);
+        ws = new WebSocket(bumpUrl(coords));
       } catch {
-        return;
+        setBumping(false);
+        return setMsg("Bump non disponibile.");
       }
-      if (d.type === "paired" && d.code) {
+      bumpRef.current = ws;
+      const timer = setTimeout(() => {
+        if (bumpRef.current === ws) {
+          try {
+            ws.close();
+          } catch {}
+          bumpRef.current = null;
+          setBumping(false);
+          setMsg("Nessuno vicino ha bumpato. Riprova insieme.");
+        }
+      }, 3200);
+      ws.onmessage = (e) => {
+        let d;
+        try {
+          d = JSON.parse(e.data);
+        } catch {
+          return;
+        }
+        if (d.type === "paired" && d.code) {
+          clearTimeout(timer);
+          bumpRef.current = null;
+          try {
+            ws.close();
+          } catch {}
+          try {
+            navigator.vibrate?.([40, 30, 90]);
+          } catch {}
+          setBumping(false);
+          if (d.host) openTable(d.code);
+          else {
+            setCodeIn(d.code);
+            joinTable(d.code);
+          }
+        }
+      };
+      ws.onclose = () => {
         clearTimeout(timer);
-        bumpRef.current = null;
+        if (bumpRef.current === ws) {
+          bumpRef.current = null;
+          setBumping(false);
+        }
+      };
+      ws.onerror = () => {
+        clearTimeout(timer);
         try {
           ws.close();
         } catch {}
-        setBumping(false);
-        if (d.host) openTable(d.code);
-        else {
-          setCodeIn(d.code);
-          joinTable(d.code);
-        }
-      }
-    };
-    ws.onclose = () => {
-      clearTimeout(timer);
-      if (bumpRef.current === ws) {
         bumpRef.current = null;
         setBumping(false);
-      }
+        setMsg("Bump non disponibile.");
+      };
     };
-    ws.onerror = () => {
-      clearTimeout(timer);
-      stop();
-      setBumping(false);
-      setMsg("Bump non disponibile.");
-    };
+    bumpRef.current = "pending";
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => connect({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => connect(null),
+        { enableHighAccuracy: false, timeout: 2000, maximumAge: 60000 }
+      );
+    } else connect(null);
   };
   const cancelBump = () => {
-    if (bumpRef.current) {
+    const ws = bumpRef.current;
+    bumpRef.current = null;
+    if (ws && ws !== "pending") {
       try {
-        bumpRef.current.close();
+        ws.close();
       } catch {}
-      bumpRef.current = null;
     }
     setBumping(false);
   };

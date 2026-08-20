@@ -33,11 +33,24 @@ const DAY = 24 * 60 * 60 * 1000;
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ";
 const randomCode = () => Array.from({ length: 4 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join("");
 
-// One shared object for everyone bumping. The first to arrive waits; the next
-// one is paired with it — both get the same fresh code (first is host), then
-// both bump sockets close and the two phones reconnect to /room/CODE. Matching
-// is FIFO, so it assumes the two people bumping are each other's opponent —
-// true for friends across a table, which is the whole use case.
+// Metres between two lat/lng points (haversine).
+function distM(a, b) {
+  const R = 6371000,
+    rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad,
+    dLng = (b.lng - a.lng) * rad;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+const BUMP_WINDOW = 10000; // only match bumpers seen within the last ~10s
+const BUMP_NEAR = 200; // metres — two phones this close are at the same table
+
+// One shared lobby for everyone bumping. To keep it solid for a public app,
+// a newcomer is paired with the *nearest* recent waiter within ~200m (by the
+// coordinates each phone reports); with no location, it falls back to any
+// waiter inside the short time window. Each socket carries its coords + time in
+// a hibernation-safe attachment. Paired phones get one fresh code (first is
+// host) and reconnect to /room/CODE.
 export class BumpLobby {
   constructor(ctx, env) {
     this.ctx = ctx;
@@ -45,29 +58,61 @@ export class BumpLobby {
   }
   async fetch(request) {
     if (request.headers.get("Upgrade") !== "websocket") return new Response("This endpoint expects a WebSocket.", { status: 426 });
+    const url = new URL(request.url);
+    const lat = parseFloat(url.searchParams.get("lat"));
+    const lng = parseFloat(url.searchParams.get("lng"));
+    const hasLoc = Number.isFinite(lat) && Number.isFinite(lng);
+    const now = Date.now();
     const [client, server] = Object.values(new WebSocketPair());
-    const waiting = this.ctx.getWebSockets(); // whoever is already waiting, before we accept the newcomer
+    const waiters = this.ctx.getWebSockets(); // existing waiters, before accepting the newcomer
     this.ctx.acceptWebSocket(server);
-    const other = waiting.find((w) => w.readyState === 1) || waiting[0];
-    if (other) {
-      const code = randomCode();
+    server.serializeAttachment({ lat, lng, hasLoc, t: now });
+
+    let best = null;
+    let bestD = Infinity;
+    for (const w of waiters) {
+      let a = null;
       try {
-        other.send(JSON.stringify({ type: "paired", code, host: true }));
+        a = w.deserializeAttachment();
       } catch {}
-      try {
-        server.send(JSON.stringify({ type: "paired", code, host: false }));
-      } catch {}
-      try {
-        other.close(1000, "paired");
-      } catch {}
-      try {
-        server.close(1000, "paired");
-      } catch {}
-    } else {
-      try {
-        server.send(JSON.stringify({ type: "waiting" }));
-      } catch {}
+      if (!a || now - (a.t || 0) > BUMP_WINDOW) continue; // gone or too old
+      let d;
+      if (hasLoc && a.hasLoc) {
+        d = distM({ lat, lng }, a);
+        if (d > BUMP_NEAR) continue; // not the same place — never cross-match
+      } else {
+        d = 1e6; // no location on one side → allowed, but any real proximity wins
+      }
+      if (d < bestD) {
+        bestD = d;
+        best = w;
+      }
     }
+
+    if (best) {
+      const code = randomCode();
+      let ok = true;
+      try {
+        best.send(JSON.stringify({ type: "paired", code, host: true }));
+      } catch {
+        ok = false;
+      }
+      if (ok) {
+        try {
+          server.send(JSON.stringify({ type: "paired", code, host: false }));
+        } catch {}
+        try {
+          best.close(1000, "paired");
+        } catch {}
+        try {
+          server.close(1000, "paired");
+        } catch {}
+        return new Response(null, { status: 101, webSocket: client });
+      }
+    }
+    try {
+      server.send(JSON.stringify({ type: "waiting" }));
+    } catch {}
     return new Response(null, { status: 101, webSocket: client });
   }
   async webSocketClose(ws) {
