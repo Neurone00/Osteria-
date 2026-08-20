@@ -38,7 +38,7 @@ const EXPORTS = [
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
-  "makeS40Deck", "analyzeMeld", "s40JokerRuns", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
+  "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
 const modPath = join(dir, "rules.mjs");
@@ -315,7 +315,9 @@ function playScala() {
   const MAX = 600;
   while (!g.done && turns++ < MAX) {
     const seat = g.turn;
-    let r = R.s40Draw(g, seat, Math.random() < 0.85 ? "stock" : "discard") || R.s40Draw(g, seat, "discard");
+    // taking the discard is now gated on immediate usability; always keep a
+    // stock fallback so a turn can proceed either way
+    let r = (Math.random() < 0.85 ? R.s40Draw(g, seat, "stock") : R.s40Draw(g, seat, "discard")) || R.s40Draw(g, seat, "stock") || R.s40Draw(g, seat, "discard");
     if (!r) break;
     g = r.g;
     scalaCensus(g, "scala after draw");
@@ -408,6 +410,15 @@ function s40MeldTests() {
   if (!eq(ranks([C("H", 5), JK, C("H", 7)]), [6])) fail("scala joker opts", "5-_-7 should offer only 6");
   if (!eq(ranks([C("H", 13), C("D", 13), JK]), [])) fail("scala joker opts", "a set has no run placement");
   if (!eq(ranks([C("H", 1), C("H", 2), JK]), [3])) fail("scala joker opts", `A-2-J should offer only 3, got ${ranks([C("H", 1), C("H", 2), JK])}`);
+
+  // discard usability gate
+  const D = (id, s, v) => ({ id, s, v });
+  const gU = { opened: { A: false, B: false }, melds: [], discard: [D("d", "H", 7)], hands: { A: [D("a", "H", 5), D("b", "H", 6), D("c", "S", 2)], B: [] } };
+  if (!R.s40CanUseDiscard(gU, "A")) fail("scala discard gate", "7H should be usable with 5H,6H (run)");
+  const gNo = { opened: { A: false, B: false }, melds: [], discard: [D("d", "H", 7)], hands: { A: [D("a", "S", 2), D("b", "C", 4), D("c", "D", 9)], B: [] } };
+  if (R.s40CanUseDiscard(gNo, "A")) fail("scala discard gate", "7H should not be usable with junk hand");
+  const gLay = { opened: { A: true, B: false }, melds: [{ id: "m", cards: [D("x", "H", 4), D("y", "H", 5), D("z", "H", 6)] }], discard: [D("d", "H", 7)], hands: { A: [D("a", "S", 2)], B: [] } };
+  if (!R.s40CanUseDiscard(gLay, "A")) fail("scala discard gate", "7H should be usable as a lay-off onto 4-5-6H");
 }
 
 /* ── prepared deck (shuffle + cut ritual) ───────────────────── */

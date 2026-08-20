@@ -831,12 +831,24 @@ function dealScala(dealer, tally, pre) {
     penalty: null,
   };
 }
+// The top of the scarti may be taken only if it can be used at once: laid off
+// onto a table meld (once opened), or combined with two hand cards into a valid
+// tris/scala — the card you'd then open or cala with. Drawing from the mazzo is
+// always free.
+function s40CanUseDiscard(gs, seat) {
+  const top = gs.discard[gs.discard.length - 1];
+  if (!top) return false;
+  const hand = gs.hands[seat];
+  if (gs.opened[seat]) for (const m of gs.melds) if (analyzeMeld([...m.cards, top]).ok) return true;
+  for (let i = 0; i < hand.length; i++) for (let j = i + 1; j < hand.length; j++) if (analyzeMeld([top, hand[i], hand[j]]).ok) return true;
+  return false;
+}
 function s40Draw(gs, seat, source) {
   const g = clone(gs);
   if (g.phase !== "draw" || g.turn !== seat || g.done) return null;
   let card;
   if (source === "discard") {
-    if (!g.discard.length) return null;
+    if (!g.discard.length || !s40CanUseDiscard(g, seat)) return null;
     card = g.discard.pop();
   } else {
     if (!g.deck.length) {
@@ -3939,8 +3951,11 @@ function Scala({ room, gs, seat, mine, commit }) {
     if (stagedIds.has(id)) return;
     setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
   };
+  const canTakeDiscard = mine && gs.phase === "draw" && gs.discard.length > 0 && s40CanUseDiscard(gs, seat);
   const draw = (source) => {
-    if (mine && gs.phase === "draw") commit(s40Draw(gs, seat, source));
+    if (!(mine && gs.phase === "draw")) return;
+    if (source === "discard" && !canTakeDiscard) return setHint("Prendi lo scarto solo se lo usi subito — in un tris, una scala o l’apertura.");
+    commit(s40Draw(gs, seat, source));
   };
   const layOff = (meldId) => {
     if (!(opened && sel.length === 1 && gs.phase === "meld")) return;
@@ -4072,46 +4087,42 @@ function Scala({ room, gs, seat, mine, commit }) {
   // room for the floating action bar so the last cards never hide behind it
   const padBottom = gs.done ? 8 : acting && gs.phase === "meld" ? 168 : 96;
 
+  // Each player's melds sit on their own side of the deck — the opponent's above
+  // it, yours below — and wrap down the page rather than scrolling sideways.
+  const myMelds = gs.melds.filter((m) => m.owner === seat);
+  const oppMelds = gs.melds.filter((m) => m.owner === opp);
+  const meldGroup = (m) => (
+    <div
+      key={m.id}
+      onClick={target ? () => layOff(m.id) : undefined}
+      style={{ display: "flex", padding: 4, borderRadius: 8, border: `1px solid ${target ? T.ink : "transparent"}`, cursor: target ? "pointer" : "default" }}
+    >
+      {m.cards.map((c, i) => (
+        <div key={c.id} style={{ marginLeft: i ? -14 : 0 }}>
+          <S40Card card={c} w={30} h={44} />
+        </div>
+      ))}
+    </div>
+  );
+  const meldArea = (melds, empty) => (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 12, rowGap: 10, padding: "6px 2px", minHeight: 54, alignItems: "center", justifyContent: melds.length ? "flex-start" : "center" }}>
+      {melds.length ? melds.map(meldGroup) : <Micro style={{ padding: "12px 0" }}>{empty}</Micro>}
+    </div>
+  );
+
   return (
     <div style={{ paddingBottom: padBottom }}>
-      {/* opponent */}
+      {/* opponent — their melds sit on their side of the deck */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
-        <Micro>
-          {gs.hands[opp].length} carte{gs.opened[opp] ? " · aperto" : ""}
-        </Micro>
-      </div>
-
-      {/* table melds */}
-      <div style={{ margin: "10px 0" }}>
-        <Micro>Tavolo{target ? " · tocca una combinazione per attaccare" : ""}</Micro>
-        <div style={{ display: "flex", gap: 12, overflowX: "auto", padding: "8px 2px", minHeight: 70 }}>
-          {gs.melds.length === 0 && <Micro style={{ padding: "20px 0" }}>ancora niente in tavola</Micro>}
-          {gs.melds.map((m) => (
-            <div
-              key={m.id}
-              onClick={target ? () => layOff(m.id) : undefined}
-              style={{
-                display: "flex",
-                flexShrink: 0,
-                padding: 4,
-                borderRadius: 8,
-                border: `1px solid ${target ? T.ink : "transparent"}`,
-                cursor: target ? "pointer" : "default",
-              }}
-            >
-              {m.cards.map((c, i) => (
-                <div key={c.id} style={{ marginLeft: i ? -14 : 0 }}>
-                  <S40Card card={c} w={30} h={44} />
-                </div>
-              ))}
-            </div>
-          ))}
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
+          {who(room, opp)} <span style={{ color: T.ink30, fontWeight: 400 }}>{gs.opened[opp] ? "aperto" : ""}</span>
         </div>
+        <Micro>{gs.hands[opp].length} carte</Micro>
       </div>
+      {meldArea(oppMelds, "niente ancora")}
 
-      {/* stock + discard */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 28, alignItems: "flex-end", margin: "2px 0 12px" }}>
+      {/* stock + discard — the deck between the two sides */}
+      <div style={{ display: "flex", justifyContent: "center", gap: 28, alignItems: "flex-end", margin: "6px 0" }}>
         <div style={{ textAlign: "center" }}>
           <div onClick={() => draw("stock")} style={{ cursor: mine && gs.phase === "draw" ? "pointer" : "default", display: "inline-block", outline: mine && gs.phase === "draw" ? `2px solid ${T.ink}` : "none", outlineOffset: 3, borderRadius: 7 }}>
             <Back size="md" stack />
@@ -4119,12 +4130,23 @@ function Scala({ room, gs, seat, mine, commit }) {
           <Micro style={{ marginTop: 6 }}>mazzo {gs.deck.length}</Micro>
         </div>
         <div style={{ textAlign: "center" }}>
-          <div onClick={() => draw("discard")} style={{ cursor: mine && gs.phase === "draw" && gs.discard.length ? "pointer" : "default", display: "inline-block", outline: mine && gs.phase === "draw" ? `2px solid ${T.ink}` : "none", outlineOffset: 3, borderRadius: 7 }}>
+          <div
+            onClick={() => draw("discard")}
+            style={{ cursor: canTakeDiscard ? "pointer" : "default", display: "inline-block", outline: canTakeDiscard ? `2px solid ${T.ink}` : "none", outlineOffset: 3, borderRadius: 7, opacity: mine && gs.phase === "draw" && !canTakeDiscard ? 0.5 : 1 }}
+          >
             {gs.discard.length ? <S40Card card={gs.discard[gs.discard.length - 1]} w={54} h={76} /> : <Ghost size="md" />}
           </div>
           <Micro style={{ marginTop: 6 }}>scarti</Micro>
         </div>
       </div>
+
+      {/* your melds — your side of the deck */}
+      {(myMelds.length > 0 || opened) && (
+        <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 4 }}>
+          <Micro>Le tue combinazioni{target ? " · tocca per attaccare" : ""}</Micro>
+          {meldArea(myMelds, "niente ancora")}
+        </div>
+      )}
 
       {/* your hand */}
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6 }}>
@@ -4169,7 +4191,9 @@ function Scala({ room, gs, seat, mine, commit }) {
       {!gs.done && (
         <FloatBar>
           {!mine && <Micro style={{ textAlign: "center" }}>tocca a {who(room, opp)}</Micro>}
-          {mine && gs.phase === "draw" && <Micro style={{ textAlign: "center" }}>pesca dal mazzo o dagli scarti</Micro>}
+          {mine && gs.phase === "draw" && (
+            <Micro style={{ textAlign: "center", color: hint ? T.ink : undefined }}>{hint || (canTakeDiscard ? "pesca dal mazzo, o prendi lo scarto per usarlo subito" : "pesca dal mazzo")}</Micro>
+          )}
           {mine && gs.phase === "meld" && jokerAsk && (
             <div>
               <Micro style={{ textAlign: "center" }}>Il jolly rappresenta:</Micro>
