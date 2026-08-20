@@ -1761,6 +1761,31 @@ function Rule() {
   return <div style={{ height: 1, background: T.line, margin: "18px 0" }} />;
 }
 
+// A gentle "are you sure" before leaving a table — losing a hand to a stray
+// thumb is exactly what this game set out to prevent. Warm, osteria-flavoured.
+function LeaveDialog({ show, onStay, onGo }) {
+  if (!show) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(18,18,18,0.42)", display: "grid", placeItems: "center", padding: 24 }}>
+      <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "26px 22px 20px", maxWidth: 340, width: "100%", textAlign: "center", boxShadow: "0 20px 50px rgba(18,18,18,0.3)" }}>
+        <div style={{ fontSize: 34 }}>🍷</div>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 8 }}>Già ti alzi dal tavolo?</div>
+        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 20px" }}>
+          La mano è ancora calda e il tuo posto è caldo pure lui. Se esci lasci le carte all’oste — e l’oste bara.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Button full onClick={onStay}>
+            Resto a giocare
+          </Button>
+          <button onClick={onGo} style={{ ...plain, color: T.ink60, fontSize: 14, padding: "6px 0" }}>
+            Esco lo stesso
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Full-screen veil while the socket is down — auto-reconnect runs underneath,
 // with a manual retry in case focus events never fire.
 function ReconnectVeil({ show, busy, onRetry }) {
@@ -1918,6 +1943,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [slamId, setSlamId] = useState(null);
   const [booting, setBooting] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
+  const [askLeave, setAskLeave] = useState(false);
 
   const roomRef = useRef(null);
   const netRef = useRef(null);
@@ -2639,7 +2665,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     return (
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-        <Head room={room} link={link} onLeave={leave} onReconnect={reconnect} sound={sound} setSound={setSound} title="Al tavolo" />
+        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title="Al tavolo" />
+        <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
         <div className="fade">
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
             <div>
@@ -2758,7 +2785,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     return (
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-        <Head room={room} link={link} onLeave={leave} onReconnect={reconnect} sound={sound} setSound={setSound} title="Prepara il mazzo" />
+        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title="Prepara il mazzo" />
+        <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
         <Prepare
           room={room}
           seat={seat}
@@ -2777,7 +2805,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   return (
     <Frame jolt={jolt}>
       <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-      <Head room={room} link={link} onLeave={leave} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />
+      <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />
+      <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
 
       {room.game === "camicia" ? (
         <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} showScores={!!room.scores} />
@@ -3121,11 +3150,20 @@ function Die({ v, size = 46, hidden, hi, on, onClick, roll }) {
     </div>
   );
 }
+// iOS 13+ gates motion behind a permission call that must run inside a user
+// gesture. Everywhere else (Android/Chrome, Samsung Internet, desktop) motion
+// flows freely — so `needsMotionGesture()` is false there and we can arm the
+// shake listener on mount without waiting for a tap.
+function hasMotion() {
+  return typeof window !== "undefined" && !!window.DeviceMotionEvent;
+}
+function needsMotionGesture() {
+  return hasMotion() && typeof window.DeviceMotionEvent.requestPermission === "function";
+}
 async function requestMotion() {
   try {
-    const D = window.DeviceMotionEvent;
-    if (D && typeof D.requestPermission === "function") return (await D.requestPermission()) === "granted";
-    return typeof window !== "undefined" && "ondevicemotion" in window;
+    if (needsMotionGesture()) return (await window.DeviceMotionEvent.requestPermission()) === "granted";
+    return hasMotion();
   } catch {
     return false;
   }
@@ -3143,9 +3181,12 @@ function useShake(onShake, active) {
       const a = e.accelerationIncludingGravity || e.acceleration;
       if (!a) return;
       if (px != null) {
+        // sum of per-axis change since the last reading — a shake spikes it well
+        // past a stationary hand (~0–3). 16 triggers on a firm flick without
+        // false-firing from small movements.
         const d = Math.abs((a.x || 0) - px) + Math.abs((a.y || 0) - py) + Math.abs((a.z || 0) - pz);
         const now = Date.now();
-        if (d > 26 && now - last > 800) {
+        if (d > 16 && now - last > 650) {
           last = now;
           cb.current();
         }
@@ -3157,6 +3198,18 @@ function useShake(onShake, active) {
     window.addEventListener("devicemotion", h);
     return () => window.removeEventListener("devicemotion", h);
   }, [active]);
+}
+// Arm motion automatically where no permission gesture is required (Android,
+// desktop). On iOS the first tap still grants it. Returns [on, enableFromTap].
+function useMotionArm() {
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    if (hasMotion() && !needsMotionGesture()) setOn(true);
+  }, []);
+  const enableFromTap = async () => {
+    if (!on) setOn(await requestMotion());
+  };
+  return [on, enableFromTap];
 }
 
 /* ── scopa / rubamazzo board ── */
@@ -3590,7 +3643,7 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
 /* ── perudo ── */
 function Perudo({ room, gs, seat, mine, commit }) {
   const opp = other(seat);
-  const [motionOn, setMotionOn] = useState(false);
+  const [motionOn, armMotion] = useMotionArm();
   const [bidQty, setBidQty] = useState(1);
   const [bidFace, setBidFace] = useState(2);
   const rolled = gs.rolled[seat];
@@ -3600,7 +3653,7 @@ function Perudo({ room, gs, seat, mine, commit }) {
   };
   useShake(doRoll, motionOn && canRoll);
   const tapRoll = async () => {
-    if (!motionOn) setMotionOn(await requestMotion());
+    await armMotion();
     doRoll();
   };
   useEffect(() => {
@@ -3749,7 +3802,7 @@ const stepBtn = {
 /* ── yahtzee ── */
 function Yahtzee({ room, gs, seat, mine, commit }) {
   const opp = other(seat);
-  const [motionOn, setMotionOn] = useState(false);
+  const [motionOn, armMotion] = useMotionArm();
   const myScore = gs.scores[seat];
   const oppScore = gs.scores[opp];
   const myTotal = yahtTotal(myScore);
@@ -3761,7 +3814,7 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
   };
   useShake(doRoll, motionOn && canRoll);
   const tapRoll = async () => {
-    if (!motionOn) setMotionOn(await requestMotion());
+    await armMotion();
     doRoll();
   };
 
