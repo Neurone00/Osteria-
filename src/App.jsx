@@ -101,6 +101,18 @@ const GAMES = {
     ],
     def: { target: 11, asso: false, acepile: false, rebello: false, napola: false },
   },
+  scienza: {
+    name: "Scopa scientifica",
+    tag: "5 in mano, tavolo vuoto",
+    line: "Come la scopa, ma cinque carte in mano e niente sul tavolo: più memoria, più strategia.",
+    opts: [
+      { k: "target", label: "Partita a", cycle: [11, 16, 21] },
+      { k: "asso", label: "Asso piglia tutto", cycle: [false, true] },
+      { k: "rebello", label: "Rebello (re di denari)", cycle: [false, true] },
+      { k: "napola", label: "Napola", cycle: [false, true] },
+    ],
+    def: { target: 11, hand: 5, notable: true, asso: false, acepile: false, rebello: false, napola: false },
+  },
   ruba: {
     name: "Rubamazzo",
     tag: "ruba il mazzo",
@@ -152,24 +164,28 @@ const GAMES = {
 };
 const isCard = (game) => !GAMES[game].dice;
 const usesRitual = (game) => isCard(game) && !GAMES[game].big;
+// Scopa and its scientific variant share the same engine, scoring and board.
+const scopaLike = (game) => game === "scopa" || game === "scienza";
 
 /* ── scopa ─────────────────────────────────────────────────── */
 // `pre` is a deck the players shuffled and cut by hand; when given it's dealt
 // exactly as prepared (no reshuffle guard — their cut is respected).
 function dealScopa(dealer, scores, o, pre) {
+  const H = (o && o.hand) || 3; // hand size — 5 in the scientific variant
+  const T = o && o.notable ? 0 : 4; // scientific starts with an empty table
   let deck, table;
   if (pre) {
     deck = pre.slice();
-    table = deck.splice(0, 4);
+    table = deck.splice(0, T);
   } else
     do {
       deck = shuffle(makeDeck());
-      table = deck.splice(0, 4);
-    } while (table.filter((c) => c.v === 10).length >= 3);
+      table = deck.splice(0, T);
+    } while (T && table.filter((c) => c.v === 10).length >= 3);
   return {
     deck,
     table,
-    hands: { A: deck.splice(0, 3), B: deck.splice(0, 3) },
+    hands: { A: deck.splice(0, H), B: deck.splice(0, H) },
     piles: { A: [], B: [] },
     scope: { A: 0, B: 0 },
     turn: other(dealer),
@@ -289,9 +305,10 @@ function scopaPlay(gs, seat, cardId, take, o) {
   g.turn = other(seat);
 
   if (!g.hands.A.length && !g.hands.B.length) {
-    if (g.deck.length >= 6) {
-      g.hands[other(g.dealer)] = g.deck.splice(0, 3);
-      g.hands[g.dealer] = g.deck.splice(0, 3);
+    const H = (o && o.hand) || 3;
+    if (g.deck.length >= 2 * H) {
+      g.hands[other(g.dealer)] = g.deck.splice(0, H);
+      g.hands[g.dealer] = g.deck.splice(0, H);
       g.turn = other(g.dealer);
     } else {
       if (g.last) {
@@ -2153,7 +2170,7 @@ function LeaveDialog({ show, onStay, onGo }) {
 function FinaleModal({ show, decided, outcome, room, gs, seat, onAgain, onExit }) {
   if (!show) return null;
   const isHost = seat === "A";
-  const nextLabel = room.game === "scopa" && !gs.matchDone ? "Prossima mano" : "Gioca ancora";
+  const nextLabel = scopaLike(room.game) && !gs.matchDone ? "Prossima mano" : "Gioca ancora";
   const win = outcome === "win";
   const draw = outcome === "draw";
   const head = !decided ? "Mano contata" : win ? "Vittoria!" : draw ? "Pareggio" : "Sconfitta";
@@ -2461,7 +2478,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     buzz(a.kind);
     const timers = [setTimeout(() => setJolt(false), 200), setTimeout(() => setSlamId(null), 460)];
     // A cleared table in scopa gets a big shaking "Scopa!" on both screens.
-    if (room.game === "scopa" && room.ev && room.ev.t === "scopa") {
+    if (scopaLike(room.game) && room.ev && room.ev.t === "scopa") {
       setScopaFlash((n) => n + 1);
       timers.push(setTimeout(() => setScopaFlash(0), 1500));
     }
@@ -2470,11 +2487,11 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
 
   /* ── the finale, from this seat's point of view ── */
   const fgs = room?.gs;
-  const decided = !!(fgs && fgs.done && (room.game === "scopa" ? fgs.matchDone : true));
+  const decided = !!(fgs && fgs.done && (scopaLike(room.game) ? fgs.matchDone : true));
   const winnerSeat =
     !fgs || !fgs.done
       ? null
-      : room.game === "scopa"
+      : scopaLike(room.game)
       ? fgs.scores.A === fgs.scores.B
         ? null
         : fgs.scores.A > fgs.scores.B
@@ -3076,7 +3093,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   // Deal a game from an ordered deck (either RNG or the one the players shuffled
   // and cut). `cont` carries running scores/tally into the next game.
   const dealGame = (game, o, dealer, cont, deck) =>
-    game === "scopa"
+    scopaLike(game)
       ? dealScopa(dealer, cont?.scores || null, o, deck)
       : game === "ruba"
       ? dealRuba(dealer, cont?.tally || null, deck)
@@ -3112,7 +3129,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     // Scopa runs the shuffle-and-cut ritual before every hand — mid-match the
     // dealer alternates and the running scores carry over; a finished match
     // starts fresh from seat A.
-    if (room.game === "scopa") beginPrepare(g.matchDone ? "A" : other(g.dealer), g.matchDone ? null : { scores: g.scores });
+    if (scopaLike(room.game)) beginPrepare(g.matchDone ? "A" : other(g.dealer), g.matchDone ? null : { scores: g.scores });
     else if (usesRitual(room.game)) beginPrepare(other(g.dealer), { tally: g.tally });
     else if (GAMES[room.game].big) dealNow(dealGame(room.game, room.opts, other(g.dealer), { tally: g.tally })); // scala
     else dealNow(dealGame(room.game, room.opts, g.win ? other(g.win) : "A", { tally: g.tally })); // dice
@@ -3757,7 +3774,7 @@ function Die({ v, size = 46, hidden, hi, on, onClick, roll }) {
 
 /* ── scopa / rubamazzo board ── */
 function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showScores }) {
-  const isScopa = room.game === "scopa";
+  const isScopa = scopaLike(room.game);
   const o = room.opts;
 
   const play = (card) => {
@@ -3909,12 +3926,12 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
             </Micro>
           )}
         </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", minHeight: 96 }}>
+        <div style={{ display: "flex", gap: gs.hands[seat].length > 3 ? 5 : 8, justifyContent: "center", minHeight: 96, flexWrap: "wrap" }}>
           {gs.hands[seat].map((c) => (
             <Card
               key={c.id}
               card={c}
-              size="lg"
+              size={gs.hands[seat].length > 3 ? "md" : "lg"}
               rot={0}
               enter
               dim={!mine}
@@ -5129,7 +5146,7 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal }) {
 
 /* ── summaries — the detail under the finale, no repeated headline ── */
 function Summary({ room, gs }) {
-  if (room.game === "scopa" && gs.summary)
+  if (scopaLike(room.game) && gs.summary)
     return (
       <div>
         {!gs.matchDone && (

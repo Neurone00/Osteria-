@@ -448,6 +448,7 @@ const runs = [
   ["scopa, base rules", () => playScopa({ target: 11, asso: false, acepile: false, rebello: false, napola: false })],
   ["scopa, asso piglia tutto + rebello + napola", () => playScopa({ target: 11, asso: true, acepile: false, rebello: true, napola: true })],
   ["scopa, asso solo to pile", () => playScopa({ target: 11, asso: false, acepile: true, rebello: false, napola: false })],
+  ["scopa scientifica (5 in hand, empty table)", () => playScopa({ target: 11, hand: 5, notable: true, asso: false, acepile: false, rebello: false, napola: false })],
   ["rubamazzo, table matches only", () => playRuba({ sums: false })],
   ["rubamazzo, northern sums", () => playRuba({ sums: true })],
   ["rubamazzo, mazzo nelle somme", () => playRuba({ sums: true, pilesum: true })],
