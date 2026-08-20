@@ -1761,6 +1761,74 @@ function Rule() {
   return <div style={{ height: 1, background: T.line, margin: "18px 0" }} />;
 }
 
+// Home-screen "install this app" affordance. On Android/Chrome it fires the
+// captured beforeinstallprompt; on iOS (which has no prompt) it shows the
+// Add-to-Home steps. Hidden once installed, on desktop, and inside the artifact.
+function InstallPrompt() {
+  const [bip, setBip] = useState(typeof window !== "undefined" ? window.__osteriaBIP : null);
+  const [installed, setInstalled] = useState(false);
+  const [showIos, setShowIos] = useState(false);
+  useEffect(() => {
+    const onAvail = () => setBip(window.__osteriaBIP);
+    const onDone = () => {
+      setBip(null);
+      setInstalled(true);
+    };
+    window.addEventListener("osteria-installable", onAvail);
+    window.addEventListener("osteria-installed", onDone);
+    return () => {
+      window.removeEventListener("osteria-installable", onAvail);
+      window.removeEventListener("osteria-installed", onDone);
+    };
+  }, []);
+  if (typeof window === "undefined") return null;
+  const nav = window.navigator || {};
+  const ua = nav.userAgent || "";
+  const standalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || nav.standalone === true;
+  if (standalone || installed) return null;
+  const isIOS = /iP(hone|ad|od)/.test(ua) || (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
+  const iosSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua);
+
+  const link = { ...plain, display: "block", margin: "14px auto 0", textAlign: "center", color: T.ink, fontWeight: 600 };
+  if (bip)
+    return (
+      <button
+        style={link}
+        onClick={async () => {
+          const e = bip;
+          setBip(null);
+          window.__osteriaBIP = null;
+          try {
+            e.prompt();
+            await e.userChoice;
+          } catch {}
+        }}
+      >
+        ⤓ Installa l’app
+      </button>
+    );
+  if (isIOS)
+    return (
+      <div style={{ textAlign: "center" }}>
+        <button style={link} onClick={() => setShowIos((v) => !v)}>
+          ⤓ Installa l’app
+        </button>
+        {showIos && (
+          <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 250 }}>
+            {iosSafari ? (
+              <>
+                Tocca <b>Condividi</b> <span style={{ fontSize: 14 }}>􀈂</span> in basso, poi <b>“Aggiungi a Home”</b>.
+              </>
+            ) : (
+              <>Apri questa pagina in <b>Safari</b>, poi Condividi → “Aggiungi a Home”.</>
+            )}
+          </p>
+        )}
+      </div>
+    );
+  return null; // desktop / already-installable-elsewhere: nothing to show
+}
+
 // A gentle "are you sure" before leaving a table — losing a hand to a stray
 // thumb is exactly what this game set out to prevent. Warm, osteria-flavoured.
 function LeaveDialog({ show, onStay, onGo }) {
@@ -2633,6 +2701,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               </button>
             )}
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
+            {!hasStore() && <InstallPrompt />}
           </div>
         </div>
       </Frame>

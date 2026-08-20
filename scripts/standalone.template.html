@@ -24,6 +24,27 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Register the service worker (makes the app installable on Android) and
+      // capture Chrome's install prompt so the home screen can offer it in-app.
+      (function () {
+        if ("serviceWorker" in navigator) {
+          window.addEventListener("load", function () {
+            navigator.serviceWorker.register("/sw.js").catch(function () {});
+          });
+        }
+        window.__osteriaBIP = null;
+        window.addEventListener("beforeinstallprompt", function (e) {
+          e.preventDefault();
+          window.__osteriaBIP = e;
+          window.dispatchEvent(new Event("osteria-installable"));
+        });
+        window.addEventListener("appinstalled", function () {
+          window.__osteriaBIP = null;
+          window.dispatchEvent(new Event("osteria-installed"));
+        });
+      })();
+    </script>
     <script>/*BUNDLE*/</script>
   </body>
 </html>
