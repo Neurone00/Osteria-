@@ -545,7 +545,9 @@ function camiciaFlip(gs, seat, o) {
    hand is a rank you also hold and pairs at once, except the Peppa. Each real
    draw sheds a pair; the Peppa can only be passed back and forth a bounded
    number of times. No cycle guard needed. */
-const PEPPA_ID = "B9"; // the Cavallo di Bastoni is kept back as the lone card
+// The lone card is the Cavallo di Spade — value 9 renders as "Q" and suit S as
+// "♠" on the French face, so it reads as the classic Old Maid Queen of Spades.
+const PEPPA_ID = "S9";
 
 function makePeppaDeck() {
   // Remove the other three Cavalli (v === 9), keeping only PEPPA_ID: rank 9 is

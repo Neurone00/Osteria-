@@ -204,8 +204,8 @@ function playPeppa() {
   if (g.win == null) return fail("peppa", "ended with no winner");
   const loser = g.win === "A" ? "B" : "A";
   if (g.hands[g.win].length !== 0) fail("peppa", `${g.win} 'won' still holding ${g.hands[g.win].length} cards`);
-  if (g.hands[loser].length !== 1 || g.hands[loser][0].id !== "B9")
-    fail("peppa", `loser should hold only the Peppa (B9), holds ${JSON.stringify(g.hands[loser].map((c) => c.id))}`);
+  if (g.hands[loser].length !== 1 || g.hands[loser][0].id !== "S9")
+    fail("peppa", `loser should hold only the Peppa (S9), holds ${JSON.stringify(g.hands[loser].map((c) => c.id))}`);
   return steps;
 }
 const other = (s) => (s === "A" ? "B" : "A");
