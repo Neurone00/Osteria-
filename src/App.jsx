@@ -4443,8 +4443,8 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
             {[
               ["Uno–Sei", "somma dei dadi di quel numero"],
               ["Bonus", "+35 se in alto (Uno–Sei) arrivi a 63"],
-              ["Tris", "somma di tutti i dadi (almeno 3 uguali)"],
-              ["Poker", "somma di tutti i dadi (almeno 4 uguali)"],
+              ["Tris", "con almeno 3 dadi uguali, vale la somma di tutti e cinque i dadi (non solo dei tre uguali)"],
+              ["Poker", "con almeno 4 dadi uguali, vale la somma di tutti e cinque i dadi (non solo dei quattro uguali)"],
               ["Full", "25 — tre uguali più due uguali"],
               ["Scala", "30 — quattro in fila"],
               ["Scalona", "40 — cinque in fila"],
