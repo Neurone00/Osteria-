@@ -93,11 +93,11 @@ const GAMES = {
     tag: "3 carte a testa",
     line: "Prendi una carta di ugual valore, o una somma. Svuota il tavolo per fare scopa.",
     opts: [
-      { k: "target", label: "Partita a", cycle: [11, 16, 21] },
-      { k: "asso", label: "Asso piglia tutto", cycle: [false, true] },
-      { k: "acepile", label: "Asso solo → in pila", cycle: [false, true] },
-      { k: "rebello", label: "Rebello (re di denari)", cycle: [false, true] },
-      { k: "napola", label: "Napola", cycle: [false, true] },
+      { k: "target", label: "Partita a", cycle: [11, 16, 21], hint: "Punti che chiudono la partita" },
+      { k: "asso", label: "Asso piglia tutto", cycle: [false, true], hint: "L’asso raccoglie tutte le carte del tavolo" },
+      { k: "acepile", label: "Asso solo va in pila", cycle: [false, true], hint: "Un asso giocato su tavolo vuoto va in presa, non resta scoperto" },
+      { k: "rebello", label: "Rebello", cycle: [false, true], hint: "Un punto extra a chi prende il re di denari" },
+      { k: "napola", label: "Napola", cycle: [false, true], hint: "Bonus per l’asso, il due e il tre di denari nella stessa pila" },
     ],
     def: { target: 11, asso: false, acepile: false, rebello: false, napola: false },
   },
@@ -106,10 +106,10 @@ const GAMES = {
     tag: "5 in mano, tavolo vuoto",
     line: "Come la scopa, ma cinque carte in mano e niente sul tavolo: più memoria, più strategia.",
     opts: [
-      { k: "target", label: "Partita a", cycle: [11, 16, 21] },
-      { k: "asso", label: "Asso piglia tutto", cycle: [false, true] },
-      { k: "rebello", label: "Rebello (re di denari)", cycle: [false, true] },
-      { k: "napola", label: "Napola", cycle: [false, true] },
+      { k: "target", label: "Partita a", cycle: [11, 16, 21], hint: "Punti che chiudono la partita" },
+      { k: "asso", label: "Asso piglia tutto", cycle: [false, true], hint: "L’asso raccoglie tutte le carte del tavolo" },
+      { k: "rebello", label: "Rebello", cycle: [false, true], hint: "Un punto extra a chi prende il re di denari" },
+      { k: "napola", label: "Napola", cycle: [false, true], hint: "Bonus per l’asso, il due e il tre di denari nella stessa pila" },
     ],
     def: { target: 11, hand: 5, notable: true, asso: false, acepile: false, rebello: false, napola: false },
   },
@@ -118,8 +118,8 @@ const GAMES = {
     tag: "ruba il mazzo",
     line: "Abbina il tavolo per raccogliere. Abbina la cima di un mazzo e lo rubi tutto.",
     opts: [
-      { k: "sums", label: "Somme del nord", cycle: [false, true] },
-      { k: "pilesum", label: "Mazzo nelle somme", cycle: [false, true] },
+      { k: "sums", label: "Somme del nord", cycle: [false, true], hint: "Prendi anche abbinando la somma di più carte del tavolo" },
+      { k: "pilesum", label: "Mazzo nelle somme", cycle: [false, true], hint: "La cima del mazzo avversario conta nelle somme" },
     ],
     def: { sums: false, pilesum: false },
   },
@@ -127,7 +127,7 @@ const GAMES = {
     name: "Straccia camicia",
     tag: "niente scelte, solo nervi",
     line: "Gira la carta in cima. Asso, due e tre fanno pagare 1, 2 o 3 all’altro.",
-    opts: [{ k: "intl", label: "Variante figure (A4 R3 C2 F1)", cycle: [false, true] }],
+    opts: [{ k: "intl", label: "Variante figure", cycle: [false, true], hint: "Anche le figure fanno pagare: Asso 4, Re 3, Cavallo 2, Fante 1" }],
     def: { intl: false },
   },
   briscola: {
@@ -166,6 +166,9 @@ const isCard = (game) => !GAMES[game].dice;
 const usesRitual = (game) => isCard(game) && !GAMES[game].big;
 // Scopa and its scientific variant share the same engine, scoring and board.
 const scopaLike = (game) => game === "scopa" || game === "scienza";
+// A house rule is a plain on/off toggle when it only cycles false↔true; anything
+// else (the point target, say) is a cycling value shown more prominently.
+const isToggleOpt = (o) => o.cycle.length === 2 && o.cycle.every((v) => typeof v === "boolean");
 
 /* ── scopa ─────────────────────────────────────────────────── */
 // `pre` is a deck the players shuffled and cut by hand; when given it's dealt
@@ -1938,6 +1941,37 @@ function Rule() {
   return <div style={{ height: 1, background: T.line, margin: "18px 0" }} />;
 }
 
+// A collapsible section: a Micro-labelled header with a chevron, tucking its
+// contents away (collapsed by default). Used to hide the per-game score
+// breakdown and the house rules until asked for.
+function Accordion({ label, children, open: openInit = false, right }) {
+  const [open, setOpen] = useState(openInit);
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{ ...plain, width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 0", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}
+      >
+        <Micro>{label}</Micro>
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {right}
+          <span style={{ fontSize: 11, color: T.ink30, transition: "transform 200ms ease", transform: open ? "rotate(180deg)" : "none", lineHeight: 1 }}>▾</span>
+        </span>
+      </button>
+      {open && <div style={{ marginTop: 8 }}>{children}</div>}
+    </div>
+  );
+}
+
+// The pill toggle used for on/off house rules.
+function Switch({ on }) {
+  return (
+    <span style={{ width: 42, height: 25, borderRadius: 999, background: on ? T.ink : T.line, position: "relative", flex: "0 0 auto", transition: "background 180ms ease" }}>
+      <span style={{ position: "absolute", top: 3, left: on ? 20 : 3, width: 19, height: 19, borderRadius: 999, background: T.bg, transition: "left 180ms ease", boxShadow: "0 1px 2px rgba(18,18,18,0.25)" }} />
+    </span>
+  );
+}
+
 // Home-screen "install this app" affordance. On Android/Chrome it fires the
 // captured beforeinstallprompt; if that's dismissed or unavailable (Samsung
 // Internet, a throttled prompt) it falls back to the browser-menu steps. iOS
@@ -2114,32 +2148,44 @@ function Scoreboard({ board, names }) {
   const wins = (k) => games.reduce((s, g) => s + (rec.byGame[g][k] || 0), 0);
   const wA = wins(kA),
     wB = wins(kB);
+  const RED = "#A5342F";
   const big = (n, hi) => (
-    <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 46, lineHeight: 1, color: hi ? "#B8862B" : T.ink }}>{n}</span>
+    <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 54, lineHeight: 1, color: hi ? RED : T.ink }}>{n}</span>
   );
+  const nameStyle = (align) => ({ flex: 1, textAlign: align, fontFamily: BRAND, fontWeight: 600, fontSize: 16, color: T.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
   return (
-    <div style={{ border: `1px solid ${T.line}`, borderRadius: 16, padding: "14px 16px 16px", background: "rgba(18,18,18,0.02)" }}>
+    <div>
       <Micro style={{ textAlign: "center" }}>Testa a testa</Micro>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 8 }}>
-        <div style={{ flex: 1, textAlign: "right", fontFamily: BRAND, fontWeight: 600, fontSize: 15, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nA}</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginTop: 6 }}>
+        <div style={nameStyle("right")}>{nA}</div>
         {big(wA, wA > wB)}
-        <span style={{ color: T.ink30, fontWeight: 600 }}>–</span>
+        <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 24, color: T.ink30 }}>–</span>
         {big(wB, wB > wA)}
-        <div style={{ flex: 1, textAlign: "left", fontFamily: BRAND, fontWeight: 600, fontSize: 15, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nB}</div>
+        <div style={nameStyle("left")}>{nB}</div>
       </div>
       {games.length ? (
-        <div style={{ marginTop: 12, borderTop: `1px solid ${T.line}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-          {games.map((g) => (
-            <div key={g} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.ink60 }}>
-              <span>{GAMES[g].name}</span>
-              <span style={{ color: T.ink, fontVariantNumeric: "tabular-nums" }}>
-                {rec.byGame[g][kA] || 0} – {rec.byGame[g][kB] || 0}
-              </span>
+        <div style={{ marginTop: 10 }}>
+          <Accordion label="Per gioco">
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {games.map((g) => {
+                const a = rec.byGame[g][kA] || 0,
+                  b = rec.byGame[g][kB] || 0;
+                return (
+                  <div key={g} style={{ display: "flex", justifyContent: "space-between", fontFamily: BRAND, fontSize: 14, color: T.ink60 }}>
+                    <span>{GAMES[g].name}</span>
+                    <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+                      <span style={{ color: a > b ? RED : T.ink }}>{a}</span>
+                      <span style={{ color: T.ink30 }}> – </span>
+                      <span style={{ color: b > a ? RED : T.ink }}>{b}</span>
+                    </span>
+                  </div>
+                );
+              })}
             </div>
-          ))}
+          </Accordion>
         </div>
       ) : (
-        <Micro style={{ textAlign: "center", marginTop: 10 }}>prima sfida — che vinca il migliore</Micro>
+        <Micro style={{ textAlign: "center", marginTop: 8 }}>prima sfida — che vinca il migliore</Micro>
       )}
     </div>
   );
@@ -3495,10 +3541,11 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           <p style={{ color: T.ink60, fontSize: 13, lineHeight: 1.45, margin: "12px 0 0" }}>{g.line}</p>
 
           {g.opts.length > 0 && (
-            <>
-              <Micro style={{ marginTop: 20 }}>Regole della casa{host ? "" : " · le sceglie l’host"}</Micro>
-              <RuleChips conf={g} opts={room.opts} setOpt={host ? setOpt : null} />
-            </>
+            <div style={{ marginTop: 20 }}>
+              <Accordion label={`Regole della casa${host ? "" : " · le sceglie l’host"}`}>
+                <RuleChips conf={g} opts={room.opts} setOpt={host ? setOpt : null} />
+              </Accordion>
+            </div>
           )}
 
           {usesRitual(room.game) && (
@@ -3741,36 +3788,56 @@ function Segmented({ options, value, onPick, style }) {
 
 /* House-rule chips. setOpt null → read-only (the guest's view). */
 function RuleChips({ conf, opts, setOpt }) {
+  // Cycling values (the point target) read as tap-to-change tiles with the
+  // value shown big; on/off rules read as labelled switch rows underneath —
+  // two clearly different affordances, each with its plain-language hint.
+  const cyc = conf.opts.filter((o) => !isToggleOpt(o));
+  const tog = conf.opts.filter((o) => isToggleOpt(o));
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-      {conf.opts.map((o) => {
-        const cur = opts[o.k];
-        const i = o.cycle.indexOf(cur);
-        const next = o.cycle[(i + 1) % o.cycle.length];
-        const on = cur === true;
-        return (
-          <button
-            key={o.k}
-            onClick={setOpt ? () => setOpt(o.k, next) : undefined}
-            disabled={!setOpt}
-            style={{
-              border: `1px solid ${on ? T.ink : T.line}`,
-              background: on ? T.ink : "transparent",
-              color: on ? T.bg : T.ink60,
-              borderRadius: 999,
-              padding: "7px 12px",
-              fontSize: 11,
-              fontFamily: "ui-monospace, monospace",
-              cursor: setOpt ? "pointer" : "default",
-              transition: "background 180ms ease, color 180ms ease, border-color 180ms ease",
-              WebkitTapHighlightColor: "transparent",
-            }}
-          >
-            {o.label}
-            {typeof cur === "number" ? ` ${cur}` : ""}
-          </button>
-        );
-      })}
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {cyc.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {cyc.map((o) => {
+            const cur = opts[o.k];
+            const i = o.cycle.indexOf(cur);
+            const next = o.cycle[(i + 1) % o.cycle.length];
+            return (
+              <button
+                key={o.k}
+                onClick={setOpt ? () => setOpt(o.k, next) : undefined}
+                disabled={!setOpt}
+                title={o.hint}
+                style={{ border: `1.5px solid ${T.ink}`, background: "transparent", borderRadius: 12, padding: "8px 14px", cursor: setOpt ? "pointer" : "default", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, minWidth: 84, WebkitTapHighlightColor: "transparent" }}
+              >
+                <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: T.ink60 }}>{o.label}</span>
+                <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, color: T.ink, lineHeight: 1 }}>{String(cur)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {tog.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {tog.map((o, idx) => {
+            const on = opts[o.k] === true;
+            return (
+              <button
+                key={o.k}
+                onClick={setOpt ? () => setOpt(o.k, !on) : undefined}
+                disabled={!setOpt}
+                title={o.hint}
+                style={{ ...plain, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "10px 0", textAlign: "left", cursor: setOpt ? "pointer" : "default", borderTop: idx ? `1px solid ${T.line}` : "none", WebkitTapHighlightColor: "transparent" }}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: "block", fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: on ? T.ink : T.ink60 }}>{o.label}</span>
+                  {o.hint && <span style={{ display: "block", fontSize: 12, color: T.ink30, marginTop: 2, lineHeight: 1.3 }}>{o.hint}</span>}
+                </span>
+                <Switch on={on} />
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
