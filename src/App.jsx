@@ -2065,6 +2065,88 @@ function LeaveDialog({ show, onStay, onGo }) {
   );
 }
 
+// The end-of-game screen as a modal over everything: Vittoria / Sconfitta /
+// Pareggio (or the mid-match "Mano contata"), the score summary, and the two
+// ways on — play again or back to the games.
+function FinaleModal({ show, decided, outcome, room, gs, seat, onAgain, onExit }) {
+  if (!show) return null;
+  const isHost = seat === "A";
+  const nextLabel = room.game === "scopa" && !gs.matchDone ? "Prossima mano" : "Gioca ancora";
+  const win = outcome === "win";
+  const draw = outcome === "draw";
+  const head = !decided ? "Mano contata" : win ? "Vittoria!" : draw ? "Pareggio" : "Sconfitta";
+  const color = !decided ? T.ink : win ? "#B8862B" : draw ? T.ink60 : "#A5342F";
+  const sub = !decided ? null : win ? "Offre l’oste 🍷" : draw ? "Pari e patta — nessuno paga" : "Ci sta una rivincita.";
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(18,18,18,0.5)", display: "grid", placeItems: "center", padding: 20, overflowY: "auto" }}>
+      <div className="fade" style={{ position: "relative", background: T.bg, border: `1px solid ${T.line}`, borderRadius: 20, padding: "22px 20px", maxWidth: 360, width: "100%", boxShadow: "0 24px 60px rgba(18,18,18,0.35)", overflow: "hidden" }}>
+        {decided && win && <Confetti />}
+        <div className="pop" style={{ position: "relative", textAlign: "center", fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(40px, 13vw, 66px)", lineHeight: 0.98, color, letterSpacing: "-0.01em" }}>
+          {head}
+        </div>
+        {sub && <p style={{ textAlign: "center", color: T.ink60, fontSize: 14, margin: "6px 0 0" }}>{sub}</p>}
+        <div style={{ marginTop: 14 }}>
+          <Summary room={room} gs={gs} />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 18 }}>
+          {isHost ? (
+            <Button full onClick={onAgain}>
+              {nextLabel}
+            </Button>
+          ) : (
+            <Micro style={{ textAlign: "center" }}>distribuisce {room.names.A}…</Micro>
+          )}
+          <button onClick={onExit} style={{ ...plain, color: T.ink60, fontSize: 14, padding: "6px 0" }}>
+            Torna ai giochi
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// "End the game?" hand-off. The one who tapped Esci waits; the other is asked to
+// agree. Agreeing sends both back to the game-selection lobby.
+function EndGameOverlay({ room, seat, onAgree, onDecline, onCancel }) {
+  const req = room.endReq;
+  if (!req) return null;
+  const mineReq = req.by === seat;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 78, background: "rgba(18,18,18,0.45)", display: "grid", placeItems: "center", padding: 24 }}>
+      <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "24px 22px 20px", maxWidth: 340, width: "100%", textAlign: "center", boxShadow: "0 20px 50px rgba(18,18,18,0.3)" }}>
+        {mineReq ? (
+          <>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 20, color: T.ink }}>Aspetto {who(room, other(seat))}…</div>
+            <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px 0 16px" }}>Hai chiesto di chiudere la partita. Deve dire di sì anche l’altro.</p>
+            <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 18 }}>
+              <span className="recdot" style={{ animationDelay: "0ms" }} />
+              <span className="recdot" style={{ animationDelay: "140ms" }} />
+              <span className="recdot" style={{ animationDelay: "280ms" }} />
+            </div>
+            <Button kind="line" full onClick={onCancel}>
+              Annulla
+            </Button>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 32 }}>✋</div>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 21, color: T.ink, marginTop: 6 }}>{who(room, req.by)} vuole smettere</div>
+            <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px 0 18px" }}>Chiudete qui e tornate a scegliere un gioco?</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Button full onClick={onAgree}>
+                Sì, ai giochi
+              </Button>
+              <button onClick={onDecline} style={{ ...plain, color: T.ink60, fontSize: 14, padding: "6px 0" }}>
+                No, continuiamo
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Full-screen veil while the socket is down — auto-reconnect runs underneath,
 // with a manual retry in case focus events never fire.
 function ReconnectVeil({ show, busy, onRetry }) {
@@ -2715,6 +2797,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     setSolo(false);
     setScreen("home");
   };
+  // Back to game selection, keeping the table and both players.
+  const toGames = () => publish({ ...room, status: "lobby", gs: null, log: [], ev: null, endReq: null });
+  // Esci mid-game: solo just returns to the lobby; online asks the other player.
+  const requestEnd = () => (solo || !room.names.B ? toGames() : publish({ ...room, endReq: { by: seat } }));
+  const agreeEnd = () => toGames();
+  const declineEnd = () => publish({ ...room, endReq: null });
 
   /* ── reconnect without a reload ──────────────────────────────────────
      A phone that sleeps or backgrounds the tab drops the socket. Rather than
@@ -3236,9 +3324,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     <Frame jolt={jolt}>
       <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
       <ScopaFlash id={scopaFlash} />
-      <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />
+      <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />
       {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
-      <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
+      <EndGameOverlay room={room} seat={seat} onAgree={agreeEnd} onDecline={declineEnd} onCancel={declineEnd} />
+      <FinaleModal show={gs.done} decided={decided} outcome={outcome} room={room} gs={gs} seat={seat} onAgain={again} onExit={toGames} />
 
       {room.game === "camicia" ? (
         <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} showScores={!!room.scores} />
@@ -3271,24 +3360,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         </p>
       )}
 
-      {gs.done && (
-        <div className="fade" style={{ borderTop: `1px solid ${T.line}`, marginTop: 14, paddingTop: decided ? 6 : 14 }}>
-          {decided && <Finale outcome={outcome} />}
-          <Summary room={room} gs={gs} />
-          {seat === "A" ? (
-            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-              <Button full onClick={again}>
-                {room.game === "scopa" && !gs.matchDone ? "Prossima mano" : "Gioca ancora"}
-              </Button>
-              <Button kind="line" onClick={() => publish({ ...room, status: "lobby", gs: null, log: [], ev: null })}>
-                Giochi
-              </Button>
-            </div>
-          ) : (
-            <Micro style={{ marginTop: 14, textAlign: "center" }}>distribuisce {room.names.A}</Micro>
-          )}
-        </div>
-      )}
     </Frame>
   );
 }
@@ -4947,31 +5018,6 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal }) {
         <Button full onClick={() => cutAndDeal(cutAt)}>
           Taglia e distribuisci
         </Button>
-      </div>
-    </div>
-  );
-}
-function Finale({ outcome }) {
-  const win = outcome === "win";
-  const draw = outcome === "draw";
-  const word = win ? "Vittoria" : draw ? "Pareggio" : "Sconfitta";
-  const color = win ? "#B8862B" : draw ? T.ink60 : T.ink30;
-  return (
-    <div style={{ position: "relative", textAlign: "center", padding: "6px 0 14px", overflow: "hidden" }}>
-      {win && <Confetti />}
-      <div
-        className="pop"
-        style={{
-          position: "relative",
-          fontFamily: BRAND,
-          fontWeight: 700,
-          fontSize: "clamp(48px, 17vw, 80px)",
-          lineHeight: 0.95,
-          letterSpacing: "-0.01em",
-          color,
-        }}
-      >
-        {word}
       </div>
     </div>
   );
