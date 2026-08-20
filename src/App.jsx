@@ -161,9 +161,19 @@ const GAMES = {
     opts: [],
     def: {},
   },
+  peppa: {
+    name: "Peppa Tencia",
+    tag: "chi resta con la Peppa",
+    line: "Si tolgono tre cavalli: uno resta spaiato, la Peppa. Scarta le coppie, poi pesca a caso dall’altro. Chi resta con la Peppa perde.",
+    instant: true, // its own 37-card deck — no shuffle/cut ritual
+    opts: [],
+    def: {},
+  },
 };
 const isCard = (game) => !GAMES[game].dice;
-const usesRitual = (game) => isCard(game) && !GAMES[game].big;
+// Scala (its own big deck) and Peppa (a trimmed 37-card deck) skip the 40-card
+// shuffle-and-cut ritual and are dealt straight away.
+const usesRitual = (game) => isCard(game) && !GAMES[game].big && !GAMES[game].instant;
 // Scopa and its scientific variant share the same engine, scoring and board.
 const scopaLike = (game) => game === "scopa" || game === "scienza";
 // A house rule is a plain on/off toggle when it only cycles false↔true; anything
@@ -520,6 +530,103 @@ function camiciaFlip(gs, seat, o) {
     g.win = null;
   }
   return { g, kind, ev, card };
+}
+
+/* ── peppa tencia (old maid) ──────────────────────────────────
+   The Italian "vecchia". Three of one rank are pulled from the deck, leaving a
+   single card with no possible partner — the Peppa. All 37 remaining cards are
+   dealt out, each hand throws down every rank-pair on sight, then the players
+   take turns drawing one blind card from the other's hand and pairing it off.
+   The one left holding the Peppa when everything else is gone loses.
+
+   Why it always ends: after the opening shed, no hand holds two of a rank, so a
+   rank in play sits one card in each hand (its other pair already gone) — apart
+   from the odd Peppa. So on your turn every card you can draw from the other
+   hand is a rank you also hold and pairs at once, except the Peppa. Each real
+   draw sheds a pair; the Peppa can only be passed back and forth a bounded
+   number of times. No cycle guard needed. */
+const PEPPA_ID = "B9"; // the Cavallo di Bastoni is kept back as the lone card
+
+function makePeppaDeck() {
+  // Remove the other three Cavalli (v === 9), keeping only PEPPA_ID: rank 9 is
+  // left with exactly one card, every other rank still has its two pairs.
+  return makeDeck().filter((c) => c.v !== 9 || c.id === PEPPA_ID);
+}
+
+// Throw down every rank-pair in a hand. Four of a rank is two pairs; an odd
+// card of a rank stays. Returns { hand, dropped } — dropped is the flat list of
+// shed cards, for the pile count.
+function peppaShed(hand) {
+  const byV = {};
+  for (const c of hand) (byV[c.v] = byV[c.v] || []).push(c);
+  const keep = [];
+  const dropped = [];
+  for (const v in byV) {
+    const group = byV[v];
+    const pairs = Math.floor(group.length / 2) * 2;
+    for (let i = 0; i < pairs; i++) dropped.push(group[i]);
+    for (let i = pairs; i < group.length; i++) keep.push(group[i]);
+  }
+  return { hand: keep, dropped };
+}
+
+// Any empty hand ends it: that player got rid of everything and wins; the other
+// is stuck with the Peppa. (The total is always odd, so one hand empties.)
+function settlePeppa(g) {
+  if (g.done) return;
+  const eA = g.hands.A.length === 0;
+  const eB = g.hands.B.length === 0;
+  if (eA || eB) {
+    g.done = true;
+    g.matchDone = true;
+    g.win = eA ? "A" : "B";
+    g.tally[g.win] += 1;
+  }
+}
+
+function dealPeppa(dealer, tally) {
+  const d = shuffle(makePeppaDeck());
+  const half = Math.ceil(d.length / 2);
+  const a = peppaShed(d.slice(0, half));
+  const b = peppaShed(d.slice(half));
+  const g = {
+    hands: { A: a.hand, B: b.hand },
+    shed: { A: a.dropped.length, B: b.dropped.length }, // how many cards each has thrown down
+    turn: other(dealer),
+    dealer,
+    last: null, // { seat, from, card, paired } — the most recent draw, for the reveal
+    tally: tally || { A: 0, B: 0 },
+    done: false,
+    matchDone: false,
+    win: null,
+  };
+  settlePeppa(g);
+  return g;
+}
+
+// `seat` draws the card at `idx` (a face-down slot) from the other hand. If it
+// matches a rank already in hand, both go down as a pair; the turn then passes
+// to the player just drawn from, who draws back.
+function peppaDraw(gs, seat, idx) {
+  const g = clone(gs);
+  if (g.turn !== seat || g.done) return null;
+  const from = other(seat);
+  const src = g.hands[from];
+  if (idx < 0 || idx >= src.length) return null;
+  const card = src.splice(idx, 1)[0];
+  const j = g.hands[seat].findIndex((c) => c.v === card.v);
+  let paired = false;
+  if (j >= 0) {
+    g.hands[seat].splice(j, 1);
+    g.shed[seat] += 2;
+    paired = true;
+  } else {
+    g.hands[seat].push(card);
+  }
+  g.last = { seat, from, card, paired };
+  g.turn = from;
+  settlePeppa(g);
+  return { g, kind: paired ? "scopa" : "lay", ev: { t: paired ? "ppair" : "pdraw", v: card.v, s: card.s }, card };
 }
 
 /* ── briscola ──────────────────────────────────────────────────
@@ -1603,6 +1710,10 @@ function describe(ev, french) {
       return `apre con il ${r(ev.v)} di ${suitName(ev.s, french)}`;
     case "btake":
       return `risponde con il ${r(ev.v)} di ${suitName(ev.s, french)}`;
+    case "pdraw":
+      return `pesca una carta — tiene il ${r(ev.v)} di ${suitName(ev.s, french)}`;
+    case "ppair":
+      return `pesca il ${r(ev.v)} e scarta la coppia`;
     default:
       return "";
   }
@@ -3263,6 +3374,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealYahtzee(dealer, cont?.tally || null)
       : game === "scala"
       ? dealScala(dealer, cont?.tally || null)
+      : game === "peppa"
+      ? dealPeppa(dealer, cont?.tally || null)
       : dealCamicia(cont?.tally || null, deck);
 
   const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });
@@ -3289,7 +3402,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     // starts fresh from seat A.
     if (scopaLike(room.game)) beginPrepare(g.matchDone ? "A" : other(g.dealer), g.matchDone ? null : { scores: g.scores });
     else if (usesRitual(room.game)) beginPrepare(other(g.dealer), { tally: g.tally });
-    else if (GAMES[room.game].big) dealNow(dealGame(room.game, room.opts, other(g.dealer), { tally: g.tally })); // scala
+    else if (GAMES[room.game].big || GAMES[room.game].instant) dealNow(dealGame(room.game, room.opts, other(g.dealer), { tally: g.tally })); // scala, peppa
     else dealNow(dealGame(room.game, room.opts, g.win ? other(g.win) : "A", { tally: g.tally })); // dice
   };
 
@@ -3622,6 +3735,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Yahtzee room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "scala" ? (
         <Scala room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+      ) : room.game === "peppa" ? (
+        <Peppa room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} />
       ) : (
         <Board
           room={room}
@@ -4151,6 +4266,92 @@ function PileView({ room, gs, seat, label, faceUp, slamId, right }) {
         )}
       </div>
       <Micro style={{ marginTop: 5 }}>{label}</Micro>
+    </div>
+  );
+}
+
+/* ── peppa tencia (old maid) ── */
+function Peppa({ room, gs, seat, mine, slamId, commit }) {
+  const opp = other(seat);
+  const myTurn = mine; // mine === (gs.turn === seat && !gs.done)
+  const draw = (idx) => {
+    if (myTurn) commit(peppaDraw(gs, seat, idx));
+  };
+  const last = gs.last;
+  const lastCard = last && last.card ? last.card : null;
+  const status = gs.done
+    ? gs.win
+      ? gs.win === seat
+        ? "L’altro resta con la Peppa — hai vinto!"
+        : "Resti tu con la Peppa…"
+      : "Pareggio"
+    : myTurn
+    ? "Pesca una carta coperta dall’altro"
+    : `Pesca ${who(room, gs.turn)}`;
+
+  const back = (n, live, onPick) => (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", maxWidth: 320 }}>
+      {n === 0 && <Micro>mano vuota</Micro>}
+      {Array.from({ length: n }).map((_, i) => (
+        <button
+          key={i}
+          onClick={live ? () => onPick(i) : undefined}
+          disabled={!live}
+          style={{
+            padding: 0,
+            border: "none",
+            background: "transparent",
+            cursor: live ? "pointer" : "default",
+            transform: live ? "translateY(0)" : "none",
+            transition: "transform 140ms ease",
+            WebkitTapHighlightColor: "transparent",
+          }}
+          className={live ? "freshpulse" : ""}
+        >
+          <Back size="xs" />
+        </button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
+      {/* opponent — their hand is face-down; on your turn you pick one to draw */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
+        <Micro>{gs.hands[opp].length} in mano · {gs.shed[opp]} scartate</Micro>
+      </div>
+      {back(gs.hands[opp].length, myTurn, draw)}
+
+      {/* the middle — the last card drawn is revealed here */}
+      <div style={{ flex: 1, margin: "16px 0", minHeight: 120, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
+        {lastCard ? (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <Card card={lastCard} size="lg" rot={0} slam={slamId === lastCard.id} enter />
+            <Micro>{last.paired ? "coppia scartata" : `${who(room, last.seat)} la tiene`}</Micro>
+          </div>
+        ) : (
+          <Micro>nessuna pescata</Micro>
+        )}
+        <div key={`${gs.done}-${gs.turn}`} className="swap" style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.02em", textAlign: "center" }}>
+          {status}
+        </div>
+      </div>
+
+      {/* your hand, face up */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>
+          {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
+        </div>
+        <Micro>{gs.hands[seat].length} in mano · {gs.shed[seat]} scartate</Micro>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", minHeight: 66, opacity: !myTurn && !gs.done ? 0.85 : 1 }}>
+        {gs.hands[seat].length === 0 && <Micro>mano vuota</Micro>}
+        {gs.hands[seat].map((c) => (
+          <Card key={c.id} card={c} size="xs" rot={0} slam={slamId === c.id} />
+        ))}
+      </div>
+      <Micro style={{ textAlign: "center", marginTop: 12 }}>mani {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}</Micro>
     </div>
   );
 }

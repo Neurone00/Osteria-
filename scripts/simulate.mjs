@@ -35,6 +35,7 @@ const EXPORTS = [
   "dealScopa", "scopaOptions", "scopaPlay", "scoreScopa", "primiera",
   "dealRuba", "rubaOptions", "rubaPlay",
   "dealCamicia", "camiciaFlip", "demand",
+  "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed",
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
@@ -165,6 +166,49 @@ function playCamicia(o) {
     fail("camicia", `${g.win} won while the loser still held ${g.decks[g.win === "A" ? "B" : "A"].length} cards`);
   return { steps, draw: g.win === null };
 }
+
+/* ── peppa tencia (old maid) ────────────────────────────────── */
+// A trimmed 37-card deck, so its own census: cards in the two hands plus the
+// counts already shed must always total 37, and the hands must never duplicate
+// a card. Every game must end with exactly one player holding the lone Peppa.
+function playPeppa() {
+  let g = R.dealPeppa("A", { A: 0, B: 0 });
+  if (R.makePeppaDeck().length !== 37) return fail("peppa", `deck has ${R.makePeppaDeck().length} cards, expected 37`);
+  const check = (label) => {
+    const ids = [...g.hands.A, ...g.hands.B].map((c) => c.id);
+    const total = ids.length + g.shed.A + g.shed.B;
+    if (total !== 37) fail(label, `${total} cards accounted for, expected 37`);
+    if (new Set(ids).size !== ids.length) fail(label, "a card is in both hands");
+    // no hand may hold two of the same rank once the opening shed is done
+    for (const s of ["A", "B"]) {
+      const seen = new Set();
+      for (const c of g.hands[s]) {
+        if (seen.has(c.v)) return fail(label, `${s} holds an un-shed pair of ${c.v}`);
+        seen.add(c.v);
+      }
+    }
+  };
+  check("peppa deal");
+  let steps = 0;
+  const MAX = 400;
+  while (!g.done) {
+    if (++steps > MAX) return fail("peppa", `no end after ${MAX} draws`);
+    const seat = g.turn;
+    const src = g.hands[other(seat)];
+    if (!src.length) return fail("peppa", `${seat} on turn but opponent has no cards — stuck`);
+    const res = R.peppaDraw(g, seat, Math.floor(Math.random() * src.length));
+    if (!res) return fail("peppa", "peppaDraw refused a valid slot");
+    g = res.g;
+    check("peppa mid-hand");
+  }
+  if (g.win == null) return fail("peppa", "ended with no winner");
+  const loser = g.win === "A" ? "B" : "A";
+  if (g.hands[g.win].length !== 0) fail("peppa", `${g.win} 'won' still holding ${g.hands[g.win].length} cards`);
+  if (g.hands[loser].length !== 1 || g.hands[loser][0].id !== "B9")
+    fail("peppa", `loser should hold only the Peppa (B9), holds ${JSON.stringify(g.hands[loser].map((c) => c.id))}`);
+  return steps;
+}
+const other = (s) => (s === "A" ? "B" : "A");
 
 /* ── briscola ───────────────────────────────────────────────── */
 const brisCensus = (g, label) =>
@@ -454,6 +498,7 @@ const runs = [
   ["rubamazzo, mazzo nelle somme", () => playRuba({ sums: true, pilesum: true })],
   ["camicia, italian (A/2/3)", () => playCamicia({ intl: false })],
   ["camicia, international (A4 R3 C2 F1)", () => playCamicia({ intl: true })],
+  ["peppa tencia (old maid)", () => playPeppa()],
   ["briscola", () => playBriscola()],
   ["perudo", () => playPerudo()],
   ["yahtzee", () => playYahtzee()],
