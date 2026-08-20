@@ -188,6 +188,7 @@ function dealScopa(dealer, scores, o, pre) {
     hands: { A: deck.splice(0, H), B: deck.splice(0, H) },
     piles: { A: [], B: [] },
     scope: { A: 0, B: 0 },
+    scopeCards: { A: [], B: [] }, // the cards swept on each scopa, for the summary
     turn: other(dealer),
     dealer,
     last: null,
@@ -287,6 +288,7 @@ function scopaPlay(gs, seat, cardId, take, o) {
     const finalPlay = g.deck.length === 0 && g.hands.A.length === 0 && g.hands.B.length === 0;
     if (g.table.length === 0 && !finalPlay && !aceSweep) {
       g.scope[seat] += 1;
+      (g.scopeCards[seat] || (g.scopeCards[seat] = [])).push([...got, card].map((c) => ({ s: c.s, v: c.v })));
       kind = "scopa";
       ev = { t: "scopa" };
     } else {
@@ -2470,6 +2472,15 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       } catch {}
     }
   }, []);
+
+  /* ── don't replay an animation that was already baked into the state we
+     joined or restored into (e.g. the last scopa of a persisted hand) ── */
+  const animArmed = useRef(false);
+  useEffect(() => {
+    if (animArmed.current || !room) return;
+    animArmed.current = true;
+    seenAnim.current = room.anim?.id ?? null;
+  }, [room]);
 
   /* ── animation trigger, local and remote ── */
   useEffect(() => {
@@ -5029,6 +5040,24 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal }) {
     shuffleTap(s);
     buzz("lay");
   };
+  // Hold the deck to keep shuffling rapidly; a quick tap still shuffles once.
+  // The interval calls through a ref so each tick uses the latest deck state
+  // (otherwise a stale closure would re-shuffle from the same starting count).
+  const tapRef = useRef(tap);
+  tapRef.current = tap;
+  const holdRef = useRef(null);
+  const startHold = () => {
+    tapRef.current();
+    if (holdRef.current) return;
+    holdRef.current = setInterval(() => tapRef.current(), 110);
+  };
+  const stopHold = () => {
+    if (holdRef.current) {
+      clearInterval(holdRef.current);
+      holdRef.current = null;
+    }
+  };
+  useEffect(() => () => stopHold(), []);
 
   // Cut: drag across the spread to choose where to lift.
   const [cutAt, setCutAt] = useState(20);
@@ -5074,16 +5103,23 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal }) {
       <div className="fade" style={{ textAlign: "center", paddingTop: 8 }}>
         <Micro>Mescola</Micro>
         <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>
-          Tocca il mazzo per mescolare — più tocchi, più si mescola. Il ritmo delle tue dita decide le carte.
+          Tocca il mazzo per mescolare — o tienilo premuto per mescolare veloce. Il ritmo delle tue dita decide le carte.
         </p>
         <button
-          onClick={tap}
+          onPointerDown={startHold}
+          onPointerUp={stopHold}
+          onPointerLeave={stopHold}
+          onPointerCancel={stopHold}
+          onContextMenu={(e) => e.preventDefault()}
           style={{
             background: "none",
             border: "none",
             padding: 0,
             margin: "26px 0 8px",
             cursor: "pointer",
+            touchAction: "manipulation",
+            userSelect: "none",
+            WebkitUserSelect: "none",
             WebkitTapHighlightColor: "transparent",
           }}
         >
@@ -5160,11 +5196,6 @@ function Summary({ room, gs }) {
   if (scopaLike(room.game) && gs.summary)
     return (
       <div>
-        {!gs.matchDone && (
-          <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.01em", marginBottom: 10, fontFamily: BRAND }}>
-            Punteggio
-          </div>
-        )}
         {gs.summary.lines.map((l, i) => (
           <div
             key={i}
@@ -5176,6 +5207,26 @@ function Summary({ room, gs }) {
             </span>
           </div>
         ))}
+        {gs.scopeCards &&
+          ["A", "B"].map(
+            (s) =>
+              (gs.scopeCards[s] || []).length > 0 && (
+                <div key={s} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", flexWrap: "wrap" }}>
+                  <Micro style={{ minWidth: 54 }}>Scope {who(room, s)}</Micro>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {gs.scopeCards[s].map((cards, i) => (
+                      <div key={i} style={{ display: "flex" }}>
+                        {cards.map((c, j) => (
+                          <div key={j} style={{ marginLeft: j ? -20 : 0 }}>
+                            <Card card={c} size="xs" rot={0} />
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+          )}
         <div
           style={{
             display: "flex",
