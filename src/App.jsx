@@ -136,8 +136,17 @@ const GAMES = {
     opts: [],
     def: {},
   },
+  scala: {
+    name: "Scala 40",
+    tag: "aprire a quaranta",
+    line: "Due mazzi francesi più due jolly. Cala tris e scale, apri con almeno 40 punti, poi attacca e svuota la mano.",
+    big: true, // its own 106-card deck — no shuffle/cut ritual
+    opts: [],
+    def: {},
+  },
 };
 const isCard = (game) => !GAMES[game].dice;
+const usesRitual = (game) => isCard(game) && !GAMES[game].big;
 
 /* ── scopa ─────────────────────────────────────────────────── */
 // `pre` is a deck the players shuffled and cut by hand; when given it's dealt
@@ -716,6 +725,166 @@ function yahtScore(gs, seat, cat) {
     g.win = w;
   }
   return { g, kind: "scopa", ev: { t: "score", cat } };
+}
+
+/* ── scala 40 ──────────────────────────────────────────────────
+   Two French decks + two jokers (106 cards), 13 each. Draw from stock or the
+   discard, lay sets (same rank, distinct suits) and runs (consecutive same suit,
+   ace low or high, no K-A-2 wrap), then discard. Your first lay-down must total
+   ≥40 points. After opening you may lay more and attach cards to any meld. Empty
+   your hand to win. At most one joker per meld. */
+const s40SlotVal = (r) => (r === 14 ? 11 : r === 1 ? 1 : r >= 11 ? 10 : r); // r 1..14, 1=ace low 14=ace high
+const s40SetVal = (v) => (v === 1 ? 11 : v >= 11 ? 10 : v);
+const s40Score = (c) => (c.joker ? 25 : c.v === 1 ? 11 : c.v >= 11 ? 10 : c.v);
+function analyzeMeld(cards) {
+  const jokers = cards.filter((c) => c.joker).length;
+  const nats = cards.filter((c) => !c.joker);
+  if (cards.length < 3 || jokers > 1 || nats.length === 0) return { ok: false };
+  if (nats.every((c) => c.v === nats[0].v)) {
+    const suits = new Set(nats.map((c) => c.s));
+    if (suits.size === nats.length && cards.length <= 4) return { ok: true, kind: "set", value: cards.length * s40SetVal(nats[0].v) };
+  }
+  if (nats.every((c) => c.s === nats[0].s)) {
+    for (const aceHigh of [false, true]) {
+      const pos = nats.map((c) => (c.v === 1 ? (aceHigh ? 14 : 1) : c.v)).sort((a, b) => a - b);
+      if (new Set(pos).size !== pos.length) continue;
+      const len = cards.length;
+      for (let lo = pos[pos.length - 1] - len + 1; lo <= pos[0]; lo++) {
+        const hi = lo + len - 1;
+        if (lo < 1 || hi > 14 || pos[0] < lo || pos[pos.length - 1] > hi) continue;
+        const natSet = new Set(pos);
+        let gaps = 0;
+        for (let r = lo; r <= hi; r++) if (!natSet.has(r)) gaps++;
+        if (gaps !== jokers) continue;
+        let value = 0;
+        for (let r = lo; r <= hi; r++) value += s40SlotVal(r);
+        return { ok: true, kind: "run", value };
+      }
+    }
+  }
+  return { ok: false };
+}
+function makeS40Deck() {
+  const d = [];
+  for (let copy = 0; copy < 2; copy++)
+    for (const s of ["H", "D", "C", "S"]) for (let v = 1; v <= 13; v++) d.push({ id: `${s}${v}_${copy}`, s, v });
+  d.push({ id: "JK0", joker: true }, { id: "JK1", joker: true });
+  return d;
+}
+const s40Points = (h) => h.reduce((s, c) => s + s40Score(c), 0);
+const s40ById = (hand, ids) => ids.map((id) => hand.find((c) => c.id === id));
+function s40CheckOut(g, seat) {
+  if (g.hands[seat].length === 0) {
+    g.done = true;
+    g.matchDone = true;
+    g.win = seat;
+    g.tally[seat] += 1;
+    g.penalty = s40Points(g.hands[other(seat)]);
+  }
+}
+function dealScala(dealer, tally, pre) {
+  const deck = pre ? pre.slice() : shuffle(makeS40Deck());
+  const hands = { A: deck.splice(0, 13), B: deck.splice(0, 13) };
+  const discard = [deck.pop()];
+  return {
+    deck,
+    discard,
+    hands,
+    melds: [],
+    opened: { A: false, B: false },
+    turn: other(dealer),
+    dealer,
+    phase: "draw",
+    tally: tally || { A: 0, B: 0 },
+    done: false,
+    matchDone: false,
+    win: null,
+    penalty: null,
+  };
+}
+function s40Draw(gs, seat, source) {
+  const g = clone(gs);
+  if (g.phase !== "draw" || g.turn !== seat || g.done) return null;
+  let card;
+  if (source === "discard") {
+    if (!g.discard.length) return null;
+    card = g.discard.pop();
+  } else {
+    if (!g.deck.length) {
+      const top = g.discard.pop();
+      g.deck = shuffle(g.discard);
+      g.discard = top ? [top] : [];
+    }
+    if (!g.deck.length) return null;
+    card = g.deck.pop();
+  }
+  g.hands[seat].push(card);
+  g.phase = "meld";
+  return { g, kind: "take", ev: { t: "draw", source } };
+}
+function s40Open(gs, seat, melds) {
+  const g = clone(gs);
+  if (g.phase !== "meld" || g.turn !== seat || g.opened[seat] || g.done) return null;
+  const used = new Set();
+  let value = 0;
+  const laid = [];
+  for (const m of melds) {
+    if (m.ids.some((id) => used.has(id))) return null;
+    const cards = s40ById(g.hands[seat], m.ids);
+    if (cards.some((c) => !c)) return null;
+    const a = analyzeMeld(cards);
+    if (!a.ok) return null;
+    value += a.value;
+    m.ids.forEach((id) => used.add(id));
+    laid.push({ cards, kind: a.kind });
+  }
+  if (value < 40) return null;
+  g.hands[seat] = g.hands[seat].filter((c) => !used.has(c.id));
+  for (const l of laid) g.melds.push({ id: "m" + g.melds.length + seat, cards: l.cards, kind: l.kind, owner: seat });
+  g.opened[seat] = true;
+  s40CheckOut(g, seat);
+  return { g, kind: "scopa", ev: { t: "open", value } };
+}
+function s40Meld(gs, seat, ids) {
+  const g = clone(gs);
+  if (g.phase !== "meld" || g.turn !== seat || !g.opened[seat] || g.done) return null;
+  const cards = s40ById(g.hands[seat], ids);
+  if (cards.some((c) => !c)) return null;
+  const a = analyzeMeld(cards);
+  if (!a.ok) return null;
+  const set = new Set(ids);
+  g.hands[seat] = g.hands[seat].filter((c) => !set.has(c.id));
+  g.melds.push({ id: "m" + g.melds.length + seat, cards, kind: a.kind, owner: seat });
+  s40CheckOut(g, seat);
+  return { g, kind: "lay", ev: { t: "meld" } };
+}
+function s40LayOff(gs, seat, cardId, meldId) {
+  const g = clone(gs);
+  if (g.phase !== "meld" || g.turn !== seat || !g.opened[seat] || g.done) return null;
+  const card = g.hands[seat].find((c) => c.id === cardId);
+  const meld = g.melds.find((m) => m.id === meldId);
+  if (!card || !meld) return null;
+  const a = analyzeMeld([...meld.cards, card]);
+  if (!a.ok) return null;
+  meld.cards = [...meld.cards, card];
+  meld.kind = a.kind;
+  g.hands[seat] = g.hands[seat].filter((c) => c.id !== cardId);
+  s40CheckOut(g, seat);
+  return { g, kind: "take", ev: { t: "layoff" } };
+}
+function s40Discard(gs, seat, cardId) {
+  const g = clone(gs);
+  if (g.phase !== "meld" || g.turn !== seat || g.done) return null;
+  const card = g.hands[seat].find((c) => c.id === cardId);
+  if (!card) return null;
+  g.hands[seat] = g.hands[seat].filter((c) => c.id !== cardId);
+  g.discard.push(card);
+  if (g.hands[seat].length === 0) s40CheckOut(g, seat);
+  else {
+    g.turn = other(seat);
+    g.phase = "draw";
+  }
+  return { g, kind: "lay", ev: { t: "discard" } };
 }
 
 /* ═══════════════════════════ feedback ═══════════════════════════ */
@@ -2138,6 +2307,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealPerudo(dealer, cont?.tally || null)
       : game === "yahtzee"
       ? dealYahtzee(dealer, cont?.tally || null)
+      : game === "scala"
+      ? dealScala(dealer, cont?.tally || null)
       : dealCamicia(cont?.tally || null, deck);
 
   const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });
@@ -2156,12 +2327,13 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     publish({ ...room, status: "play", gs: gsNew, prep: null, log: [], ev: null, anim: null });
   };
 
-  const start = () => (isCard(room.game) ? beginPrepare("A", null) : dealNow(dealGame(room.game, room.opts, "A", null)));
+  const start = () => (usesRitual(room.game) ? beginPrepare("A", null) : dealNow(dealGame(room.game, room.opts, "A", null)));
   const again = () => {
     const g = room.gs;
     if (room.game === "scopa" && !g.matchDone) dealNow(dealGame("scopa", room.opts, other(g.dealer), { scores: g.scores }));
     else if (room.game === "scopa") beginPrepare("A", null);
-    else if (isCard(room.game)) beginPrepare(other(g.dealer), { tally: g.tally });
+    else if (usesRitual(room.game)) beginPrepare(other(g.dealer), { tally: g.tally });
+    else if (GAMES[room.game].big) dealNow(dealGame(room.game, room.opts, other(g.dealer), { tally: g.tally })); // scala
     else dealNow(dealGame(room.game, room.opts, g.win ? other(g.win) : "A", { tally: g.tally })); // dice
   };
 
@@ -2378,7 +2550,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             </>
           )}
 
-          {isCard(room.game) && (
+          {usesRitual(room.game) && (
             <>
               <Micro style={{ marginTop: 20 }}>Punti e prese{host ? "" : " · li decide l’host"}</Micro>
               <Segmented
@@ -2442,6 +2614,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Perudo room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "yahtzee" ? (
         <Yahtzee room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+      ) : room.game === "scala" ? (
+        <Scala room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : (
         <Board
           room={room}
@@ -3501,6 +3675,208 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
   );
 }
 
+/* ── scala 40 ── */
+const S40_SUIT = { H: { g: "♥", c: "#B23A2E" }, D: { g: "♦", c: "#B23A2E" }, C: { g: "♣", c: "#1A1A1A" }, S: { g: "♠", c: "#1A1A1A" } };
+const s40lbl = (v) => ({ 1: "A", 11: "J", 12: "Q", 13: "K" }[v] || String(v));
+function S40Card({ card, w = 32, h = 46, sel, dim, onClick }) {
+  const style = {
+    width: w,
+    height: h,
+    borderRadius: 5,
+    background: "#fff",
+    border: `1px solid ${sel ? "#B8862B" : T.line}`,
+    boxShadow: sel ? "0 6px 13px rgba(18,18,18,0.22)" : "0 1px 3px rgba(18,18,18,0.14)",
+    position: "relative",
+    flexShrink: 0,
+    padding: 0,
+    cursor: onClick ? "pointer" : "default",
+    transform: sel ? "translateY(-9px)" : "none",
+    transition: "transform 130ms ease, box-shadow 130ms ease, border-color 130ms ease",
+    opacity: dim ? 0.4 : 1,
+    WebkitTapHighlightColor: "transparent",
+  };
+  if (card.joker)
+    return (
+      <button onClick={onClick} disabled={!onClick} style={style}>
+        <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", color: "#B8862B", fontWeight: 800, fontSize: h * 0.4, fontFamily: BRAND }}>
+          ★
+        </span>
+      </button>
+    );
+  const su = S40_SUIT[card.s];
+  return (
+    <button onClick={onClick} disabled={!onClick} style={style}>
+      <span style={{ position: "absolute", top: 2, left: 4, fontSize: h * 0.27, fontWeight: 800, color: su.c, lineHeight: 1, fontFamily: BRAND }}>
+        {s40lbl(card.v)}
+      </span>
+      <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", fontSize: h * 0.4, color: su.c }}>{su.g}</span>
+    </button>
+  );
+}
+
+function Scala({ room, gs, seat, mine, commit }) {
+  const opp = other(seat);
+  const [sel, setSel] = useState([]);
+  const [staged, setStaged] = useState([]);
+  useEffect(() => {
+    setSel([]);
+    setStaged([]);
+  }, [gs.turn, gs.phase, gs.done]);
+  const hand = gs.hands[seat];
+  const stagedIds = new Set(staged.flatMap((m) => m.ids));
+  const selCards = sel.map((id) => hand.find((c) => c.id === id)).filter(Boolean);
+  const selMeld = selCards.length >= 3 ? analyzeMeld(selCards) : { ok: false };
+  const opened = gs.opened[seat];
+  const stagedTotal = staged.reduce((s, m) => s + m.value, 0);
+
+  const toggle = (id) => {
+    if (stagedIds.has(id)) return;
+    setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  };
+  const draw = (source) => {
+    if (mine && gs.phase === "draw") commit(s40Draw(gs, seat, source));
+  };
+  const layOff = (meldId) => {
+    if (opened && sel.length === 1 && gs.phase === "meld") commit(s40LayOff(gs, seat, sel[0], meldId));
+  };
+
+  return (
+    <div>
+      {/* opponent */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
+        <Micro>
+          {gs.hands[opp].length} carte{gs.opened[opp] ? " · aperto" : ""}
+        </Micro>
+      </div>
+
+      {/* table melds */}
+      <div style={{ margin: "12px 0" }}>
+        <Micro>Tavolo</Micro>
+        <div style={{ display: "flex", gap: 12, overflowX: "auto", padding: "8px 2px", minHeight: 64 }}>
+          {gs.melds.length === 0 && <Micro style={{ padding: "18px 0" }}>ancora niente in tavola</Micro>}
+          {gs.melds.map((m) => {
+            const target = opened && sel.length === 1 && gs.phase === "meld";
+            return (
+              <div
+                key={m.id}
+                onClick={target ? () => layOff(m.id) : undefined}
+                style={{
+                  display: "flex",
+                  flexShrink: 0,
+                  padding: 4,
+                  borderRadius: 8,
+                  border: `1px solid ${target ? T.ink : "transparent"}`,
+                  cursor: target ? "pointer" : "default",
+                }}
+              >
+                {m.cards.map((c, i) => (
+                  <div key={c.id} style={{ marginLeft: i ? -16 : 0 }}>
+                    <S40Card card={c} w={26} h={38} />
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* stock + discard */}
+      <div style={{ display: "flex", justifyContent: "center", gap: 26, alignItems: "flex-end", margin: "4px 0 14px" }}>
+        <div style={{ textAlign: "center" }}>
+          <div onClick={() => draw("stock")} style={{ cursor: mine && gs.phase === "draw" ? "pointer" : "default", display: "inline-block", outline: mine && gs.phase === "draw" ? `2px solid ${T.ink}` : "none", outlineOffset: 3, borderRadius: 7 }}>
+            <Back size="md" stack />
+          </div>
+          <Micro style={{ marginTop: 6 }}>mazzo {gs.deck.length}</Micro>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div onClick={() => draw("discard")} style={{ cursor: mine && gs.phase === "draw" && gs.discard.length ? "pointer" : "default", display: "inline-block", outline: mine && gs.phase === "draw" ? `2px solid ${T.ink}` : "none", outlineOffset: 3, borderRadius: 7 }}>
+            {gs.discard.length ? <S40Card card={gs.discard[gs.discard.length - 1]} w={54} h={76} /> : <Ghost size="md" />}
+          </div>
+          <Micro style={{ marginTop: 6 }}>scarti</Micro>
+        </div>
+      </div>
+
+      {/* your hand */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 6 }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
+          {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
+        </div>
+        <Micro>{hand.length} carte</Micro>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, justifyContent: "center" }}>
+        {hand.map((c) => (
+          <S40Card
+            key={c.id}
+            card={c}
+            w={34}
+            h={48}
+            sel={sel.includes(c.id)}
+            dim={stagedIds.has(c.id)}
+            onClick={mine && gs.phase === "meld" ? () => toggle(c.id) : undefined}
+          />
+        ))}
+      </div>
+
+      {/* actions */}
+      <div style={{ marginTop: 16 }}>
+        {!mine && <Micro style={{ textAlign: "center" }}>tocca a {who(room, opp)}</Micro>}
+        {mine && gs.phase === "draw" && <Micro style={{ textAlign: "center" }}>pesca dal mazzo o dagli scarti</Micro>}
+        {mine && gs.phase === "meld" && (
+          <div>
+            {selMeld.ok && (
+              <Micro style={{ textAlign: "center", color: T.ink }}>
+                {selMeld.kind === "set" ? "tris" : "scala"} valida · {selMeld.value} punti
+              </Micro>
+            )}
+            {!opened && staged.length > 0 && (
+              <Micro style={{ textAlign: "center", marginTop: 4 }}>
+                apertura: {stagedTotal}/40{stagedTotal < 40 ? " — servono altre combinazioni" : " — puoi aprire"}
+              </Micro>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              {opened ? (
+                <Button full disabled={!selMeld.ok} onClick={() => commit(s40Meld(gs, seat, sel))}>
+                  Cala
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    kind="line"
+                    disabled={!selMeld.ok}
+                    onClick={() => {
+                      setStaged((s) => [...s, { ids: sel, value: selMeld.value }]);
+                      setSel([]);
+                    }}
+                  >
+                    Aggiungi
+                  </Button>
+                  <Button full disabled={stagedTotal < 40} onClick={() => commit(s40Open(gs, seat, staged))}>
+                    Apri {staged.length ? `· ${stagedTotal}` : ""}
+                  </Button>
+                </>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+              <Button kind="line" full disabled={sel.length !== 1} onClick={() => commit(s40Discard(gs, seat, sel[0]))}>
+                Scarta
+              </Button>
+              {!opened && staged.length > 0 && (
+                <button onClick={() => setStaged([])} style={{ ...plain, whiteSpace: "nowrap" }}>
+                  annulla
+                </button>
+              )}
+            </div>
+            {opened && sel.length === 1 && (
+              <Micro style={{ textAlign: "center", marginTop: 8 }}>…o tocca una combinazione in tavola per attaccare</Micro>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── the finale ── */
 const SUIT_COLS = ["#A8842A", "#A5342F", "#2C557E", "#3A6B4A"];
 function Confetti() {
@@ -3767,6 +4143,15 @@ function Summary({ room, gs }) {
         <Micro style={{ marginTop: 4 }}>
           {who(room, "A")} · {who(room, "B")}
           {room.game === "briscola" ? " · punti su 120" : room.game === "yahtzee" ? " · punti totali" : ""} · mani {gs.tally.A}–{gs.tally.B}
+        </Micro>
+      </div>
+    );
+  if (room.game === "scala" && gs.penalty != null)
+    return (
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18 }}>{gs.penalty} di penalità</div>
+        <Micro style={{ marginTop: 4 }}>
+          a {who(room, other(gs.win))} · mani {gs.tally.A}–{gs.tally.B}
         </Micro>
       </div>
     );

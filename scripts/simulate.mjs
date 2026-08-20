@@ -38,6 +38,7 @@ const EXPORTS = [
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
+  "makeS40Deck", "analyzeMeld", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
 const modPath = join(dir, "rules.mjs");
@@ -270,6 +271,124 @@ function playYahtzee() {
   return steps;
 }
 
+/* ── scala 40 ───────────────────────────────────────────────── */
+function scalaCensus(g, label) {
+  const ids = [];
+  for (const c of g.deck) ids.push(c.id);
+  for (const c of g.discard) ids.push(c.id);
+  for (const s of ["A", "B"]) for (const c of g.hands[s]) ids.push(c.id);
+  for (const m of g.melds) for (const c of m.cards) ids.push(c.id);
+  if (ids.length !== 106) fail(label, `${ids.length} cards, expected 106`);
+  else if (new Set(ids).size !== 106) fail(label, "duplicated cards");
+}
+function s40FindMelds(hand) {
+  const nats = hand.filter((c) => !c.joker);
+  const out = [];
+  const byRank = {};
+  for (const c of nats) (byRank[c.v] = byRank[c.v] || []).push(c);
+  for (const v in byRank) {
+    const bySuit = {};
+    for (const c of byRank[v]) bySuit[c.s] = c;
+    const d = Object.values(bySuit);
+    if (d.length >= 3) out.push(d.slice(0, 3).map((c) => c.id));
+  }
+  const bySuit = {};
+  for (const c of nats) (bySuit[c.s] = bySuit[c.s] || []).push(c);
+  for (const s in bySuit) {
+    const uniq = [];
+    const seen = new Set();
+    for (const c of bySuit[s].slice().sort((a, b) => a.v - b.v)) if (!seen.has(c.v)) (seen.add(c.v), uniq.push(c));
+    let i = 0;
+    while (i < uniq.length) {
+      let j = i;
+      while (j + 1 < uniq.length && uniq[j + 1].v === uniq[j].v + 1) j++;
+      if (j - i + 1 >= 3) for (let a = i; a + 2 <= j; a++) out.push(uniq.slice(a, j + 1).map((c) => c.id));
+      i = j + 1;
+    }
+  }
+  return out;
+}
+function playScala() {
+  let g = R.dealScala("A", { A: 0, B: 0 });
+  scalaCensus(g, "scala deal");
+  let turns = 0;
+  const MAX = 600;
+  while (!g.done && turns++ < MAX) {
+    const seat = g.turn;
+    let r = R.s40Draw(g, seat, Math.random() < 0.85 ? "stock" : "discard") || R.s40Draw(g, seat, "discard");
+    if (!r) break;
+    g = r.g;
+    scalaCensus(g, "scala after draw");
+    const cand = s40FindMelds(g.hands[seat]);
+    if (!g.opened[seat]) {
+      const chosen = [];
+      const used = new Set();
+      for (const m of cand) {
+        if (m.some((id) => used.has(id))) continue;
+        chosen.push({ ids: m });
+        m.forEach((id) => used.add(id));
+      }
+      if (chosen.length) {
+        const o = R.s40Open(g, seat, chosen);
+        if (o) g = o.g;
+      }
+    } else {
+      for (const m of cand) {
+        const mm = R.s40Meld(g, seat, m);
+        if (mm) {
+          g = mm.g;
+          break;
+        }
+      }
+      for (const c of g.hands[seat].slice()) {
+        let laid = false;
+        for (const meld of g.melds) {
+          const lo = R.s40LayOff(g, seat, c.id, meld.id);
+          if (lo) {
+            g = lo.g;
+            laid = true;
+            break;
+          }
+        }
+        if (laid) break;
+      }
+    }
+    scalaCensus(g, "scala after meld");
+    if (g.done) break;
+    const h = g.hands[seat];
+    if (!h.length) break;
+    const worst = h.slice().sort((a, b) => (b.joker ? 30 : b.v) - (a.joker ? 30 : a.v))[0];
+    const d = R.s40Discard(g, seat, worst.id);
+    if (!d) return fail("scala", "discard refused");
+    g = d.g;
+    scalaCensus(g, "scala after discard");
+  }
+  if (g.done && (g.win == null || g.penalty == null)) fail("scala", "winner/penalty missing at end");
+  return turns;
+}
+
+/* meld analyzer unit checks */
+function s40MeldTests() {
+  const C = (s, v) => ({ s, v });
+  const JK = { joker: true };
+  const cases = [
+    [[C("H", 13), C("D", 13), C("S", 13)], "set", 30],
+    [[C("H", 1), C("D", 1), C("S", 1)], "set", 33],
+    [[C("H", 7), C("H", 7), C("S", 7)], false, 0],
+    [[C("H", 5), C("H", 6), C("H", 7)], "run", 18],
+    [[C("H", 1), C("H", 2), C("H", 3)], "run", 6],
+    [[C("H", 12), C("H", 13), C("H", 1)], "run", 31],
+    [[C("H", 13), C("H", 1), C("H", 2)], false, 0],
+    [[C("H", 5), JK, C("H", 7)], "run", 18],
+    [[C("H", 10), C("H", 11), C("H", 12), C("H", 13)], "run", 40],
+  ];
+  for (const [cards, kind, val] of cases) {
+    const r = R.analyzeMeld(cards);
+    const ok = kind === false ? !r.ok : r.ok && r.kind === kind && r.value === val;
+    if (!ok) fail("scala meld", `${JSON.stringify(cards)} → ${JSON.stringify(r)}`);
+  }
+}
+
 /* ── prepared deck (shuffle + cut ritual) ───────────────────── */
 // A deck the players shuffled by tapping and cut by dragging is dealt exactly as
 // prepared. Check it still holds all 40 cards through a whole game.
@@ -304,6 +423,7 @@ const runs = [
   ["briscola", () => playBriscola()],
   ["perudo", () => playPerudo()],
   ["yahtzee", () => playYahtzee()],
+  ["scala 40", () => playScala()],
 ];
 
 console.log(`Osteria — ${DEALS} deals per variant\n`);
@@ -328,6 +448,11 @@ for (const [label, run] of runs) {
   const before = failures;
   for (let i = 0; i < 200; i++) playPrepared();
   console.log(`${failures === before ? "✓" : "✗"} ${"prepared deck (shuffle + cut) deals".padEnd(44)} 40 cards through the deal`);
+}
+{
+  const before = failures;
+  s40MeldTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"scala 40 meld analyzer".padEnd(44)} sets, runs, jokers, ace low/high`);
 }
 
 console.log(failures ? `\n${failures} failure(s)` : "\nAll invariants held: 40 cards accounted for throughout, no stuck seats, every hand terminated.");
