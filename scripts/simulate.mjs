@@ -450,6 +450,7 @@ const runs = [
   ["scopa, asso solo to pile", () => playScopa({ target: 11, asso: false, acepile: true, rebello: false, napola: false })],
   ["rubamazzo, table matches only", () => playRuba({ sums: false })],
   ["rubamazzo, northern sums", () => playRuba({ sums: true })],
+  ["rubamazzo, mazzo nelle somme", () => playRuba({ sums: true, pilesum: true })],
   ["camicia, italian (A/2/3)", () => playCamicia({ intl: false })],
   ["camicia, international (A4 R3 C2 F1)", () => playCamicia({ intl: true })],
   ["briscola", () => playBriscola()],

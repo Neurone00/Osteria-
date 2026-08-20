@@ -103,8 +103,11 @@ const GAMES = {
     name: "Rubamazzo",
     tag: "ruba il mazzo",
     line: "Abbina il tavolo per raccogliere. Abbina la cima di un mazzo e lo rubi tutto.",
-    opts: [{ k: "sums", label: "Somme del nord", cycle: [false, true] }],
-    def: { sums: false },
+    opts: [
+      { k: "sums", label: "Somme del nord", cycle: [false, true] },
+      { k: "pilesum", label: "Mazzo nelle somme", cycle: [false, true] },
+    ],
+    def: { sums: false, pilesum: false },
   },
   camicia: {
     name: "Straccia camicia",
@@ -348,8 +351,33 @@ function rubaOptions(card, g, seat, o) {
       }
     }
   }
-  const opp = g.piles[other(seat)];
-  if (opp.length && opp[opp.length - 1].v === card.v) out.push({ type: "steal" });
+  const oppP = g.piles[other(seat)];
+  const pileTop = oppP.length ? oppP[oppP.length - 1] : null;
+  if (pileTop && pileTop.v === card.v) out.push({ type: "steal" });
+  // Mazzo nelle somme: the opponent's pile top counts as a value in a sum, so
+  // pile-top + one or more table cards adding to your card steals the pile and
+  // sweeps those table cards too.
+  if (o.pilesum && pileTop && pileTop.v < card.v) {
+    const seen = new Set();
+    for (let m = 1; m < 1 << g.table.length; m++) {
+      let sum = pileTop.v;
+      const ids = [];
+      const vs = [];
+      for (let i = 0; i < g.table.length; i++)
+        if (m & (1 << i)) {
+          sum += g.table[i].v;
+          ids.push(g.table[i].id);
+          vs.push(g.table[i].v);
+        }
+      if (sum === card.v && ids.length >= 1) {
+        const k = vs.sort((a, b) => a - b).join(".");
+        if (!seen.has(k)) {
+          seen.add(k);
+          out.push({ type: "stealsum", ids });
+        }
+      }
+    }
+  }
   return out;
 }
 
@@ -365,6 +393,15 @@ function rubaPlay(gs, seat, cardId, opt) {
     kind = "scopa";
     ev = { t: "steal", v: card.v, s: card.s, n: pile.length };
     g.piles[seat] = [...g.piles[seat], ...pile, card];
+    g.piles[other(seat)] = [];
+    g.last = seat;
+  } else if (opt && opt.type === "stealsum") {
+    const pile = g.piles[other(seat)];
+    const got = g.table.filter((c) => opt.ids.includes(c.id));
+    g.table = g.table.filter((c) => !opt.ids.includes(c.id));
+    kind = "scopa";
+    ev = { t: "steal", v: card.v, s: card.s, n: pile.length + got.length };
+    g.piles[seat] = [...g.piles[seat], ...pile, ...got, card];
     g.piles[other(seat)] = [];
     g.last = seat;
   } else if (opt && opt.type === "table") {
@@ -3770,6 +3807,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
             {pick.opts.map((opt, i) => {
               const ids = isScopa ? opt : opt.ids;
               const steal = !isScopa && opt.type === "steal";
+              const stealsum = !isScopa && opt.type === "stealsum";
               return (
                 <button
                   key={i}
@@ -3790,9 +3828,14 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
                       Ruba il mazzo — {gs.piles[other(seat)].length} carte
                     </span>
                   ) : (
-                    gs.table
-                      .filter((c) => ids.includes(c.id))
-                      .map((c) => <Card key={c.id} card={c} size="sm" rot={0} />)
+                    <>
+                      {gs.table.filter((c) => ids.includes(c.id)).map((c) => (
+                        <Card key={c.id} card={c} size="sm" rot={0} />
+                      ))}
+                      {stealsum && (
+                        <span style={{ fontSize: 13, fontWeight: 600, marginLeft: 6 }}>+ ruba il mazzo ({gs.piles[other(seat)].length})</span>
+                      )}
+                    </>
                   )}
                 </button>
               );
