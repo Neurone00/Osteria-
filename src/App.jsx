@@ -1677,17 +1677,20 @@ const Micro = ({ children, style }) => (
   </div>
 );
 
-function Button({ children, onClick, disabled, kind = "solid", full }) {
+// `soft` is a muted look for an action that isn't legal yet but is still
+// tappable — the handler explains what's missing rather than dead-ending.
+function Button({ children, onClick, disabled, soft, kind = "solid", full }) {
   const solid = kind === "solid";
+  const muted = disabled || soft;
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       style={{
         width: full ? "100%" : "auto",
-        background: disabled ? "transparent" : solid ? T.ink : "transparent",
-        color: disabled ? T.ink30 : solid ? T.bg : T.ink,
-        border: `1.5px solid ${disabled ? T.line : T.ink}`,
+        background: muted ? "transparent" : solid ? T.ink : "transparent",
+        color: muted ? T.ink30 : solid ? T.bg : T.ink,
+        border: `1.5px solid ${muted ? T.line : T.ink}`,
         borderRadius: 12,
         padding: solid ? "15px 18px" : "13px 16px",
         fontFamily: BRAND,
@@ -3744,10 +3747,14 @@ function Scala({ room, gs, seat, mine, commit }) {
   const opp = other(seat);
   const [sel, setSel] = useState([]);
   const [staged, setStaged] = useState([]);
+  const [hint, setHint] = useState("");
   useEffect(() => {
     setSel([]);
     setStaged([]);
+    setHint("");
   }, [gs.turn, gs.phase, gs.done]);
+  const selKey = sel.join(",");
+  useEffect(() => setHint(""), [selKey, staged.length]);
   const hand = gs.hands[seat];
   const stagedIds = new Set(staged.flatMap((m) => m.ids));
   const selCards = sel.map((id) => hand.find((c) => c.id === id)).filter(Boolean);
@@ -3840,6 +3847,19 @@ function Scala({ room, gs, seat, mine, commit }) {
     } catch {}
     if (!s.moved && mine && gs.phase === "meld") toggle(s.id);
   };
+
+  // Actions never dead-end: the buttons stay live during your meld turn and,
+  // when a move isn't legal yet, say what's missing instead of greying out.
+  const notAMeld = () => setHint(sel.length < 3 ? "Seleziona almeno 3 carte per un tris o una scala." : "Quelle carte non formano un tris né una scala.");
+  const doCala = () => (selMeld.ok ? commit(s40Meld(gs, seat, sel)) : notAMeld());
+  const doAggiungi = () => {
+    if (!selMeld.ok) return notAMeld();
+    setStaged((s) => [...s, { ids: sel, value: selMeld.value }]);
+    setSel([]);
+  };
+  const doApri = () => (stagedTotal >= 40 ? commit(s40Open(gs, seat, staged)) : setHint(`Ti servono 40 punti per aprire — sei a ${stagedTotal}.`));
+  const doScarta = () =>
+    sel.length === 1 ? commit(s40Discard(gs, seat, sel[0])) : setHint(sel.length === 0 ? "Tocca una carta, poi Scarta per finire il turno." : "Per scartare seleziona una sola carta.");
 
   const target = opened && sel.length === 1 && gs.phase === "meld";
   const acting = mine && !gs.done;
@@ -3938,47 +3958,49 @@ function Scala({ room, gs, seat, mine, commit }) {
           {mine && gs.phase === "meld" && (
             <div>
               <div style={{ minHeight: 16 }}>
-                {selMeld.ok ? (
-                  <Micro style={{ textAlign: "center", color: T.ink }}>
-                    {selMeld.kind === "set" ? "tris" : "scala"} valida · {selMeld.value} punti
-                  </Micro>
-                ) : !opened && staged.length > 0 ? (
-                  <Micro style={{ textAlign: "center" }}>
-                    apertura {stagedTotal}/40{stagedTotal < 40 ? " — servono altre combinazioni" : " — puoi aprire"}
-                  </Micro>
-                ) : (
-                  <Micro style={{ textAlign: "center" }}>{opened ? "cala, attacca o scarta" : "componi almeno 40 punti per aprire"}</Micro>
-                )}
+                <Micro style={{ textAlign: "center", color: hint || selMeld.ok ? T.ink : undefined }}>
+                  {hint
+                    ? hint
+                    : selMeld.ok
+                    ? `${selMeld.kind === "set" ? "tris" : "scala"} valida · ${selMeld.value} punti`
+                    : !opened && staged.length > 0
+                    ? `apertura ${stagedTotal}/40${stagedTotal < 40 ? " — aggiungi combinazioni" : " — puoi aprire"}`
+                    : opened && sel.length === 1
+                    ? "scarta, o tocca una combinazione per attaccare"
+                    : opened
+                    ? "cala una combinazione, o scarta una carta"
+                    : "componi almeno 40 punti per aprire"}
+                </Micro>
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                 {opened ? (
-                  <Button full disabled={!selMeld.ok} onClick={() => commit(s40Meld(gs, seat, sel))}>
+                  <Button full soft={!selMeld.ok} onClick={doCala}>
                     Cala
                   </Button>
                 ) : (
                   <>
-                    <Button
-                      kind="line"
-                      disabled={!selMeld.ok}
-                      onClick={() => {
-                        setStaged((s) => [...s, { ids: sel, value: selMeld.value }]);
-                        setSel([]);
-                      }}
-                    >
+                    <Button kind="line" soft={!selMeld.ok} onClick={doAggiungi}>
                       Aggiungi
                     </Button>
-                    <Button full disabled={stagedTotal < 40} onClick={() => commit(s40Open(gs, seat, staged))}>
+                    <Button full soft={stagedTotal < 40} onClick={doApri}>
                       Apri {staged.length ? `· ${stagedTotal}` : ""}
                     </Button>
                   </>
                 )}
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-                <Button kind="line" full disabled={sel.length !== 1} onClick={() => commit(s40Discard(gs, seat, sel[0]))}>
+              <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", justifyContent: "space-between" }}>
+                <Button kind="line" full soft={sel.length !== 1} onClick={doScarta}>
                   Scarta
                 </Button>
-                {!opened && staged.length > 0 && (
-                  <button onClick={() => setStaged([])} style={{ ...plain, whiteSpace: "nowrap" }}>
+                {(sel.length > 0 || staged.length > 0) && (
+                  <button
+                    onClick={() => {
+                      setSel([]);
+                      setStaged([]);
+                      setHint("");
+                    }}
+                    style={{ ...plain, whiteSpace: "nowrap" }}
+                  >
                     annulla
                   </button>
                 )}
