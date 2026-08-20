@@ -1907,6 +1907,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       status: "lobby",
       game: "scopa",
       opts: { ...GAMES.scopa.def, ...(savedRules.scopa || {}) },
+      scores: showScores, // table rule: show live points/prese (seeded from host's saved default)
       gs: null,
       log: [],
       ev: null,
@@ -2169,6 +2170,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     publish({ ...room, opts });
     setGameRules(room.game, opts); // remember this game's rules for next time
   };
+  // Show-points is a table rule: the host sets it, both players get it. The host's
+  // choice is also saved locally so the next table starts the same way.
+  const setScores = (val) => {
+    publish({ ...room, scores: val });
+    setShowScores(val);
+  };
 
   /* ═════════ boot ═════════ */
   if (booting)
@@ -2373,19 +2380,19 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
 
           {isCard(room.game) && (
             <>
-              <Micro style={{ marginTop: 20 }}>Carte · sul tuo telefono</Micro>
-              <FaceToggle french={french} setFrench={setFrench} />
-
-              <Micro style={{ marginTop: 20 }}>Punti e prese · sul tuo telefono</Micro>
+              <Micro style={{ marginTop: 20 }}>Punti e prese{host ? "" : " · li decide l’host"}</Micro>
               <Segmented
                 options={[
                   { v: false, label: "Nascondi" },
                   { v: true, label: "Mostra" },
                 ]}
-                value={showScores}
-                onPick={(v) => setShowScores(v)}
+                value={!!room.scores}
+                onPick={host ? setScores : null}
                 style={{ marginTop: 8 }}
               />
+
+              <Micro style={{ marginTop: 20 }}>Carte · sul tuo telefono</Micro>
+              <FaceToggle french={french} setFrench={setFrench} />
             </>
           )}
 
@@ -2428,9 +2435,9 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       <Head room={room} link={link} onLeave={leave} sound={sound} setSound={setSound} title={conf.name} />
 
       {room.game === "camicia" ? (
-        <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} showScores={showScores} />
+        <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} showScores={!!room.scores} />
       ) : room.game === "briscola" ? (
-        <Briscola room={room} gs={gs} seat={seat} opp={opp} mine={mine} slamId={slamId} commit={commit} showScores={showScores} />
+        <Briscola room={room} gs={gs} seat={seat} opp={opp} mine={mine} slamId={slamId} commit={commit} showScores={!!room.scores} />
       ) : room.game === "perudo" ? (
         <Perudo room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "yahtzee" ? (
@@ -2446,7 +2453,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           pick={pick}
           setPick={setPick}
           commit={commit}
-          showScores={showScores}
+          showScores={!!room.scores}
         />
       )}
 
