@@ -2348,7 +2348,11 @@ input{font-family:inherit}
 .freshcard{animation:freshpulse 900ms ease-out}
 @keyframes scopaflash{0%{transform:scale(.3) rotate(-9deg);opacity:0}15%{transform:scale(1.14) rotate(3deg);opacity:1}27%{transform:scale(1) rotate(-3deg)}39%{transform:rotate(3deg)}51%{transform:rotate(-2.5deg)}63%{transform:rotate(2deg)}75%{transform:rotate(-1.5deg)}86%{transform:scale(1) rotate(0);opacity:1}100%{transform:scale(1.06);opacity:0}}
 .scopaflash{animation:scopaflash 1500ms cubic-bezier(.2,.9,.25,1) both}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash{animation:none!important}}
+@keyframes flypR{0%{transform:translate(0,0) scale(1);opacity:1}14%{transform:translate(0,-5px) scale(1.06)}100%{transform:translate(150px,56px) scale(.4);opacity:0}}
+@keyframes flypL{0%{transform:translate(0,0) scale(1);opacity:1}14%{transform:translate(0,-5px) scale(1.06)}100%{transform:translate(-150px,56px) scale(.4);opacity:0}}
+.flypR{animation:flypR 640ms cubic-bezier(.4,0,.5,1) forwards}
+.flypL{animation:flypL 640ms cubic-bezier(.4,0,.5,1) forwards}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL{animation:none!important}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -3841,8 +3845,15 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
       {/* piles */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
         <PileView room={room} gs={gs} seat={opp} label="sua pila" faceUp={!isScopa} slamId={slamId} />
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-          {taken && <Card card={taken} size="sm" rot={0} slam={slamId === taken.id} />}
+        <div style={{ flex: 1, position: "relative", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 84 }}>
+          {/* a captured card flies off toward the winning player's pila */}
+          {taken && (
+            <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", pointerEvents: "none", zIndex: 4 }}>
+              <div key={a.id} className={a.seat === seat ? "flypR" : "flypL"}>
+                <Card card={taken} size="sm" rot={0} />
+              </div>
+            </div>
+          )}
           <div
             className={!gs.done && mine ? "turn" : ""}
             style={{
