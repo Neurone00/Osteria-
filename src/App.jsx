@@ -5914,7 +5914,37 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
   }, [diceKey, gs.rolled]);
 
   return (
-    <div>
+    <div style={{ paddingBottom: 56 }}>
+      {/* peek the opponent's scorecard — a toggle pinned bottom-right, out of
+          the way of the dice and your own card */}
+      <button
+        onClick={() => setShowOpp((v) => !v)}
+        aria-label={`Scheda di ${who(room, opp)}`}
+        style={{
+          position: "fixed",
+          right: "calc(14px + env(safe-area-inset-right))",
+          bottom: "calc(14px + env(safe-area-inset-bottom))",
+          zIndex: 60,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 7,
+          background: showOpp ? T.ink : T.paper,
+          color: showOpp ? T.bg : T.ink,
+          border: `1px solid ${showOpp ? T.ink : T.line}`,
+          borderRadius: 999,
+          padding: "9px 14px",
+          boxShadow: "0 6px 18px rgba(18,18,18,0.18)",
+          fontFamily: BRAND,
+          fontWeight: 600,
+          fontSize: 13,
+          cursor: "pointer",
+          transition: "background 160ms ease, color 160ms ease",
+          WebkitTapHighlightColor: "transparent",
+        }}
+      >
+        <Ico n="clip" s={16} /> {who(room, opp)}
+      </button>
+
       {yflash > 0 && (
         <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
           <div key={yflash} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(56px, 19vw, 132px)", color: "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap" }}>
@@ -5929,12 +5959,9 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
           {oppTotal.total} punti · {Object.keys(oppScore).length}/13
         </Micro>
       </div>
-      <div style={{ display: "flex", justifyContent: "center", gap: 22, marginTop: 8 }}>
-        <button onClick={() => setShowOpp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <Ico n="clip" s={15} /> scheda di {who(room, opp)}
-        </button>
-        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600 }}>
-          ? come si conta
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
+        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <Ico n="help" s={15} /> come si conta
         </button>
       </div>
 
