@@ -1170,22 +1170,28 @@ function s40Discard(gs, seat, cardId) {
    current HP, and because a wounded die hits weaker, an attack rolls 1..HP —
    the die literally shrinks as it takes damage. Rolling the top face (≥2)
    explodes for a crit. Two classes: Fante (d8, melee, adjacent) and Arciere
-   (d6, ranged 2–4, needs line of sight). Deploy near your castle, then take
-   turns activating one unit (move, then attack). Heal on your fountain (+3) or
-   castle (full). Win by wiping the enemy — or by storming their castle. A round
+   (d6, ranged 2–3, needs line of sight). Both step up to 2. Deploy near your
+   castle, then take turns activating one unit (move, then attack) — a unit may
+   be activated twice in a round, so you can push the same one across the map.
+   Heal on your fountain (+3) or castle (full). A castle bombards any enemy that
+   ends its turn beside it for 2. Win by wiping the enemy — or by holding their
+   castle: step in, survive their retaliation, and the keep is yours. A round
    cap ends stalls on total HP. Obstacles block movement and line of sight;
    there is no elevation. */
 const TACT = {
-  R: 6, // map radius — a hexagon this many rings across, then eroded to an irregular coast
+  R: 8, // map radius — a hexagon this many rings across, then eroded to an irregular coast
   ERODE: 0.34, // chance a border hex is chipped away each pass (2 passes) → random shape
   BLOCK: 0.2, // share of the open interior turned to rubble — cover + broken lines of sight
   DEPLOY_R: 2, // deploy within this many hexes of your castle
   ROUND_CAP: 40,
+  ACTS: 2, // activations a single unit may spend per round — you can move the same one twice
+  CASTLE_DMG: 2, // a castle bombards any enemy that ends its turn next to it
   units: {
-    // A big board with lots of rubble is the balance: a Fante needs several
-    // turns to cross it, and an Arciere kites and picks it off on the way in.
+    // A big board with lots of rubble is the balance: both classes step only 2,
+    // so crossing it takes several turns — but a unit may be activated twice in a
+    // round, and an Arciere kites and picks the enemy off on the way in.
     fante: { name: "Fante", max: 8, move: 2, min: 1, rng: 1 }, // d8 melee, closes slowly
-    arciere: { name: "Arciere", max: 6, move: 3, min: 2, rng: 3 }, // d6, shoots 2–3 away, never adjacent
+    arciere: { name: "Arciere", max: 6, move: 2, min: 2, rng: 3 }, // d6, shoots 2–3 away, never adjacent
   },
 };
 const HEX_DIRS = [
@@ -1324,7 +1330,8 @@ function dealTactics(dealer, opts, tally) {
     order: [], // stable unit ids
     toPlace: { A: [], B: [] }, // unit types still to deploy
     turn: dealer || "A",
-    spent: {}, // unit ids already activated this round
+    spent: {}, // unit id → activations used this round (capped at TACT.ACTS)
+    siege: null, // { seat, unitId, armed } — a unit sitting in the enemy castle
     round: 1,
     dealer: dealer || "A",
     tally: tally || { A: 0, B: 0 },
@@ -1464,14 +1471,32 @@ function tacticsWin(g, winner, how) {
   g.how = how;
   if (winner) g.tally[winner] += 1;
 }
+// A unit sitting in the enemy castle only takes it if it survives one round of
+// the opponent's retaliation: arming happens when control passes to the foe,
+// and the capture lands when the turn comes back with the unit still in place.
+function tacticsResolveSiege(g) {
+  const s = g.siege;
+  if (!s || g.done) return;
+  const u = g.units[s.unitId];
+  if (!u || hkey(u.q, u.r) !== g.board.castle[other(s.seat)]) {
+    g.siege = null; // it died or left the keep — siege broken
+    return;
+  }
+  if (g.turn === other(s.seat)) s.armed = true; // the defender gets their turn
+  else if (g.turn === s.seat && s.armed) tacticsWin(g, s.seat, "castle");
+}
 function tacticsPassTurn(g) {
-  const unspent = (s) => g.order.some((id) => g.units[id].owner === s && !g.spent[id]);
+  const unspent = (s) => g.order.some((id) => g.units[id].owner === s && (g.spent[id] || 0) < TACT.ACTS);
   const foe = other(g.turn);
   if (unspent(foe)) {
     g.turn = foe;
+    tacticsResolveSiege(g);
     return;
   }
-  if (unspent(g.turn)) return; // opponent is out of units this round; keep going
+  if (unspent(g.turn)) {
+    tacticsResolveSiege(g); // opponent is out of units this round; keep going
+    return;
+  }
   g.round += 1;
   g.spent = {};
   if (g.round > TACT.ROUND_CAP) {
@@ -1482,6 +1507,7 @@ function tacticsPassTurn(g) {
     return;
   }
   g.turn = foe;
+  tacticsResolveSiege(g);
 }
 
 // One activation, resolved atomically: optionally move to `toKey`, then either
@@ -1490,7 +1516,7 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   if (gs.done || gs.phase !== "battle" || gs.turn !== seat) return null;
   const g = clone(gs);
   const unit = g.units[unitId];
-  if (!unit || unit.owner !== seat || g.spent[unitId]) return null;
+  if (!unit || unit.owner !== seat || (g.spent[unitId] || 0) >= TACT.ACTS) return null;
   if (toKey && toKey !== hkey(unit.q, unit.r)) {
     if (tacticsReach(g, unit)[toKey] === undefined) return null;
     const { q, r } = unhkey(toKey);
@@ -1519,13 +1545,34 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     ev = { t: "attack", unit: unit.type, target: target.type, dmg: res.total, crit: res.crit, killed };
     kind = res.crit ? "scopa" : "take"; // a crit gets the big slam + shake
   }
-  if (uk === g.board.castle[seat]) unit.hp = unit.max; // rally to full at your keep
-  else if (uk === g.board.fount[seat]) unit.hp = Math.min(unit.max, unit.hp + 3);
+  // castle bombardment: a unit that ends its turn adjacent to the ENEMY castle
+  // (but not standing in it — that's a siege, resolved below) is shelled for 2.
+  const foeCastle = g.board.castle[other(seat)];
+  if (uk !== foeCastle && hdist(unit, unhkey(foeCastle)) === 1) {
+    unit.hp -= TACT.CASTLE_DMG;
+    ev = { ...ev, bombed: TACT.CASTLE_DMG };
+    if (unit.hp <= 0) {
+      delete g.units[unitId];
+      g.order = g.order.filter((id) => id !== unitId);
+    }
+  }
+  const alive = !!g.units[unitId];
+  if (alive) {
+    if (uk === g.board.castle[seat]) unit.hp = unit.max; // rally to full at your keep
+    else if (uk === g.board.fount[seat]) unit.hp = Math.min(unit.max, unit.hp + 3);
+  }
   g.last = { ...(roll || {}), unitId, to: uk };
-  if (uk === g.board.castle[other(seat)]) tacticsWin(g, seat, "castle");
-  else if (!g.order.some((id) => g.units[id].owner === other(seat))) tacticsWin(g, seat, "wipe");
+  // holding the enemy castle doesn't win on contact: plant the siege and let it
+  // ride out the opponent's retaliation (the capture lands in tacticsPassTurn).
+  if (alive && uk === foeCastle) {
+    if (!g.siege || g.siege.unitId !== unitId) g.siege = { seat, unitId, armed: false };
+  } else if (g.siege && g.siege.unitId === unitId) {
+    g.siege = null; // this unit is the besieger no longer
+  }
+  if (!g.order.some((id) => g.units[id].owner === "A")) tacticsWin(g, "B", "wipe");
+  else if (!g.order.some((id) => g.units[id].owner === "B")) tacticsWin(g, "A", "wipe");
   if (!g.done) {
-    g.spent[unitId] = true;
+    g.spent[unitId] = (g.spent[unitId] || 0) + 1;
     tacticsPassTurn(g);
   }
   return { g, kind, ev, roll };
@@ -5121,6 +5168,10 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
 
 /* ── condottieri (tactics) ── */
 const TSIDE = { A: "#2C557E", B: "#A5342F" }; // blue vs red
+const rgbaOf = (hex, a) => {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+};
 const uIco = (type, s = 14, c) => <Ico n={type === "fante" ? "sword" : "bow"} s={s} c={c} />;
 const THEXR = 23; // hex size (centre → corner) — small enough to pan a big map
 const tpx = (q, r) => ({ x: THEXR * Math.sqrt(3) * (q + r / 2), y: THEXR * 1.5 * r });
@@ -5205,8 +5256,8 @@ function RollReveal({ shot, onDone }) {
 const TACT_SLIDES = [
   { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6." },
   { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
-  { icon: "bow", title: "Muovi, poi tira", body: "A turno attivi una pedina: la sposti e attacchi. L’Arciere colpisce da lontano." },
-  { icon: "castle", title: "Come si vince", body: "Stermina l’altro o prendi il suo castello. La fontana ti cura, il castello ti risana del tutto." },
+  { icon: "bow", title: "Muovi, poi tira", body: "A turno attivi una pedina: la sposti e attacchi. Puoi muovere la stessa pedina due volte per round." },
+  { icon: "castle", title: "Come si vince", body: "Stermina l’altro, oppure tieni il suo castello per un turno intero sotto il fuoco. Ogni castello colpisce chi gli si ferma accanto." },
 ];
 function TacticsHowTo({ onClose }) {
   const [i, setI] = useState(0);
@@ -5238,6 +5289,7 @@ function Tactics({ room, gs, seat, commit }) {
   const myTurn = gs.turn === seat && !gs.done;
   const [sel, setSel] = useState(null); // selected own unit id (battle)
   const [dest, setDest] = useState(null); // staged move hex key
+  const [inspect, setInspect] = useState(null); // enemy unit id being previewed (move + range)
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [help, setHelp] = useState(false);
@@ -5262,6 +5314,7 @@ function Tactics({ room, gs, seat, commit }) {
   useEffect(() => {
     setSel(null);
     setDest(null);
+    setInspect(null);
   }, [gs.turn, gs.phase]);
 
   // layout — bounds computed from the irregular cell set
@@ -5316,6 +5369,25 @@ function Tactics({ room, gs, seat, commit }) {
       threatSet.add(k);
     }
   }
+  // previewing an enemy: show where it could step (its Move) and everything it
+  // threatens from where it stands (attack range + line of sight), in its colour
+  const insUnit = inspect && gs.units[inspect] && gs.phase === "battle" ? gs.units[inspect] : null;
+  const insReach = insUnit ? tacticsReach(gs, insUnit) : {};
+  const insThreatSet = new Set();
+  if (insUnit) {
+    const u = TACT.units[insUnit.type];
+    const insKey = hkey(insUnit.q, insUnit.r);
+    for (const c of board.cells) {
+      const k = hkey(c.q, c.r);
+      if (board.blocked[k] || k === insKey) continue;
+      const d = hdist(insUnit, c);
+      if (d < u.min || d > u.rng) continue;
+      if (u.rng > 1 && !tacticsLoS(gs, insUnit, c)) continue;
+      insThreatSet.add(k);
+    }
+  }
+  const insCol = insUnit ? TSIDE[insUnit.owner] : null;
+
   const deploySet = myTurn && gs.phase === "deploy" ? new Set(board.cells.map((c) => hkey(c.q, c.r)).filter((k) => tacticsDeployable(gs, seat, k))) : new Set();
   const nextType = gs.phase === "deploy" ? gs.toPlace[seat][0] : null;
 
@@ -5334,22 +5406,32 @@ function Tactics({ room, gs, seat, commit }) {
   };
   const tapUnit = (id) => {
     if (moved.current) return;
-    if (!myTurn || gs.phase !== "battle") return;
+    if (gs.phase !== "battle") return;
     const u = gs.units[id];
-    if (u.owner === seat && !gs.spent[id]) {
-      setSel(id);
-      setDest(null);
-    } else if (u.owner !== seat && sel && targetIds.includes(id)) {
+    if (u.owner === seat) {
+      if (myTurn && (gs.spent[id] || 0) < TACT.ACTS) {
+        setSel(id);
+        setDest(null);
+        setInspect(null);
+      }
+      return;
+    }
+    // enemy unit: attack it if it's a valid target, otherwise preview its reach
+    if (myTurn && sel && targetIds.includes(id)) {
       commit(tacticsActivate(gs, seat, sel, dest, { kind: "attack", targetId: id }));
       setSel(null);
       setDest(null);
+      setInspect(null);
+      return;
     }
+    setInspect((cur) => (cur === id ? null : id));
   };
   const endUnit = () => {
     if (!sel) return;
     commit(tacticsActivate(gs, seat, sel, dest, null));
     setSel(null);
     setDest(null);
+    setInspect(null);
   };
 
   // pan (screen-space), tap vs drag disambiguation
@@ -5391,7 +5473,7 @@ function Tactics({ room, gs, seat, commit }) {
     setPan({ x: el.clientWidth / 2 - c.x, y: el.clientHeight / 2 - c.y });
   };
 
-  const status = gs.done
+  const baseStatus = gs.done
     ? gs.win
       ? gs.win === seat
         ? gs.how === "castle"
@@ -5416,6 +5498,11 @@ function Tactics({ room, gs, seat, commit }) {
         : "Muovi, o colpisci un nemico in rosso"
       : "Tocca una tua pedina"
     : `Turno di ${who(room, gs.turn)}`;
+  const insU = insUnit ? TACT.units[insUnit.type] : null;
+  const status =
+    insUnit && !sel
+      ? `${insU.name} nemico — muove fino a ${insU.move}, colpisce a ${insU.min === insU.rng ? insU.rng : `${insU.min}–${insU.rng}`}`
+      : baseStatus;
 
   const vbtn = {
     ...plain,
@@ -5498,20 +5585,37 @@ function Tactics({ room, gs, seat, commit }) {
               const isDeploy = deploySet.has(k);
               const isSelHex = unit && k === hkey(unit.q, unit.r);
               const isDest = dest === k;
+              const isInsReach = insReach[k] !== undefined;
+              const isInsThreat = insThreatSet.has(k);
+              const isInsHex = insUnit && k === hkey(insUnit.q, insUnit.r);
               let fill = blocked ? "rgba(18,18,18,0.28)" : "rgba(255,255,255,0.9)";
               if (sp && sp.kind === "fount") fill = "rgba(44,120,160,0.22)";
+              if (isInsReach) fill = rgbaOf(insCol, 0.16); // where the selected enemy could step
+              if (isInsThreat) fill = rgbaOf(insCol, 0.3); // what the selected enemy threatens
               if (isThreat) fill = "rgba(165,52,47,0.12)"; // attack area — a light red wash
               if (isReach || isDest) fill = "rgba(46,120,90,0.30)"; // where you can move
               if (isDeploy) fill = "rgba(184,134,43,0.24)";
               if (isTarget) fill = "rgba(165,52,47,0.34)"; // an enemy you can hit
-              const stroke = isSelHex ? T.ink : isTarget ? "#A5342F" : isThreat ? "rgba(165,52,47,0.6)" : sp && sp.kind === "castle" ? TSIDE[sp.side] : T.line;
+              const stroke = isSelHex
+                ? T.ink
+                : isTarget
+                ? "#A5342F"
+                : isThreat
+                ? "rgba(165,52,47,0.6)"
+                : isInsHex
+                ? insCol
+                : isInsThreat
+                ? rgbaOf(insCol, 0.6)
+                : sp && sp.kind === "castle"
+                ? TSIDE[sp.side]
+                : T.line;
               return (
                 <g key={k}>
                   <polygon
                     points={tCorners(p.x, p.y)}
                     fill={fill}
                     stroke={stroke}
-                    strokeWidth={isSelHex || isTarget || (sp && sp.kind === "castle") ? 2.2 : isThreat ? 1.5 : 1}
+                    strokeWidth={isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat ? 1.5 : 1}
                     className={isTarget || isDeploy ? "hexpulse" : ""}
                     onClick={() => tapHex(k)}
                     style={{ cursor: myTurn && (isReach || isDeploy || isTarget || isDest || isSelHex) ? "pointer" : "default" }}
@@ -5531,8 +5635,9 @@ function Tactics({ room, gs, seat, commit }) {
             const u = gs.units[id];
             const showAt = sel === id && dest ? unhkey(dest) : { q: u.q, r: u.r };
             const p = at(showAt.q, showAt.r);
-            const spent = gs.spent[id] && gs.phase === "battle";
+            const spent = (gs.spent[id] || 0) >= TACT.ACTS && gs.phase === "battle";
             const isSel = sel === id;
+            const isIns = inspect === id;
             const isTgt = targetSet.has(hkey(u.q, u.r)) && !(sel === id);
             const col = TSIDE[u.owner];
             return (
@@ -5549,7 +5654,7 @@ function Tactics({ room, gs, seat, commit }) {
                     borderRadius: 8,
                     background: "#fff",
                     border: `2.5px solid ${col}`,
-                    outline: isSel ? `2px solid ${T.ink}` : isTgt ? `2px solid #A5342F` : "none",
+                    outline: isSel ? `2px solid ${T.ink}` : isTgt ? `2px solid #A5342F` : isIns ? `2px solid ${col}` : "none",
                     outlineOffset: 1,
                     boxShadow: `0 2px 5px rgba(18,18,18,0.28)`,
                     display: "grid",

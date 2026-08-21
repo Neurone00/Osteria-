@@ -320,7 +320,7 @@ function playTactics() {
   while (!g.done) {
     if (++steps > MAX) return fail("tactics", "battle never ended (round cap should have)");
     const seat = g.turn;
-    const mine = g.order.filter((id) => g.units[id].owner === seat && !g.spent[id]);
+    const mine = g.order.filter((id) => g.units[id].owner === seat && (g.spent[id] || 0) < R.TACT.ACTS);
     if (!mine.length) return fail("tactics", `${seat} on turn with no unspent units`);
     const uid = mine[Math.floor(Math.random() * mine.length)];
     const reach = R.tacticsReach(g, g.units[uid]);
