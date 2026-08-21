@@ -3500,7 +3500,9 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
 
   /* ── lifecycle ── */
   const openTable = async (preCode) => {
-    const code = preCode || Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
+    // preCode is only a real 4-letter code from the bump flow; when this is a
+    // button handler React passes the click event, so ignore anything non-string.
+    const code = (typeof preCode === "string" && preCode) || Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
     const fresh = {
       code,
       v: 0,
@@ -4031,7 +4033,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               style={{ ...field, fontFamily: BRAND, fontSize: 18, textAlign: "center", padding: "14px 13px" }}
             />
             <div style={{ marginTop: 10 }}>
-              <Button full onClick={openTable}>
+              <Button full onClick={() => openTable()}>
                 Apri un tavolo
               </Button>
             </div>
