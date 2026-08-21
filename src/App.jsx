@@ -3910,14 +3910,17 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               )}
             </div>
 
-            {/* Always available so you can try any game on one device: it opens a
-                local two-seat table and you flip sides with the toggle up top. */}
-            <button
-              onClick={openSolo}
-              style={{ ...plain, display: "block", margin: "16px auto 0", color: soloRef.current ? T.ink : T.ink60, fontWeight: 600, fontSize: 13.5 }}
-            >
-              🧪 Prova da solo <span style={{ color: T.ink30, fontWeight: 400 }}>· due lati, un telefono</span>
-            </button>
+            {/* Testing only: hidden behind the ?solo (or ?test) link, so ordinary
+                visitors never see it. Opens a local two-seat table you drive from
+                one device, flipping sides with the toggle up top. */}
+            {soloRef.current && (
+              <button
+                onClick={openSolo}
+                style={{ ...plain, display: "block", margin: "16px auto 0", color: T.ink, fontWeight: 600, fontSize: 13.5 }}
+              >
+                🧪 Prova da solo <span style={{ color: T.ink30, fontWeight: 400 }}>· due lati, un telefono</span>
+              </button>
+            )}
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
             {!hasStore() && <InstallPrompt />}
           </div>
