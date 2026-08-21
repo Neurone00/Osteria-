@@ -925,13 +925,13 @@ function yahtRoll(gs, seat) {
   g.dice = g.dice.map((d, i) => (g.rolled && g.keep[i] ? d : 1 + Math.floor(Math.random() * 6)));
   g.rollsLeft -= 1;
   g.rolled = true;
-  return { g, kind: "take", ev: { t: "roll" } };
+  return { g, kind: "take", nojolt: true, ev: { t: "roll" } };
 }
 function yahtToggle(gs, seat, i) {
   const g = clone(gs);
   if (g.turn !== seat || !g.rolled || g.done) return null;
   g.keep[i] = !g.keep[i];
-  return { g, kind: "lay", ev: { t: "keep" } };
+  return { g, kind: "lay", nojolt: true, ev: { t: "keep" } };
 }
 function yahtScore(gs, seat, cat) {
   const g = clone(gs);
@@ -952,7 +952,7 @@ function yahtScore(gs, seat, cat) {
     g.matchDone = true;
     g.win = w;
   }
-  return { g, kind: "scopa", ev: { t: "score", cat } };
+  return { g, kind: "scopa", nojolt: true, ev: { t: "score", cat } };
 }
 
 /* ── scala 40 ──────────────────────────────────────────────────
@@ -3501,7 +3501,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     if (!a || a.id === seenAnim.current) return;
     seenAnim.current = a.id;
     setSlamId(a.card || null);
-    setJolt(true);
+    if (!a.nojolt) setJolt(true);
     slamSound(a.kind, soundRef.current);
     buzz(a.kind);
     const timers = [setTimeout(() => setJolt(false), 200), setTimeout(() => setSlamId(null), 460)];
@@ -4119,7 +4119,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       gs: res.g,
       ev: res.ev ? { seat, ...res.ev } : null,
       // `quiet` moves (shuffling your hand, signalling ready) carry no slam.
-      anim: res.quiet ? null : { id: uid(), kind: res.kind, card: res.card?.id, seat },
+      // `nojolt` moves still thwack + buzz but skip the screen jolt — the jolt
+      // transforms the whole frame, which would drag any fixed overlay (e.g. the
+      // Yahtzee opponent-scorecard peek) along with it.
+      anim: res.quiet ? null : { id: uid(), kind: res.kind, card: res.card?.id, seat, nojolt: res.nojolt },
     });
   };
 
