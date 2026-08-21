@@ -2971,7 +2971,15 @@ input{font-family:inherit}
 @keyframes flypL{0%{transform:translate(0,0) scale(1);opacity:1}14%{transform:translate(0,-5px) scale(1.06)}100%{transform:translate(-150px,56px) scale(.4);opacity:0}}
 .flypR{animation:flypR 640ms cubic-bezier(.4,0,.5,1) forwards}
 .flypL{animation:flypL 640ms cubic-bezier(.4,0,.5,1) forwards}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL{animation:none!important}}
+@keyframes tumble{0%{transform:rotate(-10deg) scale(.6);opacity:0}12%{opacity:1}30%{transform:rotate(12deg) scale(1.12)}55%{transform:rotate(-8deg) scale(1.02)}75%{transform:rotate(6deg) scale(1.05)}100%{transform:rotate(0) scale(1)}}
+.tumble{animation:tumble 620ms cubic-bezier(.2,.8,.3,1) both}
+@keyframes settle{0%{transform:scale(1.5);opacity:0}45%{transform:scale(.9);opacity:1}72%{transform:scale(1.08)}100%{transform:scale(1)}}
+.settle{animation:settle 440ms cubic-bezier(.2,1.4,.4,1) both}
+@keyframes critshake{0%,100%{transform:translate(0,0)}18%{transform:translate(-4px,2px) rotate(-2deg)}38%{transform:translate(4px,-2px) rotate(2deg)}58%{transform:translate(-3px,1px)}78%{transform:translate(3px,-1px)}}
+.critshake{animation:critshake 460ms ease-in-out}
+@keyframes hexpulse{0%,100%{opacity:.35}50%{opacity:.7}}
+.hexpulse{animation:hexpulse 1.6s ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL,.tumble,.settle,.critshake,.hexpulse{animation:none!important}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -4119,6 +4127,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Scala room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "peppa" ? (
         <Peppa room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} />
+      ) : room.game === "condottieri" ? (
+        <Tactics room={room} gs={gs} seat={seat} commit={commit} />
       ) : (
         <Board
           room={room}
@@ -4134,7 +4144,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         />
       )}
 
-      {room.ev && !gs.done && isCard(room.game) && room.game !== "scala" && (
+      {room.ev && !gs.done && isCard(room.game) && room.game !== "scala" && room.game !== "condottieri" && (
         <p style={{ color: T.ink60, fontSize: 12, textAlign: "center", marginTop: 14, minHeight: 16 }}>
           {who(room, room.ev.seat)} {describe(room.ev, french)}
         </p>
@@ -4779,6 +4789,453 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
 
       <Micro style={{ textAlign: "center", marginTop: 12 }}>
         mani {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
+      </Micro>
+    </div>
+  );
+}
+
+/* ── condottieri (tactics) ── */
+const TSIDE = { A: "#2C557E", B: "#A5342F" }; // blue vs red
+const TGLYPH = { fante: "⚔", arciere: "🏹" };
+const THEXR = 27; // hex size (centre → corner), tuned to fit a phone
+const tpx = (q, r) => ({ x: THEXR * Math.sqrt(3) * (q + r / 2), y: THEXR * 1.5 * r });
+const tCorners = (cx, cy) =>
+  Array.from({ length: 6 }, (_, i) => {
+    const a = (Math.PI / 180) * (60 * i - 30);
+    return `${(cx + THEXR * Math.cos(a)).toFixed(1)},${(cy + THEXR * Math.sin(a)).toFixed(1)}`;
+  }).join(" ");
+
+// Full-screen dice-roll reveal: the die tumbles through faces, lands on the
+// damage, and a crit explodes. Fires on both devices from the shared anim id.
+function RollReveal({ shot, onDone }) {
+  const [n, setN] = useState(1);
+  const [phase, setPhase] = useState("roll");
+  useEffect(() => {
+    if (!shot) return;
+    setPhase("roll");
+    const face = Math.max(2, shot.faceMax || 8);
+    const iv = setInterval(() => setN(1 + Math.floor(Math.random() * face)), 55);
+    const t1 = setTimeout(() => {
+      clearInterval(iv);
+      setN(shot.dmg);
+      setPhase("show");
+    }, 560);
+    const t2 = setTimeout(() => onDone && onDone(), shot.crit ? 2000 : 1300);
+    return () => {
+      clearInterval(iv);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [shot && shot.id]);
+  if (!shot) return null;
+  const col = TSIDE[shot.side] || T.ink;
+  const rolling = phase === "roll";
+  return (
+    <div
+      onClick={onDone}
+      style={{ position: "fixed", inset: 0, zIndex: 84, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(255,255,255,0.7)" }}>
+          {TGLYPH[shot.atkType]} attacca {TGLYPH[shot.tgtType]}
+        </div>
+        <div
+          key={`${shot.id}-${phase}`}
+          className={rolling ? "tumble" : shot.crit ? "critshake" : "settle"}
+          style={{
+            width: 132,
+            height: 132,
+            borderRadius: 22,
+            background: "#fff",
+            border: `3px solid ${col}`,
+            boxShadow: `0 18px 48px rgba(0,0,0,0.5)`,
+            display: "grid",
+            placeItems: "center",
+            fontFamily: BRAND,
+            fontWeight: 700,
+            fontSize: 72,
+            color: col,
+          }}
+        >
+          {rolling ? n : shot.dmg}
+        </div>
+        {!rolling && (
+          <div className="settle" style={{ textAlign: "center" }}>
+            {shot.crit && (
+              <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: "#E9B54B", letterSpacing: "0.04em" }}>CRITICO! 💥</div>
+            )}
+            <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 17, color: "#fff", marginTop: 2 }}>
+              {shot.dmg} danni{shot.killed ? " — abbattuto!" : ""}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Animated 3/4-slide "how to play", little text.
+const TACT_SLIDES = [
+  { icon: "🎲", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6." },
+  { icon: "🗡️", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
+  { icon: "🏹", title: "Muovi, poi tira", body: "A turno attivi una pedina: la sposti e attacchi. L’Arciere colpisce da lontano." },
+  { icon: "🏰", title: "Come si vince", body: "Stermina l’altro o prendi il suo castello. La fontana ti cura, il castello ti risana del tutto." },
+];
+function TacticsHowTo({ onClose }) {
+  const [i, setI] = useState(0);
+  const s = TACT_SLIDES[i];
+  const last = i === TACT_SLIDES.length - 1;
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 86, background: SCRIM, display: "grid", placeItems: "center", padding: 22 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 20, padding: "26px 22px 18px", maxWidth: 340, width: "100%", boxShadow: "0 24px 60px rgba(18,18,18,0.4)", textAlign: "center" }}>
+        <div key={i} className="pop" style={{ fontSize: 60, lineHeight: 1 }}>{s.icon}</div>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 12 }}>{s.title}</div>
+        <p style={{ color: T.ink60, fontSize: 14.5, lineHeight: 1.5, margin: "8px 0 0" }}>{s.body}</p>
+        <div style={{ display: "flex", justifyContent: "center", gap: 6, margin: "18px 0 16px" }}>
+          {TACT_SLIDES.map((_, k) => (
+            <span key={k} style={{ width: 7, height: 7, borderRadius: 999, background: k === i ? T.ink : T.line }} />
+          ))}
+        </div>
+        <Button kind="solid" full onClick={() => (last ? onClose() : setI(i + 1))}>
+          {last ? "Giochiamo!" : "Avanti →"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function Tactics({ room, gs, seat, commit }) {
+  const board = gs.board;
+  const myTurn = gs.turn === seat && !gs.done;
+  const [sel, setSel] = useState(null); // selected own unit id (battle)
+  const [dest, setDest] = useState(null); // staged move hex key
+  const [rot, setRot] = useState(seat === "B" ? 180 : 0);
+  const [tilt, setTilt] = useState(46);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [help, setHelp] = useState(false);
+  const [shot, setShot] = useState(null);
+  const drag = useRef(null);
+  const moved = useRef(false);
+  const seenAnim = useRef(null);
+
+  // fire the roll reveal from the shared animation id
+  useEffect(() => {
+    const a = room?.anim;
+    if (!a || a.id === seenAnim.current) return;
+    seenAnim.current = a.id;
+    if (room.ev && room.ev.t === "attack" && gs.last && gs.last.dmg != null) {
+      setShot({ id: a.id, dmg: gs.last.dmg, crit: !!gs.last.crit, killed: !!gs.last.killed, atkType: gs.last.atkType, tgtType: gs.last.tgtType, side: room.ev.seat, faceMax: TACT.units[gs.last.atkType]?.max || 8 });
+    }
+  }, [room?.anim?.id]);
+
+  // clear any stale selection when the turn/phase flips
+  useEffect(() => {
+    setSel(null);
+    setDest(null);
+  }, [gs.turn, gs.phase]);
+
+  // layout
+  const centers = board.cells.map((c) => ({ c, ...tpx(c.q, c.r) }));
+  const xs = centers.map((p) => p.x),
+    ys = centers.map((p) => p.y);
+  const minX = Math.min(...xs),
+    minY = Math.min(...ys);
+  const PAD = THEXR + 6;
+  const BW = Math.max(...xs) - minX + 2 * PAD,
+    BH = Math.max(...ys) - minY + 2 * PAD;
+  const at = (q, r) => {
+    const p = tpx(q, r);
+    return { x: p.x - minX + PAD, y: p.y - minY + PAD };
+  };
+
+  // interaction sets
+  const unit = sel ? gs.units[sel] : null;
+  const reach = unit && myTurn && gs.phase === "battle" ? tacticsReach(gs, unit) : {};
+  const stagePos = unit ? (dest ? unhkey(dest) : { q: unit.q, r: unit.r }) : null;
+  const targetIds =
+    unit && myTurn && gs.phase === "battle"
+      ? tacticsTargets({ ...gs, units: { ...gs.units, [sel]: { ...unit, ...stagePos } } }, { ...unit, ...stagePos })
+      : [];
+  const targetSet = new Set(targetIds.map((id) => hkey(gs.units[id].q, gs.units[id].r)));
+  const deploySet = myTurn && gs.phase === "deploy" ? new Set(board.cells.map((c) => hkey(c.q, c.r)).filter((k) => tacticsDeployable(gs, seat, k))) : new Set();
+  const nextType = gs.phase === "deploy" ? gs.toPlace[seat][0] : null;
+
+  const tapHex = (k) => {
+    if (moved.current) return;
+    if (!myTurn) return;
+    if (gs.phase === "deploy") {
+      if (deploySet.has(k)) commit(tacticsDeploy(gs, seat, nextType, k));
+      return;
+    }
+    if (gs.phase === "battle" && unit) {
+      const uk = hkey(unit.q, unit.r);
+      if (k === uk) setDest(null);
+      else if (reach[k] !== undefined) setDest(k);
+    }
+  };
+  const tapUnit = (id) => {
+    if (moved.current) return;
+    if (!myTurn || gs.phase !== "battle") return;
+    const u = gs.units[id];
+    if (u.owner === seat && !gs.spent[id]) {
+      setSel(id);
+      setDest(null);
+    } else if (u.owner !== seat && sel && targetIds.includes(id)) {
+      commit(tacticsActivate(gs, seat, sel, dest, { kind: "attack", targetId: id }));
+      setSel(null);
+      setDest(null);
+    }
+  };
+  const endUnit = () => {
+    if (!sel) return;
+    commit(tacticsActivate(gs, seat, sel, dest, null));
+    setSel(null);
+    setDest(null);
+  };
+
+  // pan (screen-space), tap vs drag disambiguation
+  const onDown = (e) => {
+    const p = e.touches ? e.touches[0] : e;
+    drag.current = { x: p.clientX, y: p.clientY, px: pan.x, py: pan.y };
+    moved.current = false;
+  };
+  const onMove = (e) => {
+    if (!drag.current) return;
+    const p = e.touches ? e.touches[0] : e;
+    const dx = p.clientX - drag.current.x,
+      dy = p.clientY - drag.current.y;
+    if (Math.abs(dx) + Math.abs(dy) > 7) moved.current = true;
+    if (moved.current) setPan({ x: drag.current.px + dx, y: drag.current.py + dy });
+  };
+  const onUp = () => {
+    drag.current = null;
+    setTimeout(() => (moved.current = false), 0);
+  };
+  const resetView = () => {
+    setRot(seat === "B" ? 180 : 0);
+    setTilt(46);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const status = gs.done
+    ? gs.win
+      ? gs.win === seat
+        ? gs.how === "castle"
+          ? "Hai preso il castello — vittoria!"
+          : "Nemico sterminato — vittoria!"
+        : "Sconfitta…"
+      : "Pareggio"
+    : gs.phase === "roster"
+    ? gs.roster[seat] == null
+      ? "Scegli la tua compagnia"
+      : `${who(room, other(seat))} sta scegliendo…`
+    : gs.phase === "deploy"
+    ? myTurn
+      ? `Schiera vicino al castello — ${TACT.units[nextType]?.name} (${gs.toPlace[seat].length} rimasti)`
+      : `${who(room, gs.turn)} sta schierando…`
+    : myTurn
+    ? sel
+      ? "Tocca dove muovere, poi un nemico — o Fine"
+      : "Tocca una tua pedina"
+    : `Turno di ${who(room, gs.turn)}`;
+
+  const vbtn = {
+    ...plain,
+    width: 34,
+    height: 34,
+    borderRadius: 9,
+    border: `1px solid ${T.line}`,
+    background: "rgba(18,18,18,0.03)",
+    color: T.ink,
+    fontSize: 15,
+    fontWeight: 700,
+    cursor: "pointer",
+    display: "grid",
+    placeItems: "center",
+    WebkitTapHighlightColor: "transparent",
+  };
+
+  const specialMark = (k) => {
+    if (k === board.castle.A) return { kind: "castle", side: "A" };
+    if (k === board.castle.B) return { kind: "castle", side: "B" };
+    if (k === board.fount.A) return { kind: "fount", side: "A" };
+    if (k === board.fount.B) return { kind: "fount", side: "B" };
+    return null;
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
+      {shot && <RollReveal shot={shot} onDone={() => setShot(null)} />}
+      {help && <TacticsHowTo onClose={() => setHelp(false)} />}
+
+      {/* top bar: turn/round + view controls + how-to */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ width: 12, height: 12, borderRadius: 3, background: TSIDE[gs.turn], display: "inline-block", opacity: gs.done ? 0.3 : 1 }} />
+          <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 13 }}>
+            {gs.phase === "battle" ? `Round ${gs.round}` : gs.phase === "deploy" ? "Schieramento" : "Compagnia"}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button style={vbtn} onClick={() => setRot((r) => r - 60)} title="ruota">↺</button>
+          <button style={vbtn} onClick={() => setRot((r) => r + 60)} title="ruota">↻</button>
+          <button style={vbtn} onClick={() => setZoom((z) => Math.min(1.8, z + 0.15))} title="zoom">＋</button>
+          <button style={vbtn} onClick={() => setZoom((z) => Math.max(0.6, z - 0.15))} title="zoom">－</button>
+          <button style={vbtn} onClick={resetView} title="reset vista">⟳</button>
+          <button style={vbtn} onClick={() => setHelp(true)} title="come si gioca">?</button>
+        </div>
+      </div>
+
+      {/* the 2.5D board */}
+      <div
+        onTouchStart={onDown}
+        onTouchMove={onMove}
+        onTouchEnd={onUp}
+        onMouseDown={onDown}
+        onMouseMove={onMove}
+        onMouseUp={onUp}
+        onMouseLeave={onUp}
+        style={{
+          flex: 1,
+          minHeight: 300,
+          position: "relative",
+          overflow: "hidden",
+          perspective: 900,
+          touchAction: "none",
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          borderRadius: 14,
+          background: "linear-gradient(180deg, rgba(18,18,18,0.03), rgba(18,18,18,0.06))",
+        }}
+      >
+        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
+          <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+            <div style={{ transformStyle: "preserve-3d", transform: `rotateX(${tilt}deg) rotateZ(${rot}deg)`, width: BW, height: BH, position: "relative" }}>
+              <svg width={BW} height={BH} viewBox={`0 0 ${BW} ${BH}`} style={{ position: "absolute", inset: 0, overflow: "visible" }}>
+                {centers.map(({ c }) => {
+                  const k = hkey(c.q, c.r);
+                  const p = at(c.q, c.r);
+                  const blocked = board.blocked[k];
+                  const sp = specialMark(k);
+                  const isReach = reach[k] !== undefined;
+                  const isTarget = targetSet.has(k);
+                  const isDeploy = deploySet.has(k);
+                  const isSelHex = unit && k === hkey(unit.q, unit.r);
+                  const isDest = dest === k;
+                  let fill = blocked ? "rgba(18,18,18,0.30)" : "rgba(255,255,255,0.82)";
+                  if (sp && sp.kind === "fount") fill = "rgba(44,120,160,0.20)";
+                  if (isReach || isDest) fill = "rgba(46,120,90,0.28)";
+                  if (isDeploy) fill = "rgba(184,134,43,0.22)";
+                  if (isTarget) fill = "rgba(165,52,47,0.30)";
+                  return (
+                    <g key={k}>
+                      <polygon
+                        points={tCorners(p.x, p.y)}
+                        fill={fill}
+                        stroke={isSelHex ? T.ink : sp && sp.kind === "castle" ? TSIDE[sp.side] : T.line}
+                        strokeWidth={isSelHex || (sp && sp.kind === "castle") ? 2.4 : 1}
+                        className={isTarget || isDeploy ? "hexpulse" : ""}
+                        onClick={() => tapHex(k)}
+                        style={{ cursor: myTurn && (isReach || isDeploy || isTarget || isDest || isSelHex) ? "pointer" : "default" }}
+                      />
+                      {sp && (
+                        <text x={p.x} y={p.y + 5} textAnchor="middle" fontSize="16" style={{ pointerEvents: "none" }}>
+                          {sp.kind === "castle" ? "🏰" : "⛲"}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+              </svg>
+
+              {/* unit dice, billboarded to face the camera */}
+              {gs.order.map((id) => {
+                const u = gs.units[id];
+                const showAt = sel === id && dest ? unhkey(dest) : { q: u.q, r: u.r };
+                const p = at(showAt.q, showAt.r);
+                const mineU = u.owner === seat;
+                const spent = gs.spent[id] && gs.phase === "battle";
+                const isSel = sel === id;
+                const isTgt = targetSet.has(hkey(u.q, u.r)) && !(sel === id);
+                const col = TSIDE[u.owner];
+                return (
+                  <div
+                    key={id}
+                    onClick={() => tapUnit(id)}
+                    style={{
+                      position: "absolute",
+                      left: p.x,
+                      top: p.y,
+                      transform: `translate(-50%,-50%) rotateZ(${-rot}deg) rotateX(${-tilt}deg) translateZ(16px)`,
+                      cursor: myTurn ? "pointer" : "default",
+                      transition: "left 200ms ease, top 200ms ease",
+                    }}
+                  >
+                    <div
+                      className={isSel ? "floaty" : ""}
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: 10,
+                        background: "#fff",
+                        border: `3px solid ${col}`,
+                        outline: isSel ? `2px solid ${T.ink}` : isTgt ? `2px solid #A5342F` : "none",
+                        outlineOffset: 1,
+                        boxShadow: `0 6px 10px rgba(18,18,18,0.32)`,
+                        display: "grid",
+                        placeItems: "center",
+                        position: "relative",
+                        opacity: spent ? 0.5 : 1,
+                      }}
+                    >
+                      <span style={{ position: "absolute", top: -2, left: 3, fontSize: 11 }}>{TGLYPH[u.type]}</span>
+                      <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 21, color: col, lineHeight: 1 }}>{u.hp}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* status + actions */}
+      <div style={{ marginTop: 10, textAlign: "center", minHeight: 22 }}>
+        <div key={status} className="swap" style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15 }}>{status}</div>
+      </div>
+
+      {gs.phase === "roster" && myTurn && gs.roster[seat] == null && (
+        <div style={{ marginTop: 12 }}>
+          <Micro style={{ textAlign: "center" }}>Compagnia di 4 · almeno un Fante e un Arciere</Micro>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            {[1, 2, 3].map((f) => (
+              <button
+                key={f}
+                onClick={() => commit(tacticsRoster(gs, seat, f))}
+                style={{ ...plain, flex: 1, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "10px 6px", cursor: "pointer", fontFamily: BRAND, fontWeight: 600, fontSize: 13, WebkitTapHighlightColor: "transparent" }}
+              >
+                {f} ⚔ · {4 - f} 🏹
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {gs.phase === "battle" && myTurn && sel && (
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <Button kind="outline" full onClick={() => { setSel(null); setDest(null); }}>
+            Annulla
+          </Button>
+          <Button kind="solid" full onClick={endUnit}>
+            {dest ? "Muovi e basta" : "Resta / Fine"}
+          </Button>
+        </div>
+      )}
+
+      <Micro style={{ textAlign: "center", marginTop: 12 }}>
+        {who(room, "A")} {gs.order.filter((id) => gs.units[id].owner === "A").length} · {who(room, "B")} {gs.order.filter((id) => gs.units[id].owner === "B").length} pedine · mani {gs.tally.A}–{gs.tally.B}
       </Micro>
     </div>
   );
@@ -6066,6 +6523,15 @@ function Summary({ room, gs }) {
         <Micro style={{ marginTop: 4 }}>
           a {who(room, other(gs.win))} · mani {gs.tally.A}–{gs.tally.B}
         </Micro>
+      </div>
+    );
+  if (room.game === "condottieri")
+    return (
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18 }}>
+          {gs.how === "castle" ? "Castello espugnato 🏰" : gs.how === "timeout" ? "Tempo scaduto" : gs.win ? "Campo sterminato ⚔" : "Pareggio"}
+        </div>
+        <Micro style={{ marginTop: 4 }}>battaglie {gs.tally.A}–{gs.tally.B}</Micro>
       </div>
     );
   return (
