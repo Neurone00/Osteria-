@@ -169,6 +169,15 @@ const GAMES = {
     opts: [],
     def: {},
   },
+  condottieri: {
+    name: "Condottieri",
+    tag: "dadi in battaglia",
+    line: "Ogni pedina è un dado: la faccia è la vita, e ferito colpisce meno. Schiera vicino al castello, poi muovi e tira. Vinci sterminando l’altro o prendendone il castello.",
+    instant: true, // its own hex board — no card deck or shuffle ritual
+    board: true, // a tactics board, not cards or dice-cups
+    opts: [],
+    def: {},
+  },
 };
 const isCard = (game) => !GAMES[game].dice;
 // Scala (its own big deck) and Peppa (a trimmed 37-card deck) skip the 40-card
@@ -1128,6 +1137,309 @@ function s40Discard(gs, seat, cardId) {
     g.phase = "draw";
   }
   return { g, kind: "lay", ev: { t: "discard" } };
+}
+
+/* ── condottieri (tactics) ─────────────────────────────────────
+   A dice skirmish on a hex board. Each unit IS a die: its face shows its
+   current HP, and because a wounded die hits weaker, an attack rolls 1..HP —
+   the die literally shrinks as it takes damage. Rolling the top face (≥2)
+   explodes for a crit. Two classes: Fante (d8, melee, adjacent) and Arciere
+   (d6, ranged 2–4, needs line of sight). Deploy near your castle, then take
+   turns activating one unit (move, then attack). Heal on your fountain (+3) or
+   castle (full). Win by wiping the enemy — or by storming their castle. A round
+   cap ends stalls on total HP. Obstacles block movement and line of sight;
+   there is no elevation. */
+const TACT = {
+  W: 7,
+  H: 8,
+  BLOCK: 0.15, // share of non-reserved hexes turned to rubble
+  DEPLOY_R: 2, // deploy within this many hexes of your castle
+  ROUND_CAP: 30,
+  units: {
+    fante: { name: "Fante", max: 8, move: 3, min: 1, rng: 1 }, // d8 melee
+    arciere: { name: "Arciere", max: 6, move: 3, min: 2, rng: 4 }, // d6, can't hit adjacent
+  },
+};
+const HEX_DIRS = [
+  [1, 0],
+  [1, -1],
+  [0, -1],
+  [-1, 0],
+  [-1, 1],
+  [0, 1],
+];
+const hkey = (q, r) => `${q},${r}`;
+const unhkey = (k) => {
+  const [q, r] = k.split(",").map(Number);
+  return { q, r };
+};
+const hdist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
+
+// Rectangular pointy-top map in axial coordinates (Red Blob's rectangle layout).
+function tacticsCells(W, H) {
+  const cells = [];
+  for (let r = 0; r < H; r++) {
+    const off = Math.floor(r / 2);
+    for (let q = -off; q < W - off; q++) cells.push({ q, r });
+  }
+  return cells;
+}
+// Flood-fill: are all open hexes one connected region? (No unit ever walled off.)
+function tacticsConnected(openSet) {
+  const keys = [...openSet];
+  if (!keys.length) return false;
+  const seen = new Set([keys[0]]);
+  const stack = [keys[0]];
+  while (stack.length) {
+    const { q, r } = unhkey(stack.pop());
+    for (const [dq, dr] of HEX_DIRS) {
+      const nk = hkey(q + dq, r + dr);
+      if (openSet.has(nk) && !seen.has(nk)) {
+        seen.add(nk);
+        stack.push(nk);
+      }
+    }
+  }
+  return seen.size === openSet.size;
+}
+function tacticsBoard() {
+  const W = TACT.W,
+    H = TACT.H;
+  const cells = tacticsCells(W, H);
+  const row = (r) => cells.filter((c) => c.r === r);
+  const mid = (arr) => arr[Math.floor(arr.length / 2)];
+  const cA = mid(row(H - 1)),
+    cB = mid(row(0)); // castles at opposite ends
+  const fA = mid(row(H - 3)),
+    fB = mid(row(2)); // fountains a little forward of each castle
+  const castle = { A: hkey(cA.q, cA.r), B: hkey(cB.q, cB.r) };
+  const fount = { A: hkey(fA.q, fA.r), B: hkey(fB.q, fB.r) };
+  const reserved = new Set([castle.A, castle.B, fount.A, fount.B]);
+  const nearCastle = (c) => hdist(c, cA) <= TACT.DEPLOY_R || hdist(c, cB) <= TACT.DEPLOY_R;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const blocked = {};
+    for (const c of cells) {
+      const k = hkey(c.q, c.r);
+      if (reserved.has(k) || nearCastle(c)) continue; // deploy zones + specials stay clear
+      if (Math.random() < TACT.BLOCK) blocked[k] = true;
+    }
+    const openSet = new Set(cells.map((c) => hkey(c.q, c.r)).filter((k) => !blocked[k]));
+    if (tacticsConnected(openSet)) return { w: W, h: H, cells, blocked, castle, fount };
+  }
+  return { w: W, h: H, cells, blocked: {}, castle, fount };
+}
+
+function dealTactics(dealer, opts, tally) {
+  return {
+    board: tacticsBoard(),
+    phase: "roster", // roster → deploy → battle
+    roster: { A: null, B: null }, // chosen number of Fanti (1..3); Arcieri = 4 − that
+    units: {}, // id → { id, owner, type, hp, max, q, r }
+    order: [], // stable unit ids
+    toPlace: { A: [], B: [] }, // unit types still to deploy
+    turn: dealer || "A",
+    spent: {}, // unit ids already activated this round
+    round: 1,
+    dealer: dealer || "A",
+    tally: tally || { A: 0, B: 0 },
+    last: null, // last resolved attack, for the roll reveal
+    how: null, // "wipe" | "castle" | "timeout"
+    done: false,
+    matchDone: false,
+    win: null,
+  };
+}
+
+const tacticsOccupied = (g, k) => g.order.some((id) => hkey(g.units[id].q, g.units[id].r) === k);
+const tacticsOpen = (g, k) => !g.board.blocked[k] && g.board.cells.some((c) => hkey(c.q, c.r) === k);
+function tacticsDeployable(g, seat, k) {
+  if (!tacticsOpen(g, k) || tacticsOccupied(g, k)) return false;
+  return hdist(unhkey(k), unhkey(g.board.castle[seat])) <= TACT.DEPLOY_R;
+}
+
+function tacticsRoster(gs, seat, fante) {
+  if (gs.done || gs.phase !== "roster" || gs.turn !== seat || gs.roster[seat] != null) return null;
+  if (![1, 2, 3].includes(fante)) return null; // 4-unit roster, at least one of each kind
+  const g = clone(gs);
+  g.roster[seat] = fante;
+  if (g.roster[other(seat)] == null) g.turn = other(seat);
+  else {
+    for (const s of ["A", "B"]) {
+      const f = g.roster[s];
+      g.toPlace[s] = [...Array(f).fill("fante"), ...Array(4 - f).fill("arciere")];
+    }
+    g.phase = "deploy";
+    g.turn = g.dealer;
+  }
+  return { g, quiet: true, ev: { t: "roster", fante } };
+}
+
+function tacticsDeploy(gs, seat, type, k) {
+  if (gs.done || gs.phase !== "deploy" || gs.turn !== seat) return null;
+  const g = clone(gs);
+  const queue = g.toPlace[seat];
+  const i = queue.indexOf(type);
+  if (i < 0 || !tacticsDeployable(g, seat, k)) return null;
+  const { q, r } = unhkey(k);
+  const id = `${seat}${type[0]}${g.order.length}`;
+  g.units[id] = { id, owner: seat, type, hp: TACT.units[type].max, max: TACT.units[type].max, q, r };
+  g.order.push(id);
+  queue.splice(i, 1);
+  if (queue.length === 0) {
+    if (g.toPlace[other(seat)].length) g.turn = other(seat);
+    else {
+      g.phase = "battle";
+      g.turn = g.dealer;
+      g.round = 1;
+      g.spent = {};
+    }
+  }
+  return { g, quiet: true, ev: { t: "deploy", type } };
+}
+
+// Hexes a unit can step to (BFS to its Move, around obstacles and other units).
+function tacticsReach(g, unit) {
+  const start = hkey(unit.q, unit.r);
+  const move = TACT.units[unit.type].move;
+  const occ = new Set(g.order.filter((id) => id !== unit.id).map((id) => hkey(g.units[id].q, g.units[id].r)));
+  const dist = { [start]: 0 };
+  const q = [start];
+  while (q.length) {
+    const k = q.shift();
+    if (dist[k] >= move) continue;
+    const { q: cq, r: cr } = unhkey(k);
+    for (const [dq, dr] of HEX_DIRS) {
+      const nk = hkey(cq + dq, cr + dr);
+      if (dist[nk] !== undefined || !tacticsOpen(g, nk) || occ.has(nk)) continue;
+      dist[nk] = dist[k] + 1;
+      q.push(nk);
+    }
+  }
+  delete dist[start];
+  return dist;
+}
+
+function cubeRound(q, r, s) {
+  let rq = Math.round(q),
+    rr = Math.round(r),
+    rs = Math.round(s);
+  const dq = Math.abs(rq - q),
+    dr = Math.abs(rr - r),
+    ds = Math.abs(rs - s);
+  if (dq > dr && dq > ds) rq = -rr - rs;
+  else if (dr > ds) rr = -rq - rs;
+  else rs = -rq - rr;
+  return { q: rq, r: rr };
+}
+function tacticsLoS(g, a, b) {
+  const N = hdist(a, b);
+  for (let i = 1; i < N; i++) {
+    const t = i / N;
+    const p = cubeRound(a.q + (b.q - a.q) * t, a.r + (b.r - a.r) * t, -a.q - a.r + (-b.q - b.r - (-a.q - a.r)) * t);
+    if (g.board.blocked[hkey(p.q, p.r)]) return false;
+  }
+  return true;
+}
+function tacticsTargets(g, unit) {
+  const u = TACT.units[unit.type];
+  return g.order.filter((id) => {
+    const t = g.units[id];
+    if (t.owner === unit.owner) return false;
+    const d = hdist(unit, t);
+    if (d < u.min || d > u.rng) return false;
+    if (u.rng > 1 && !tacticsLoS(g, unit, t)) return false;
+    return true;
+  });
+}
+
+// Roll 1..HP; rolling the top face (≥2) explodes and rolls again — a crit.
+function tacticsRoll(hp) {
+  const face = hp;
+  let total = 0,
+    crit = false;
+  for (let i = 0; i < 6; i++) {
+    const r = 1 + Math.floor(Math.random() * face);
+    total += r;
+    if (r === face && face >= 2) {
+      crit = true;
+      continue;
+    }
+    break;
+  }
+  return { total, crit };
+}
+
+function tacticsWin(g, winner, how) {
+  g.done = true;
+  g.matchDone = true;
+  g.win = winner;
+  g.how = how;
+  if (winner) g.tally[winner] += 1;
+}
+function tacticsPassTurn(g) {
+  const unspent = (s) => g.order.some((id) => g.units[id].owner === s && !g.spent[id]);
+  const foe = other(g.turn);
+  if (unspent(foe)) {
+    g.turn = foe;
+    return;
+  }
+  if (unspent(g.turn)) return; // opponent is out of units this round; keep going
+  g.round += 1;
+  g.spent = {};
+  if (g.round > TACT.ROUND_CAP) {
+    const hp = (s) => g.order.filter((id) => g.units[id].owner === s).reduce((t, id) => t + g.units[id].hp, 0);
+    const a = hp("A"),
+      b = hp("B");
+    tacticsWin(g, a === b ? null : a > b ? "A" : "B", "timeout");
+    return;
+  }
+  g.turn = foe;
+}
+
+// One activation, resolved atomically: optionally move to `toKey`, then either
+// attack a target or wait. Healing on your own castle/fountain is automatic.
+function tacticsActivate(gs, seat, unitId, toKey, action) {
+  if (gs.done || gs.phase !== "battle" || gs.turn !== seat) return null;
+  const g = clone(gs);
+  const unit = g.units[unitId];
+  if (!unit || unit.owner !== seat || g.spent[unitId]) return null;
+  if (toKey && toKey !== hkey(unit.q, unit.r)) {
+    if (tacticsReach(g, unit)[toKey] === undefined) return null;
+    const { q, r } = unhkey(toKey);
+    unit.q = q;
+    unit.r = r;
+  }
+  let ev = { t: "wait", unit: unit.type };
+  let kind = "lay";
+  let roll = null;
+  if (action && action.kind === "attack") {
+    const target = g.units[action.targetId];
+    if (!target || target.owner === seat) return null;
+    const u = TACT.units[unit.type];
+    const d = hdist(unit, target);
+    if (d < u.min || d > u.rng || (u.rng > 1 && !tacticsLoS(g, unit, target))) return null;
+    const res = tacticsRoll(unit.hp);
+    target.hp -= res.total;
+    const killed = target.hp <= 0;
+    if (killed) {
+      delete g.units[action.targetId];
+      g.order = g.order.filter((id) => id !== action.targetId);
+    }
+    roll = { attacker: unitId, target: action.targetId, atkType: unit.type, tgtType: target.type, dmg: res.total, crit: res.crit, killed };
+    ev = { t: "attack", unit: unit.type, target: target.type, dmg: res.total, crit: res.crit, killed };
+    kind = res.crit ? "scopa" : "take"; // a crit gets the big slam + shake
+  }
+  const uk = hkey(unit.q, unit.r);
+  if (uk === g.board.castle[seat]) unit.hp = unit.max; // rally to full at your keep
+  else if (uk === g.board.fount[seat]) unit.hp = Math.min(unit.max, unit.hp + 3);
+  g.last = { ...(roll || {}), unitId, to: uk };
+  if (uk === g.board.castle[other(seat)]) tacticsWin(g, seat, "castle");
+  else if (!g.order.some((id) => g.units[id].owner === other(seat))) tacticsWin(g, seat, "wipe");
+  if (!g.done) {
+    g.spent[unitId] = true;
+    tacticsPassTurn(g);
+  }
+  return { g, kind, ev, roll };
 }
 
 /* ═══════════════════════════ feedback ═══════════════════════════ */
@@ -3444,6 +3756,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealScala(dealer, cont?.tally || null)
       : game === "peppa"
       ? dealPeppa(dealer, cont?.tally || null)
+      : game === "condottieri"
+      ? dealTactics(dealer, o, cont?.tally || null)
       : dealCamicia(cont?.tally || null, deck);
 
   const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });

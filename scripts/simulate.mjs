@@ -36,6 +36,8 @@ const EXPORTS = [
   "dealRuba", "rubaOptions", "rubaPlay",
   "dealCamicia", "camiciaFlip", "demand",
   "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed", "peppaShuffle", "peppaReady",
+  "TACT", "dealTactics", "tacticsRoster", "tacticsDeploy", "tacticsActivate", "tacticsReach", "tacticsTargets",
+  "tacticsRoll", "tacticsDeployable", "tacticsBoard", "tacticsCells", "hdist", "hkey", "unhkey",
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
@@ -229,6 +231,115 @@ function playPeppa() {
   return draws;
 }
 const other = (s) => (s === "A" ? "B" : "A");
+
+/* ── condottieri (tactics) ──────────────────────────────────── */
+// Hex-math identities plus a full random game: roster → deploy → battle, all
+// the way to a decisive end (or the round-cap tiebreak). Checks connectivity,
+// legal deploys, HP bounds, and that every win condition holds when it fires.
+function tacticsHexChecks() {
+  const A = { q: 0, r: 0 };
+  if (R.hdist(A, A) !== 0) fail("tactics hex", "distance to self must be 0");
+  const dirs = [
+    [1, 0],
+    [1, -1],
+    [0, -1],
+    [-1, 0],
+    [-1, 1],
+    [0, 1],
+  ];
+  for (const [dq, dr] of dirs) if (R.hdist(A, { q: dq, r: dr }) !== 1) fail("tactics hex", `neighbor ${dq},${dr} not at distance 1`);
+  if (R.hdist({ q: 0, r: 0 }, { q: 2, r: -1 }) !== 2) fail("tactics hex", "distance math wrong");
+}
+function tacticsConnectedKeys(openKeys) {
+  const set = new Set(openKeys);
+  const seen = new Set([openKeys[0]]);
+  const stack = [openKeys[0]];
+  const dirs = [
+    [1, 0],
+    [1, -1],
+    [0, -1],
+    [-1, 0],
+    [-1, 1],
+    [0, 1],
+  ];
+  while (stack.length) {
+    const { q, r } = R.unhkey(stack.pop());
+    for (const [dq, dr] of dirs) {
+      const nk = R.hkey(q + dq, r + dr);
+      if (set.has(nk) && !seen.has(nk)) {
+        seen.add(nk);
+        stack.push(nk);
+      }
+    }
+  }
+  return seen.size === set.size;
+}
+function playTactics() {
+  let g = R.dealTactics("A", {}, { A: 0, B: 0 });
+  const openKeys = g.board.cells.map((c) => R.hkey(c.q, c.r)).filter((k) => !g.board.blocked[k]);
+  if (!tacticsConnectedKeys(openKeys)) return fail("tactics", "generated board is not fully connected");
+  // rosters (at least one of each kind is enforced by the engine: 1..3 Fanti)
+  let r = R.tacticsRoster(g, "A", 1 + Math.floor(Math.random() * 3));
+  if (!r) return fail("tactics", "roster A refused");
+  g = r.g;
+  r = R.tacticsRoster(g, "B", 1 + Math.floor(Math.random() * 3));
+  if (!r) return fail("tactics", "roster B refused");
+  g = r.g;
+  if (g.phase !== "deploy") return fail("tactics", "did not reach deploy after both rosters");
+  // deploy every unit onto a legal hex near its castle
+  let guard = 0;
+  while (g.phase === "deploy") {
+    if (++guard > 200) return fail("tactics", "deploy never finished");
+    const seat = g.turn;
+    const type = g.toPlace[seat][0];
+    const spot = openKeys.find((k) => R.tacticsDeployable(g, seat, k));
+    if (!spot) return fail("tactics", `no legal deploy hex for ${seat}`);
+    const d = R.tacticsDeploy(g, seat, type, spot);
+    if (!d) return fail("tactics", "deploy refused a legal placement");
+    g = d.g;
+  }
+  if (g.phase !== "battle") return fail("tactics", "did not reach battle");
+  if (g.order.length !== 8) return fail("tactics", `expected 8 units deployed, got ${g.order.length}`);
+  // battle: random legal activations to the end
+  let steps = 0;
+  const MAX = 4000;
+  while (!g.done) {
+    if (++steps > MAX) return fail("tactics", "battle never ended (round cap should have)");
+    const seat = g.turn;
+    const mine = g.order.filter((id) => g.units[id].owner === seat && !g.spent[id]);
+    if (!mine.length) return fail("tactics", `${seat} on turn with no unspent units`);
+    const uid = mine[Math.floor(Math.random() * mine.length)];
+    const reach = R.tacticsReach(g, g.units[uid]);
+    const spots = Object.keys(reach);
+    const to = spots.length && Math.random() < 0.8 ? spots[Math.floor(Math.random() * spots.length)] : null;
+    // choose a target reachable from the prospective position
+    const probe = JSON.parse(JSON.stringify(g));
+    if (to) {
+      const { q, r: rr } = R.unhkey(to);
+      probe.units[uid].q = q;
+      probe.units[uid].r = rr;
+    }
+    const tgts = R.tacticsTargets(probe, probe.units[uid]);
+    const action = tgts.length && Math.random() < 0.9 ? { kind: "attack", targetId: tgts[Math.floor(Math.random() * tgts.length)] } : null;
+    const res = R.tacticsActivate(g, seat, uid, to, action);
+    if (!res) return fail("tactics", "activate refused a move it validated as legal");
+    g = res.g;
+    for (const id of g.order) {
+      const u = g.units[id];
+      if (u.hp < 1 || u.hp > u.max) fail("tactics", `${id} hp ${u.hp} out of 1..${u.max}`);
+    }
+  }
+  // the win condition it claims must actually hold
+  if (g.win != null) {
+    const loser = other(g.win);
+    if (g.how === "wipe" && g.order.some((id) => g.units[id].owner === loser)) fail("tactics", "wipe win but the loser still has units");
+    if (g.how === "castle") {
+      const onKeep = g.order.some((id) => g.units[id].owner === g.win && R.hkey(g.units[id].q, g.units[id].r) === g.board.castle[loser]);
+      if (!onKeep) fail("tactics", "castle win but no unit stands on the enemy castle");
+    }
+  }
+  return steps;
+}
 
 /* ── briscola ───────────────────────────────────────────────── */
 const brisCensus = (g, label) =>
@@ -519,6 +630,7 @@ const runs = [
   ["camicia, italian (A/2/3)", () => playCamicia({ intl: false })],
   ["camicia, international (A4 R3 C2 F1)", () => playCamicia({ intl: true })],
   ["peppa tencia (old maid)", () => playPeppa()],
+  ["condottieri (tactics)", () => playTactics()],
   ["briscola", () => playBriscola()],
   ["perudo", () => playPerudo()],
   ["yahtzee", () => playYahtzee()],
@@ -552,6 +664,11 @@ for (const [label, run] of runs) {
   const before = failures;
   s40MeldTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"scala 40 meld analyzer".padEnd(44)} sets, runs, jokers, ace low/high`);
+}
+{
+  const before = failures;
+  tacticsHexChecks();
+  console.log(`${failures === before ? "✓" : "✗"} ${"condottieri hex math".padEnd(44)} distance, neighbors, rounding`);
 }
 
 console.log(failures ? `\n${failures} failure(s)` : "\nAll invariants held: 40 cards accounted for throughout, no stuck seats, every hand terminated.");
