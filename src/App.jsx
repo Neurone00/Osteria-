@@ -2423,6 +2423,138 @@ function Rule() {
   return <div style={{ height: 1, background: T.line, margin: "18px 0" }} />;
 }
 
+// One consistent line-icon set, in place of emoji: thin strokes on currentColor,
+// same hairline language as the deck. `n` names the glyph; `s` is the pixel box.
+function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
+  const P = { fill: "none", stroke: c || "currentColor", strokeWidth: sw, strokeLinecap: "round", strokeLinejoin: "round" };
+  const dot = (x, y) => <circle cx={x} cy={y} r="1.15" fill={c || "currentColor"} stroke="none" />;
+  const g = {
+    sword: (
+      <>
+        <path {...P} d="M14.5 17.5 4 7V4h3l10.5 10.5" />
+        <path {...P} d="m13 18 5-5M15.5 15.5l4 4M18 21l2-2" />
+      </>
+    ),
+    bow: (
+      <>
+        <path {...P} d="M6 18A16 16 0 0 1 18 6" />
+        <path {...P} d="M6 18 18 6" />
+        <path {...P} d="M3.5 20.5 20 4M20 4h-4M20 4v4" />
+      </>
+    ),
+    castle: (
+      <>
+        <path {...P} d="M5 21V10M19 21V10M4 21h16" />
+        <path {...P} d="M4 10V7h3v2h2V7h2v2h2V7h2v2h2V7h3v3" />
+        <path {...P} d="M10 21v-4a2 2 0 0 1 4 0v4" />
+      </>
+    ),
+    drop: <path {...P} d="M12 3s6 6.4 6 10a6 6 0 0 1-12 0c0-3.6 6-10 6-10Z" />,
+    shuffle: (
+      <>
+        <path {...P} d="M3 17h3.4c1.2 0 2.3-.6 3-1.6l5.2-7.2c.7-1 1.8-1.6 3-1.6H21" />
+        <path {...P} d="m18 4 3 3-3 3" />
+        <path {...P} d="M3 7h3.4c1.2 0 2.3.6 3 1.6" />
+        <path {...P} d="M14.4 15.4c.7 1 1.8 1.6 3 1.6H21" />
+        <path {...P} d="m18 14 3 3-3 3" />
+      </>
+    ),
+    up: <path {...P} d="M12 19V5M6 11l6-6 6 6" />,
+    dice: (
+      <>
+        <rect {...P} x="4" y="4" width="16" height="16" rx="3.5" />
+        {dot(9, 9)}
+        {dot(15, 9)}
+        {dot(9, 15)}
+        {dot(15, 15)}
+      </>
+    ),
+    burst: <path {...P} d="M12 2v5M12 17v5M2 12h5M17 12h5M5.2 5.2l3 3M15.8 15.8l3 3M18.8 5.2l-3 3M8.2 15.8l-3 3" />,
+    wine: (
+      <>
+        <path {...P} d="M8 3h8M7 3c0 5 1.6 8 5 8s5-3 5-8" />
+        <path {...P} d="M12 11v7M8.5 21h7" />
+      </>
+    ),
+    exit: (
+      <>
+        <path {...P} d="M10 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+        <path {...P} d="m16 17 5-5-5-5M21 12H9" />
+      </>
+    ),
+    clip: (
+      <>
+        <rect {...P} x="8" y="3" width="8" height="4" rx="1" />
+        <path {...P} d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" />
+        <path {...P} d="M8.5 11h7M8.5 15h5" />
+      </>
+    ),
+    share: (
+      <>
+        <path {...P} d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
+        <path {...P} d="M16 6l-4-4-4 4M12 2v13" />
+      </>
+    ),
+    download: (
+      <>
+        <path {...P} d="M12 3v12M8 11l4 4 4-4" />
+        <path {...P} d="M5 21h14" />
+      </>
+    ),
+    flask: (
+      <>
+        <path {...P} d="M9 3h6M10 3v6.5L5.4 17a2 2 0 0 0 1.7 3h9.8a2 2 0 0 0 1.7-3L14 9.5V3" />
+        <path {...P} d="M7.5 15h9" />
+      </>
+    ),
+    bump: (
+      <>
+        <path {...P} d="M12 8v8" />
+        <path {...P} d="M8.6 9.6a4.5 4.5 0 0 0 0 4.8M15.4 9.6a4.5 4.5 0 0 1 0 4.8" />
+        <path {...P} d="M6 7a8 8 0 0 0 0 10M18 7a8 8 0 0 1 0 10" />
+      </>
+    ),
+    rotateL: (
+      <>
+        <path {...P} d="M3 12a9 9 0 1 0 2.6-6.4L3 8" />
+        <path {...P} d="M3 3v5h5" />
+      </>
+    ),
+    rotateR: (
+      <>
+        <path {...P} d="M21 12a9 9 0 1 1-2.6-6.4L21 8" />
+        <path {...P} d="M21 3v5h-5" />
+      </>
+    ),
+    plus: <path {...P} d="M12 5v14M5 12h14" />,
+    minus: <path {...P} d="M5 12h14" />,
+    recenter: (
+      <>
+        <circle {...P} cx="12" cy="12" r="3" />
+        <path {...P} d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+      </>
+    ),
+    nfc: (
+      <>
+        <path {...P} d="M5.5 8a10 10 0 0 1 0 8M9 6a15 15 0 0 1 0 12" />
+        <path {...P} d="M13 15V9l4 6V9" />
+      </>
+    ),
+    help: (
+      <>
+        <circle {...P} cx="12" cy="12" r="9" />
+        <path {...P} d="M9.5 9.2a2.5 2.5 0 0 1 4.5 1.5c0 1.6-2 2-2 3.3" />
+        {dot(12, 17)}
+      </>
+    ),
+  };
+  return (
+    <svg width={s} height={s} viewBox="0 0 24 24" className={cls} aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-0.15em", flexShrink: 0, ...style }}>
+      {g[n] || null}
+    </svg>
+  );
+}
+
 // A collapsible section: a Micro-labelled header with a chevron, tucking its
 // contents away (collapsed by default). Used to hide the per-game score
 // breakdown and the house rules until asked for.
@@ -2546,7 +2678,7 @@ function InstallPrompt() {
     ) : isIOS ? (
       iosSafari ? (
         <>
-          Tocca <b>Condividi</b> <span style={{ fontSize: 14 }}>􀈂</span> in basso, poi <b>“Aggiungi a Home”</b>.
+          Tocca <b>Condividi</b> <Ico n="share" s={14} style={{ verticalAlign: "-0.2em" }} /> in basso, poi <b>“Aggiungi a Home”</b>.
         </>
       ) : (
         <>
@@ -2563,15 +2695,16 @@ function InstallPrompt() {
       </>
     );
 
-  const link = { ...plain, display: "block", margin: "14px auto 0", textAlign: "center", color: T.ink, fontWeight: 600 };
-  const label = inApp && isAndroid ? "⤴ Apri in Chrome per installare" : "⤓ Installa l’app";
+  const link = { ...plain, display: "flex", width: "fit-content", alignItems: "center", gap: 6, margin: "14px auto 0", textAlign: "center", color: T.ink, fontWeight: 600 };
+  const label = inApp && isAndroid ? "Apri in Chrome per installare" : "Installa l’app";
+  const labelIco = inApp && isAndroid ? "exit" : "download";
   // In-app browsers can't install, so lead with the way out rather than a button
   // that would appear to do nothing.
   const showSteps = (help || (inApp && !bip)) && !note;
   return (
     <div style={{ textAlign: "center" }}>
       <button style={link} onClick={tap}>
-        {label}
+        <Ico n={labelIco} s={16} /> {label}
       </button>
       {note && <p style={{ color: T.ink, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 280 }}>{note}</p>}
       {showSteps && <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.6, margin: "8px auto 0", maxWidth: 280 }}>{steps}</p>}
@@ -2719,7 +2852,7 @@ function SoloBar({ seat, names, onFlip }) {
       onClick={onFlip}
       style={{ width: "100%", background: "rgba(18,18,18,0.05)", border: `1px dashed ${T.ink30}`, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontFamily: BRAND, fontWeight: 600, fontSize: 13, color: T.ink, cursor: "pointer", display: "flex", justifyContent: "center", gap: 8, alignItems: "center", WebkitTapHighlightColor: "transparent" }}
     >
-      🧪 Solo · sei {names[seat] || seat} — tocca per passare all’altro
+      <Ico n="flask" s={14} /> Solo · sei {names[seat] || seat} — tocca per passare all’altro
     </button>
   );
 }
@@ -2772,7 +2905,7 @@ function BumpVeil({ show, onCancel }) {
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(231,229,224,0.94)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ textAlign: "center", maxWidth: 320, transform: `translate(${off.x}px, ${off.y}px) rotate(${off.r}deg)` }}>
-        <div style={{ fontSize: 44 }}>🤜🤛</div>
+        <div><Ico n="bump" s={44} c={T.ink} sw={1.6} /></div>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 12 }}>Bump!</div>
         <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 18px" }}>Avvicinate i telefoni e premete Bump insieme.</p>
         <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 20 }}>
@@ -2795,7 +2928,7 @@ function LeaveDialog({ show, onStay, onGo }) {
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 70, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "26px 22px 20px", maxWidth: 340, width: "100%", textAlign: "center", boxShadow: "0 20px 50px rgba(18,18,18,0.3)" }}>
-        <div style={{ fontSize: 34 }}>🍷</div>
+        <div><Ico n="wine" s={32} c={T.ink} sw={1.6} /></div>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 8 }}>Già ti alzi dal tavolo?</div>
         <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 20px" }}>
           La mano è ancora calda e il tuo posto è caldo pure lui. Se esci lasci le carte all’oste — e l’oste bara.
@@ -2824,7 +2957,7 @@ function FinaleModal({ show, decided, outcome, room, gs, seat, onAgain, onExit }
   const draw = outcome === "draw";
   const head = !decided ? "Punteggio" : win ? "Vittoria!" : draw ? "Pareggio" : "Sconfitta";
   const color = !decided ? T.ink : win ? "#B8862B" : draw ? T.ink60 : "#A5342F";
-  const sub = !decided ? null : win ? "Offre l’oste 🍷" : draw ? "Pari e patta — nessuno paga" : "Ci sta una rivincita.";
+  const sub = !decided ? null : win ? "Offre l’oste" : draw ? "Pari e patta — nessuno paga" : "Ci sta una rivincita.";
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 90, background: SCRIM, display: "grid", placeItems: "center", padding: 20, overflowY: "auto" }}>
       <div className="fade" style={{ position: "relative", background: T.bg, border: `1px solid ${T.line}`, borderRadius: 20, padding: "22px 20px", maxWidth: 360, width: "100%", boxShadow: "0 24px 60px rgba(18,18,18,0.35)", overflow: "hidden" }}>
@@ -2877,7 +3010,7 @@ function EndGameOverlay({ room, seat, onAgree, onDecline, onCancel }) {
           </>
         ) : (
           <>
-            <div style={{ fontSize: 32 }}>✋</div>
+            <div><Ico n="exit" s={30} c={T.ink} sw={1.6} /></div>
             <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 21, color: T.ink, marginTop: 6 }}>{who(room, req.by)} vuole smettere</div>
             <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px 0 18px" }}>Chiudete qui e tornate a scegliere un gioco?</p>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -3924,8 +4057,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             {/* quick-pair shortcuts */}
             <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "6px 20px", marginTop: 14 }}>
               {!hasStore() && (
-                <button onClick={bump} style={{ ...plain, color: T.ink, fontWeight: 600 }}>
-                  🤜 Bump
+                <button onClick={bump} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Ico n="bump" s={16} /> Bump
                 </button>
               )}
               {hasScanner() && (
@@ -3934,8 +4067,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 </button>
               )}
               {hasNfc() && (
-                <button onClick={readNfc} style={{ ...plain }}>
-                  ᯤ Tag NFC
+                <button onClick={readNfc} style={{ ...plain, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <Ico n="nfc" s={15} /> Tag NFC
                 </button>
               )}
             </div>
@@ -3946,9 +4079,9 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             {soloRef.current && (
               <button
                 onClick={openSolo}
-                style={{ ...plain, display: "block", margin: "16px auto 0", color: T.ink, fontWeight: 600, fontSize: 13.5 }}
+                style={{ ...plain, display: "flex", width: "fit-content", alignItems: "center", gap: 6, margin: "16px auto 0", color: T.ink, fontWeight: 600, fontSize: 13.5 }}
               >
-                🧪 Prova da solo <span style={{ color: T.ink30, fontWeight: 400 }}>· due lati, un telefono</span>
+                <Ico n="flask" s={15} /> Prova da solo <span style={{ color: T.ink30, fontWeight: 400 }}>· due lati, un telefono</span>
               </button>
             )}
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
@@ -4800,7 +4933,7 @@ function PeppaHand({ cards, faceUp, mode, offerId, onReorder, onOffer, onDraw, s
           >
             {faceUp ? <Card card={c} size="xs" rot={0} slam={slamId === id} /> : <Back size="xs" />}
             {offered && (
-              <div style={{ position: "absolute", top: -15, left: 0, right: 0, textAlign: "center", fontSize: 13, color: "#B8862B" }}>⬆</div>
+              <div style={{ position: "absolute", top: -16, left: 0, right: 0, textAlign: "center" }}><Ico n="up" s={14} c="#B8862B" sw={2} /></div>
             )}
           </div>
         );
@@ -4895,7 +5028,7 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
       {canArrange && (
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
           <Button kind="outline" full onClick={() => commit(peppaShuffle(gs, seat))}>
-            🔀 Mischia
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="shuffle" s={16} /> Mischia</span>
           </Button>
           <Button kind="solid" full onClick={() => commit(peppaReady(gs, seat))}>
             Presento →
@@ -4912,7 +5045,7 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
 
 /* ── condottieri (tactics) ── */
 const TSIDE = { A: "#2C557E", B: "#A5342F" }; // blue vs red
-const TGLYPH = { fante: "⚔", arciere: "🏹" };
+const uIco = (type, s = 14, c) => <Ico n={type === "fante" ? "sword" : "bow"} s={s} c={c} />;
 const THEXR = 27; // hex size (centre → corner), tuned to fit a phone
 const tpx = (q, r) => ({ x: THEXR * Math.sqrt(3) * (q + r / 2), y: THEXR * 1.5 * r });
 const tCorners = (cx, cy) =>
@@ -4953,7 +5086,7 @@ function RollReveal({ shot, onDone }) {
     >
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
         <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(255,255,255,0.7)" }}>
-          {TGLYPH[shot.atkType]} attacca {TGLYPH[shot.tgtType]}
+          {uIco(shot.atkType, 13, "rgba(255,255,255,0.75)")} attacca {uIco(shot.tgtType, 13, "rgba(255,255,255,0.75)")}
         </div>
         <div
           key={`${shot.id}-${phase}`}
@@ -4978,7 +5111,9 @@ function RollReveal({ shot, onDone }) {
         {!rolling && (
           <div className="settle" style={{ textAlign: "center" }}>
             {shot.crit && (
-              <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: "#E9B54B", letterSpacing: "0.04em" }}>CRITICO! 💥</div>
+              <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: "#E9B54B", letterSpacing: "0.04em", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                CRITICO! <Ico n="burst" s={20} c="#E9B54B" sw={2} />
+              </div>
             )}
             <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 17, color: "#fff", marginTop: 2 }}>
               {shot.dmg} danni{shot.killed ? " — abbattuto!" : ""}
@@ -4992,10 +5127,10 @@ function RollReveal({ shot, onDone }) {
 
 // Animated 3/4-slide "how to play", little text.
 const TACT_SLIDES = [
-  { icon: "🎲", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6." },
-  { icon: "🗡️", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
-  { icon: "🏹", title: "Muovi, poi tira", body: "A turno attivi una pedina: la sposti e attacchi. L’Arciere colpisce da lontano." },
-  { icon: "🏰", title: "Come si vince", body: "Stermina l’altro o prendi il suo castello. La fontana ti cura, il castello ti risana del tutto." },
+  { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6." },
+  { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
+  { icon: "bow", title: "Muovi, poi tira", body: "A turno attivi una pedina: la sposti e attacchi. L’Arciere colpisce da lontano." },
+  { icon: "castle", title: "Come si vince", body: "Stermina l’altro o prendi il suo castello. La fontana ti cura, il castello ti risana del tutto." },
 ];
 function TacticsHowTo({ onClose }) {
   const [i, setI] = useState(0);
@@ -5004,7 +5139,9 @@ function TacticsHowTo({ onClose }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 86, background: SCRIM, display: "grid", placeItems: "center", padding: 22 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 20, padding: "26px 22px 18px", maxWidth: 340, width: "100%", boxShadow: "0 24px 60px rgba(18,18,18,0.4)", textAlign: "center" }}>
-        <div key={i} className="pop" style={{ fontSize: 60, lineHeight: 1 }}>{s.icon}</div>
+        <div key={i} className="pop" style={{ lineHeight: 1 }}>
+          <Ico n={s.icon} s={52} c={T.ink} sw={1.5} />
+        </div>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 12 }}>{s.title}</div>
         <p style={{ color: T.ink60, fontSize: 14.5, lineHeight: 1.5, margin: "8px 0 0" }}>{s.body}</p>
         <div style={{ display: "flex", justifyContent: "center", gap: 6, margin: "18px 0 16px" }}>
@@ -5201,12 +5338,12 @@ function Tactics({ room, gs, seat, commit }) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <button style={vbtn} onClick={() => setRot((r) => r - 60)} title="ruota">↺</button>
-          <button style={vbtn} onClick={() => setRot((r) => r + 60)} title="ruota">↻</button>
-          <button style={vbtn} onClick={() => setZoom((z) => Math.min(1.8, z + 0.15))} title="zoom">＋</button>
-          <button style={vbtn} onClick={() => setZoom((z) => Math.max(0.6, z - 0.15))} title="zoom">－</button>
-          <button style={vbtn} onClick={resetView} title="reset vista">⟳</button>
-          <button style={vbtn} onClick={() => setHelp(true)} title="come si gioca">?</button>
+          <button style={vbtn} onClick={() => setRot((r) => r - 60)} title="ruota"><Ico n="rotateL" s={16} /></button>
+          <button style={vbtn} onClick={() => setRot((r) => r + 60)} title="ruota"><Ico n="rotateR" s={16} /></button>
+          <button style={vbtn} onClick={() => setZoom((z) => Math.min(1.8, z + 0.15))} title="zoom"><Ico n="plus" s={16} /></button>
+          <button style={vbtn} onClick={() => setZoom((z) => Math.max(0.6, z - 0.15))} title="zoom"><Ico n="minus" s={16} /></button>
+          <button style={vbtn} onClick={resetView} title="reset vista"><Ico n="recenter" s={16} /></button>
+          <button style={vbtn} onClick={() => setHelp(true)} title="come si gioca"><Ico n="help" s={16} /></button>
         </div>
       </div>
 
@@ -5263,9 +5400,9 @@ function Tactics({ room, gs, seat, commit }) {
                         style={{ cursor: myTurn && (isReach || isDeploy || isTarget || isDest || isSelHex) ? "pointer" : "default" }}
                       />
                       {sp && (
-                        <text x={p.x} y={p.y + 5} textAnchor="middle" fontSize="16" style={{ pointerEvents: "none" }}>
-                          {sp.kind === "castle" ? "🏰" : "⛲"}
-                        </text>
+                        <g transform={`translate(${p.x - 8} ${p.y - 8})`} style={{ pointerEvents: "none" }}>
+                          <Ico n={sp.kind === "castle" ? "castle" : "drop"} s={16} c={sp.kind === "castle" ? TSIDE[sp.side] : "#2C7AA0"} sw={1.8} />
+                        </g>
                       )}
                     </g>
                   );
@@ -5312,7 +5449,7 @@ function Tactics({ room, gs, seat, commit }) {
                         opacity: spent ? 0.5 : 1,
                       }}
                     >
-                      <span style={{ position: "absolute", top: -2, left: 3, fontSize: 11 }}>{TGLYPH[u.type]}</span>
+                      <span style={{ position: "absolute", top: 1, left: 3 }}>{uIco(u.type, 11, col)}</span>
                       <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 21, color: col, lineHeight: 1 }}>{u.hp}</span>
                     </div>
                   </div>
@@ -5338,7 +5475,7 @@ function Tactics({ room, gs, seat, commit }) {
                 onClick={() => commit(tacticsRoster(gs, seat, f))}
                 style={{ ...plain, flex: 1, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "10px 6px", cursor: "pointer", fontFamily: BRAND, fontWeight: 600, fontSize: 13, WebkitTapHighlightColor: "transparent" }}
               >
-                {f} ⚔ · {4 - f} 🏹
+                {f} {uIco("fante", 14)} · {4 - f} {uIco("arciere", 14)}
               </button>
             ))}
           </div>
@@ -5791,8 +5928,8 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
         </Micro>
       </div>
       <div style={{ display: "flex", justifyContent: "center", gap: 22, marginTop: 8 }}>
-        <button onClick={() => setShowOpp(true)} style={{ ...plain, color: T.ink, fontWeight: 600 }}>
-          📋 scheda di {who(room, opp)}
+        <button onClick={() => setShowOpp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <Ico n="clip" s={15} /> scheda di {who(room, opp)}
         </button>
         <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600 }}>
           ? come si conta
@@ -6650,8 +6787,16 @@ function Summary({ room, gs }) {
   if (room.game === "condottieri")
     return (
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18 }}>
-          {gs.how === "castle" ? "Castello espugnato 🏰" : gs.how === "timeout" ? "Tempo scaduto" : gs.win ? "Campo sterminato ⚔" : "Pareggio"}
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+          {gs.how === "castle" ? (
+            <>Castello espugnato <Ico n="castle" s={16} /></>
+          ) : gs.how === "timeout" ? (
+            "Tempo scaduto"
+          ) : gs.win ? (
+            <>Campo sterminato <Ico n="sword" s={16} /></>
+          ) : (
+            "Pareggio"
+          )}
         </div>
         <Micro style={{ marginTop: 4 }}>battaglie {gs.tally.A}–{gs.tally.B}</Micro>
       </div>
