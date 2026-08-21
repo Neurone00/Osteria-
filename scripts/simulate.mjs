@@ -334,7 +334,10 @@ function playTactics() {
       probe.units[uid].r = rr;
     }
     const tgts = R.tacticsTargets(probe, probe.units[uid]);
-    const action = tgts.length && Math.random() < 0.9 ? { kind: "attack", targetId: tgts[Math.floor(Math.random() * tgts.length)] } : null;
+    // resting on your own castle/fountain heals but forbids an attack that turn
+    const finalKey = to || R.hkey(g.units[uid].q, g.units[uid].r);
+    const healing = finalKey === g.board.castle[seat] || finalKey === g.board.fount[seat];
+    const action = !healing && tgts.length && Math.random() < 0.9 ? { kind: "attack", targetId: tgts[Math.floor(Math.random() * tgts.length)] } : null;
     const res = R.tacticsActivate(g, seat, uid, to, action);
     if (!res) return fail("tactics", "activate refused a move it validated as legal");
     g = res.g;

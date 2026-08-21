@@ -1437,6 +1437,8 @@ function tacticsTargets(g, unit) {
     return true;
   });
 }
+// Resting on your own fountain/castle to heal means no attack that turn.
+const tacticsHeals = (g, seat, k) => k === g.board.castle[seat] || k === g.board.fount[seat];
 
 // Roll 1..HP; rolling the top face (≥2) explodes and rolls again — a crit.
 function tacticsRoll(hp) {
@@ -1495,10 +1497,12 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     unit.q = q;
     unit.r = r;
   }
+  const uk = hkey(unit.q, unit.r); // final position after any move
   let ev = { t: "wait", unit: unit.type };
   let kind = "lay";
   let roll = null;
   if (action && action.kind === "attack") {
+    if (tacticsHeals(g, seat, uk)) return null; // healing on your keep/fountain — can't also attack
     const target = g.units[action.targetId];
     if (!target || target.owner === seat) return null;
     const u = TACT.units[unit.type];
@@ -1515,7 +1519,6 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     ev = { t: "attack", unit: unit.type, target: target.type, dmg: res.total, crit: res.crit, killed };
     kind = res.crit ? "scopa" : "take"; // a crit gets the big slam + shake
   }
-  const uk = hkey(unit.q, unit.r);
   if (uk === g.board.castle[seat]) unit.hp = unit.max; // rally to full at your keep
   else if (uk === g.board.fount[seat]) unit.hp = Math.min(unit.max, unit.hp + 3);
   g.last = { ...(roll || {}), unitId, to: uk };
@@ -5279,13 +5282,29 @@ function Tactics({ room, gs, seat, commit }) {
 
   // interaction sets
   const unit = sel ? gs.units[sel] : null;
-  const reach = unit && myTurn && gs.phase === "battle" ? tacticsReach(gs, unit) : {};
+  const active = unit && myTurn && gs.phase === "battle";
+  const reach = active ? tacticsReach(gs, unit) : {};
   const stagePos = unit ? (dest ? unhkey(dest) : { q: unit.q, r: unit.r }) : null;
-  const targetIds =
-    unit && myTurn && gs.phase === "battle"
-      ? tacticsTargets({ ...gs, units: { ...gs.units, [sel]: { ...unit, ...stagePos } } }, { ...unit, ...stagePos })
-      : [];
+  const stageKey = unit ? hkey(stagePos.q, stagePos.r) : null;
+  // resting on your own fountain/castle heals but forbids attacking this turn
+  const healing = active && tacticsHeals(gs, seat, stageKey);
+  const staged = { ...unit, ...stagePos };
+  const targetIds = active && !healing ? tacticsTargets({ ...gs, units: { ...gs.units, [sel]: staged } }, staged) : [];
   const targetSet = new Set(targetIds.map((id) => hkey(gs.units[id].q, gs.units[id].r)));
+  // the whole area this unit threatens from where it will stand — open hexes in
+  // attack range with line of sight, so you can see its reach before committing
+  const threatSet = new Set();
+  if (active && !healing) {
+    const u = TACT.units[unit.type];
+    for (const c of board.cells) {
+      const k = hkey(c.q, c.r);
+      if (board.blocked[k] || k === stageKey) continue;
+      const d = hdist(staged, c);
+      if (d < u.min || d > u.rng) continue;
+      if (u.rng > 1 && !tacticsLoS(gs, staged, c)) continue;
+      threatSet.add(k);
+    }
+  }
   const deploySet = myTurn && gs.phase === "deploy" ? new Set(board.cells.map((c) => hkey(c.q, c.r)).filter((k) => tacticsDeployable(gs, seat, k))) : new Set();
   const nextType = gs.phase === "deploy" ? gs.toPlace[seat][0] : null;
 
@@ -5379,7 +5398,11 @@ function Tactics({ room, gs, seat, commit }) {
       : `${who(room, gs.turn)} sta schierando…`
     : myTurn
     ? sel
-      ? "Tocca dove muovere, poi un nemico — o Fine"
+      ? healing
+        ? "In cura qui — niente attacco questo turno"
+        : dest
+        ? "Tocca un nemico in rosso, o Fermati qui"
+        : "Muovi, o colpisci un nemico in rosso"
       : "Tocca una tua pedina"
     : `Turno di ${who(room, gs.turn)}`;
 
@@ -5460,21 +5483,24 @@ function Tactics({ room, gs, seat, commit }) {
               const sp = specialMark(k);
               const isReach = reach[k] !== undefined;
               const isTarget = targetSet.has(k);
+              const isThreat = threatSet.has(k);
               const isDeploy = deploySet.has(k);
               const isSelHex = unit && k === hkey(unit.q, unit.r);
               const isDest = dest === k;
               let fill = blocked ? "rgba(18,18,18,0.28)" : "rgba(255,255,255,0.9)";
               if (sp && sp.kind === "fount") fill = "rgba(44,120,160,0.22)";
-              if (isReach || isDest) fill = "rgba(46,120,90,0.30)";
+              if (isThreat) fill = "rgba(165,52,47,0.12)"; // attack area — a light red wash
+              if (isReach || isDest) fill = "rgba(46,120,90,0.30)"; // where you can move
               if (isDeploy) fill = "rgba(184,134,43,0.24)";
-              if (isTarget) fill = "rgba(165,52,47,0.32)";
+              if (isTarget) fill = "rgba(165,52,47,0.34)"; // an enemy you can hit
+              const stroke = isSelHex ? T.ink : isTarget ? "#A5342F" : isThreat ? "rgba(165,52,47,0.6)" : sp && sp.kind === "castle" ? TSIDE[sp.side] : T.line;
               return (
                 <g key={k}>
                   <polygon
                     points={tCorners(p.x, p.y)}
                     fill={fill}
-                    stroke={isSelHex ? T.ink : sp && sp.kind === "castle" ? TSIDE[sp.side] : T.line}
-                    strokeWidth={isSelHex || (sp && sp.kind === "castle") ? 2.2 : 1}
+                    stroke={stroke}
+                    strokeWidth={isSelHex || isTarget || (sp && sp.kind === "castle") ? 2.2 : isThreat ? 1.5 : 1}
                     className={isTarget || isDeploy ? "hexpulse" : ""}
                     onClick={() => tapHex(k)}
                     style={{ cursor: myTurn && (isReach || isDeploy || isTarget || isDest || isSelHex) ? "pointer" : "default" }}
@@ -5554,11 +5580,17 @@ function Tactics({ room, gs, seat, commit }) {
 
       {gs.phase === "battle" && myTurn && sel && (
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <Button kind="outline" full onClick={() => { setSel(null); setDest(null); }}>
-            Annulla
-          </Button>
+          {dest ? (
+            <Button kind="outline" full onClick={() => setDest(null)}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> Annulla mossa</span>
+            </Button>
+          ) : (
+            <Button kind="outline" full onClick={() => { setSel(null); setDest(null); }}>
+              Deseleziona
+            </Button>
+          )}
           <Button kind="solid" full onClick={endUnit}>
-            {dest ? "Muovi e basta" : "Resta / Fine"}
+            {healing ? "Curati qui" : dest ? "Fermati qui" : "Passa"}
           </Button>
         </div>
       )}
