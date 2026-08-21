@@ -610,6 +610,7 @@ function dealPeppa(dealer, tally) {
     phase: "arrange",
     dealer,
     last: null, // { seat, from, card, paired } — the most recent draw, for the reveal
+    offer: null, // a card the holder has raised up as an "take this one" invitation
     tally: tally || { A: 0, B: 0 },
     done: false,
     matchDone: false,
@@ -625,7 +626,31 @@ function peppaShuffle(gs, seat) {
   if (gs.done || gs.phase !== "arrange" || seat !== other(gs.turn)) return null;
   const g = clone(gs);
   g.hands[seat] = shuffle(g.hands[seat]);
+  g.offer = null;
   return { g, quiet: true, ev: { t: "pshuffle" } };
+}
+
+// The holder drags a card to a new spot in their hand. Broadcast so the drawer
+// watches the (face-down) cards slide — part of the bluff.
+function peppaReorder(gs, seat, cardId, toIndex) {
+  if (gs.done || gs.phase !== "arrange" || seat !== other(gs.turn)) return null;
+  const g = clone(gs);
+  const hand = g.hands[seat];
+  const from = hand.findIndex((c) => c.id === cardId);
+  if (from < 0) return null;
+  const ti = Math.max(0, Math.min(hand.length - 1, toIndex));
+  if (ti === from) return null;
+  const [card] = hand.splice(from, 1);
+  hand.splice(ti, 0, card);
+  return { g, quiet: true, ev: { t: "parrange" } };
+}
+
+// The holder raises a card up as an invitation to take it (or lowers it again).
+function peppaOffer(gs, seat, cardId) {
+  if (gs.done || gs.phase !== "arrange" || seat !== other(gs.turn)) return null;
+  const g = clone(gs);
+  g.offer = cardId && g.hands[seat].some((c) => c.id === cardId) ? (g.offer === cardId ? null : cardId) : null;
+  return { g, quiet: true, ev: { t: "poffer" } };
 }
 
 // The holder presents the hand — the drawer may now pick.
@@ -656,6 +681,7 @@ function peppaDraw(gs, seat, idx) {
     g.hands[seat].push(card);
   }
   g.last = { seat, from, card, paired };
+  g.offer = null;
   // The drawer becomes the next holder: they arrange, then the other draws back.
   g.turn = from;
   g.phase = "arrange";
@@ -2053,6 +2079,10 @@ function describe(ev, french) {
       return `pesca il ${r(ev.v)} e scarta la coppia`;
     case "pshuffle":
       return "rimescola la mano";
+    case "parrange":
+      return "sistema le carte";
+    case "poffer":
+      return "offre una carta";
     case "pready":
       return "presenta la mano";
     default:
@@ -4669,25 +4699,126 @@ function PileView({ room, gs, seat, label, faceUp, slamId, right }) {
 }
 
 /* ── peppa tencia (old maid) ── */
+// A fanned hand with animated positions. `mode` decides interaction:
+//  · "arrange" — drag a card sideways to reorder, or up to raise it as an offer
+//  · "draw"    — tap a (face-down) card to draw it
+//  · "watch"   — static, but every card animates to its slot, so the other
+//                player sees your shuffles, drags and offers happen live
+function PeppaHand({ cards, faceUp, mode, offerId, onReorder, onOffer, onDraw, slamId }) {
+  const wrapRef = useRef(null);
+  const [w, setW] = useState(320);
+  useEffect(() => {
+    const measure = () => wrapRef.current && setW(wrapRef.current.clientWidth || 320);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  const [drag, setDrag] = useState(null);
+  const dragRef = useRef(null);
+  const startRef = useRef(null);
+
+  const n = cards.length;
+  const CW = 36,
+    CH = 52; // xs card
+  const STEP = n > 1 ? Math.min(CW + 8, (w - CW) / (n - 1)) : 0;
+  const total = CW + (n - 1) * STEP;
+  const offX = Math.max(0, (w - total) / 2);
+  const RAISE = 26; // resting drop, so an offered card can rise above the row
+  const H = CH + RAISE + 10;
+  const order = cards.map((c) => c.id);
+
+  let visual = order;
+  if (drag) {
+    visual = order.filter((id) => id !== drag.id);
+    const li = Math.max(0, Math.min(order.length - 1, Math.round(drag.i0 + drag.dx / (STEP || 1))));
+    visual.splice(li, 0, drag.id);
+  }
+
+  const pt = (e) => (e.touches && e.touches[0] ? e.touches[0] : e);
+  const down = (e, card, i) => {
+    if (mode !== "arrange") return;
+    const p = pt(e);
+    startRef.current = { x: p.clientX, y: p.clientY };
+    dragRef.current = { id: card.id, i0: i, dx: 0, dy: 0 };
+    setDrag(dragRef.current);
+  };
+  const move = (e) => {
+    if (!dragRef.current) return;
+    const p = pt(e);
+    const d = { ...dragRef.current, dx: p.clientX - startRef.current.x, dy: p.clientY - startRef.current.y };
+    dragRef.current = d;
+    setDrag(d);
+  };
+  const up = () => {
+    const d = dragRef.current;
+    dragRef.current = null;
+    setDrag(null);
+    if (!d) return;
+    if (d.dy < -34) {
+      onOffer && onOffer(d.id); // flicked up → offer / un-offer
+      return;
+    }
+    const li = Math.max(0, Math.min(n - 1, Math.round(d.i0 + d.dx / (STEP || 1))));
+    if (li !== d.i0) onReorder && onReorder(d.id, li);
+  };
+
+  return (
+    <div
+      ref={wrapRef}
+      onTouchMove={mode === "arrange" ? move : undefined}
+      onTouchEnd={mode === "arrange" ? up : undefined}
+      onMouseMove={mode === "arrange" ? move : undefined}
+      onMouseUp={mode === "arrange" ? up : undefined}
+      onMouseLeave={mode === "arrange" ? up : undefined}
+      style={{ position: "relative", height: H, width: "100%", touchAction: mode === "arrange" ? "none" : "auto", userSelect: "none", WebkitUserSelect: "none" }}
+    >
+      {n === 0 && <Micro style={{ position: "absolute", left: "50%", top: 22, transform: "translateX(-50%)" }}>mano vuota</Micro>}
+      {cards.map((c) => {
+        const id = c.id;
+        const isDragged = drag && drag.id === id;
+        const vi = visual.indexOf(id);
+        const offered = offerId === id;
+        const left = isDragged ? offX + drag.i0 * STEP + drag.dx : offX + vi * STEP;
+        const top = isDragged ? RAISE + drag.dy : offered ? 0 : RAISE;
+        const idx = order.indexOf(id); // draw index = position in the real array
+        return (
+          <div
+            key={id}
+            onMouseDown={mode === "arrange" ? (e) => down(e, c, idx) : undefined}
+            onTouchStart={mode === "arrange" ? (e) => down(e, c, idx) : undefined}
+            onClick={mode === "draw" ? () => onDraw && onDraw(idx) : undefined}
+            style={{
+              position: "absolute",
+              left,
+              top,
+              zIndex: isDragged ? 60 : offered ? 40 : vi,
+              transition: isDragged ? "none" : "left 240ms cubic-bezier(.2,.9,.25,1), top 200ms ease",
+              cursor: mode === "draw" ? "pointer" : mode === "arrange" ? "grab" : "default",
+              WebkitTapHighlightColor: "transparent",
+            }}
+            className={mode === "draw" && offered ? "freshpulse" : ""}
+          >
+            {faceUp ? <Card card={c} size="xs" rot={0} slam={slamId === id} /> : <Back size="xs" />}
+            {offered && (
+              <div style={{ position: "absolute", top: -15, left: 0, right: 0, textAlign: "center", fontSize: 13, color: "#B8862B" }}>⬆</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Peppa({ room, gs, seat, mine, slamId, commit }) {
   const opp = other(seat);
   const done = gs.done;
-  const iAmDrawer = gs.turn === seat && !done; // I draw from the opponent this round
-  const iAmHolder = other(gs.turn) === seat && !done; // the opponent draws from me
+  const holder = other(gs.turn); // the player being drawn from this round
+  const iAmDrawer = gs.turn === seat && !done;
+  const iAmHolder = holder === seat && !done;
   const arranging = gs.phase === "arrange";
   const drawing = gs.phase === "draw";
-  const canDraw = iAmDrawer && drawing; // pick a face-down card from the opponent
-  const canArrange = iAmHolder && arranging; // shuffle my hand, then present it
-
-  const draw = (idx) => {
-    if (canDraw) commit(peppaDraw(gs, seat, idx));
-  };
-  const shuffleHand = () => {
-    if (canArrange) commit(peppaShuffle(gs, seat));
-  };
-  const present = () => {
-    if (canArrange) commit(peppaReady(gs, seat));
-  };
+  const canDraw = iAmDrawer && drawing;
+  const canArrange = iAmHolder && arranging;
 
   const last = gs.last;
   const lastCard = last && last.card ? last.card : null;
@@ -4699,47 +4830,36 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
       : "Pareggio"
     : arranging
     ? iAmHolder
-      ? "Mischia la mano quanto vuoi, poi presentala"
-      : `${who(room, other(gs.turn))} sta mischiando la sua mano`
+      ? "Trascina per sistemare, su per offrire — poi presenta"
+      : `${who(room, holder)} sta sistemando la sua mano`
     : iAmDrawer
     ? "Pesca una carta coperta"
     : `${who(room, gs.turn)} sta pescando dalla tua mano`;
 
-  // The opponent's hand, face-down. Tappable only when it's my beat to draw.
-  const back = (n, live, onPick) => (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", maxWidth: 320, margin: "0 auto" }}>
-      {n === 0 && <Micro>mano vuota</Micro>}
-      {Array.from({ length: n }).map((_, i) => (
-        <button
-          key={i}
-          onClick={live ? () => onPick(i) : undefined}
-          disabled={!live}
-          style={{
-            padding: 0,
-            border: "none",
-            background: "transparent",
-            cursor: live ? "pointer" : "default",
-            WebkitTapHighlightColor: "transparent",
-          }}
-          className={live ? "freshpulse" : ""}
-        >
-          <Back size="xs" />
-        </button>
-      ))}
-    </div>
-  );
+  const topMode = canDraw ? "draw" : "watch";
+  const topOffer = opp === holder ? gs.offer : null; // the offer lives on the holder's hand
+  const botMode = canArrange ? "arrange" : "watch";
+  const botOffer = seat === holder ? gs.offer : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
-      {/* opponent — their hand is face-down; on your draw beat you pick one */}
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 }}>
+      {/* opponent's hand (face-down): you draw from it on your beat, and watch it
+          move as they arrange */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
         <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
         <Micro>{gs.hands[opp].length} in mano · {gs.shed[opp]} scartate</Micro>
       </div>
-      {back(gs.hands[opp].length, canDraw, draw)}
+      <PeppaHand
+        cards={gs.hands[opp]}
+        faceUp={false}
+        mode={topMode}
+        offerId={topOffer}
+        onDraw={(idx) => canDraw && commit(peppaDraw(gs, seat, idx))}
+        slamId={slamId}
+      />
 
       {/* the middle — the last card drawn is revealed here */}
-      <div style={{ flex: 1, margin: "16px 0", minHeight: 120, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
+      <div style={{ flex: 1, margin: "10px 0", minHeight: 108, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
         {lastCard ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
             <Card card={lastCard} size="lg" rot={0} slam={slamId === lastCard.id} enter />
@@ -4748,46 +4868,36 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
         ) : (
           <Micro>nessuna pescata</Micro>
         )}
-        <div key={`${done}-${gs.turn}-${gs.phase}`} className="swap" style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.02em", textAlign: "center" }}>
+        <div key={`${done}-${gs.turn}-${gs.phase}`} className="swap" style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.02em", textAlign: "center", padding: "0 8px" }}>
           {status}
         </div>
       </div>
 
-      {/* your hand, face up — you shuffle it in the arrange beat so the other
-          player can't remember where the Peppa sits */}
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+      {/* your hand (face up): drag to arrange, flick a card up to offer it */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 }}>
         <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>
           {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
         </div>
         <Micro>{gs.hands[seat].length} in mano · {gs.shed[seat]} scartate</Micro>
       </div>
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 6,
-          justifyContent: "center",
-          minHeight: 66,
-          padding: canArrange ? "8px 6px" : 0,
-          borderRadius: 12,
-          border: canArrange ? `1px dashed ${T.ink30}` : "1px solid transparent",
-          background: canArrange ? "rgba(18,18,18,0.02)" : "transparent",
-          transition: "background 160ms ease",
-          opacity: !iAmDrawer && !canArrange && !done ? 0.85 : 1,
-        }}
-      >
-        {gs.hands[seat].length === 0 && <Micro>mano vuota</Micro>}
-        {gs.hands[seat].map((c) => (
-          <Card key={c.id} card={c} size="xs" rot={0} slam={slamId === c.id} />
-        ))}
+      <div style={{ borderRadius: 12, border: canArrange ? `1px dashed ${T.ink30}` : "1px solid transparent", background: canArrange ? "rgba(18,18,18,0.02)" : "transparent", transition: "background 160ms ease" }}>
+        <PeppaHand
+          cards={gs.hands[seat]}
+          faceUp={true}
+          mode={botMode}
+          offerId={botOffer}
+          onReorder={(id, idx) => canArrange && commit(peppaReorder(gs, seat, id, idx))}
+          onOffer={(id) => canArrange && commit(peppaOffer(gs, seat, id))}
+          slamId={slamId}
+        />
       </div>
 
       {canArrange && (
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-          <Button kind="outline" full onClick={shuffleHand}>
+          <Button kind="outline" full onClick={() => commit(peppaShuffle(gs, seat))}>
             🔀 Mischia
           </Button>
-          <Button kind="solid" full onClick={present}>
+          <Button kind="solid" full onClick={() => commit(peppaReady(gs, seat))}>
             Presento →
           </Button>
         </div>

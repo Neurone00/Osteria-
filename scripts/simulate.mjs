@@ -35,7 +35,7 @@ const EXPORTS = [
   "dealScopa", "scopaOptions", "scopaPlay", "scoreScopa", "primiera",
   "dealRuba", "rubaOptions", "rubaPlay",
   "dealCamicia", "camiciaFlip", "demand",
-  "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed", "peppaShuffle", "peppaReady",
+  "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed", "peppaShuffle", "peppaReady", "peppaReorder", "peppaOffer",
   "TACT", "dealTactics", "tacticsRoster", "tacticsDeploy", "tacticsActivate", "tacticsReach", "tacticsTargets",
   "tacticsRoll", "tacticsDeployable", "tacticsBoard", "tacticsCells", "hdist", "hkey", "unhkey",
   "dealBriscola", "briscolaPlay", "brisPoints",
@@ -205,6 +205,20 @@ function playPeppa() {
         if (!s) return fail("peppa", "peppaShuffle refused the holder in the arrange beat");
         g = s.g;
         check("peppa arrange");
+      }
+      // occasionally drag a card to a new slot and/or raise one as an offer
+      if (g.hands[holder].length && Math.random() < 0.5) {
+        const h = g.hands[holder];
+        const card = h[Math.floor(Math.random() * h.length)];
+        const to = Math.floor(Math.random() * h.length);
+        const r2 = R.peppaReorder(g, holder, card.id, to);
+        if (r2) {
+          g = r2.g;
+          check("peppa reorder");
+          if (g.hands[holder].length !== h.length) return fail("peppa", "reorder changed the hand size");
+        }
+        const off = R.peppaOffer(g, holder, g.hands[holder][0].id);
+        if (off) g = off.g;
       }
       // the drawer must not be able to act during the arrange beat
       const early = R.peppaDraw(g, g.turn, 0);
