@@ -175,8 +175,8 @@ const GAMES = {
     line: "Ogni pedina è un dado: la faccia è la vita, e ferito colpisce meno. Schiera vicino al castello, poi muovi e tira. Vinci sterminando l’altro o prendendone il castello.",
     instant: true, // its own hex board — no card deck or shuffle ritual
     board: true, // a tactics board, not cards or dice-cups
-    opts: [],
-    def: {},
+    opts: [{ k: "simple", label: "Regole essenziali", cycle: [false, true], hint: "Due classi, compagnia fissa di 4, mappa piccola, senza stendardi — la versione ridotta" }],
+    def: { simple: false },
   },
 };
 const isCard = (game) => !GAMES[game].dice;
@@ -1169,31 +1169,57 @@ function s40Discard(gs, seat, cardId) {
    A dice skirmish on a hex board. Each unit IS a die: its face shows its
    current HP, and because a wounded die hits weaker, an attack rolls 1..HP —
    the die literally shrinks as it takes damage. Rolling the top face (≥2)
-   explodes for a crit. Two classes: Fante (d8, melee, adjacent) and Arciere
-   (d6, ranged 2–3, needs line of sight). Both step up to 2. Deploy near your
-   castle, then take turns activating one unit (move, then attack) — a unit may
-   be activated twice in a round, so you can push the same one across the map.
-   Heal on your fountain (+3) or castle (full). A castle bombards any enemy that
-   ends its turn beside it for 2. Win by wiping the enemy — or by holding their
-   castle: step in, survive their retaliation, and the keep is yours. A round
-   cap ends stalls on total HP. Obstacles block movement and line of sight;
-   there is no elevation. */
+   explodes for a crit. Five classes (Fante, Arciere, Cavaliere, Balestriere,
+   Fromboliere), each a die with its own move, range and point cost; draft a
+   company under a budget. Deploy near your castle, then take turns activating
+   one unit (move, then attack) — a unit may be activated twice in a round, so
+   you can push the same one across the map. Heal on your fountain (+3), your
+   castle (full), or a contested banner out in the field (+2, and you may still
+   attack). A castle bombards any enemy that ends its turn beside it for 2. Win
+   by wiping the enemy — or by holding their castle: step in, survive their
+   retaliation, and the keep is yours. A round cap ends stalls on banners held,
+   then total HP. Obstacles block movement and line of sight; there is no
+   elevation. A house-rule toggle plays the essential version: two classes, a
+   fixed company of four, a small board, no banners. */
 const TACT = {
-  R: 8, // map radius — a hexagon this many rings across, then eroded to an irregular coast
+  R: 10, // map radius — a hexagon this many rings across, then eroded to an irregular coast
   ERODE: 0.34, // chance a border hex is chipped away each pass (2 passes) → random shape
   BLOCK: 0.2, // share of the open interior turned to rubble — cover + broken lines of sight
-  DEPLOY_R: 2, // deploy within this many hexes of your castle
+  DEPLOY_R: 3, // deploy within this many hexes of your castle (room for a full company)
   ROUND_CAP: 40,
   ACTS: 2, // activations a single unit may spend per round — you can move the same one twice
   CASTLE_DMG: 2, // a castle bombards any enemy that ends its turn next to it
+  BANNER_HEAL: 2, // standing on a contested banner mends this much (and you may still attack)
+  BUDGET: 15, // points to spend drafting a company
+  MIN_UNITS: 3,
+  MAX_UNITS: 6,
+  // The essential game (a house-rule toggle): small board, two classes, a fixed
+  // company of 4, no banners — the shape this game had before the draft update.
+  SIMPLE_R: 8,
+  SIMPLE_DEPLOY_R: 2,
+  SIMPLE_UNITS: 4,
+  // A pool of five classes, each a die (max = starting HP) with its own move,
+  // attack range (min..rng) and point cost. A wounded die hits weaker, so HP is
+  // both life and damage. Draft a company under the budget: cheap skirmishers in
+  // numbers, or a few heavy specialists.
   units: {
-    // A big board with lots of rubble is the balance: both classes step only 2,
-    // so crossing it takes several turns — but a unit may be activated twice in a
-    // round, and an Arciere kites and picks the enemy off on the way in.
-    fante: { name: "Fante", max: 8, move: 2, min: 1, rng: 1 }, // d8 melee, closes slowly
-    arciere: { name: "Arciere", max: 6, move: 2, min: 2, rng: 3 }, // d6, shoots 2–3 away, never adjacent
+    fante: { name: "Fante", max: 8, move: 2, min: 1, rng: 1, cost: 3, icon: "sword" }, // d8 melee bruiser
+    arciere: { name: "Arciere", max: 6, move: 2, min: 2, rng: 3, cost: 3, icon: "bow" }, // d6 kite, 2–3 away
+    cavaliere: { name: "Cavaliere", max: 6, move: 3, min: 1, rng: 1, cost: 4, icon: "horse" }, // d6 fast flanker
+    balestriere: { name: "Balestriere", max: 8, move: 1, min: 2, rng: 4, cost: 5, icon: "crossbow" }, // d8 slow sniper, 2–4
+    fromboliere: { name: "Fromboliere", max: 4, move: 3, min: 1, rng: 2, cost: 2, icon: "sling" }, // d4 cheap skirmisher
   },
 };
+const TYPE_ORDER = ["fante", "arciere", "cavaliere", "balestriere", "fromboliere"];
+// A drafted company is legal when it has 3..6 units and fits the budget.
+function tacticsCompanyCost(company) {
+  return company.reduce((t, type) => t + (TACT.units[type]?.cost || 0), 0);
+}
+function tacticsCompanyLegal(company) {
+  if (!Array.isArray(company) || company.length < TACT.MIN_UNITS || company.length > TACT.MAX_UNITS) return false;
+  if (company.some((type) => !TACT.units[type])) return false;
+  return tacticsCompanyCost(company) <= TACT.BUDGET;
+}
 const HEX_DIRS = [
   [1, 0],
   [1, -1],
@@ -1251,9 +1277,17 @@ function tacticsLargest(set) {
   }
   return best;
 }
+// Board shape by mode: the essential (simple) game is a small board and no
+// banners; the full game is bigger, with a roomier deploy zone and contested
+// banners out in the field.
+const tacticsShape = (simple) =>
+  simple
+    ? { R: TACT.SIMPLE_R, deployR: TACT.SIMPLE_DEPLOY_R, room: TACT.SIMPLE_UNITS, banners: 0 }
+    : { R: TACT.R, deployR: TACT.DEPLOY_R, room: TACT.MAX_UNITS, banners: 3 };
+
 // One attempt at an irregular island. Returns null if the shape can't seat both
 // squads or can't stay connected once rubble is added, so the caller can retry.
-function tacticsBoardTry(R, erode) {
+function tacticsBoardTry(R, erode, shp) {
   let set = new Set();
   for (let q = -R; q <= R; q++) for (let r = Math.max(-R, -q - R); r <= Math.min(R, -q + R); r++) set.add(hkey(q, r));
   if (erode) {
@@ -1273,9 +1307,9 @@ function tacticsBoardTry(R, erode) {
   };
   const cB = midOf(rMin),
     cA = midOf(rMax); // castles at the far vertical ends
-  // enough room to deploy 4 next to each castle, or this shape is no good
-  const deployRoom = (c) => cells.filter((x) => hdist(x, c) <= TACT.DEPLOY_R).length;
-  if (deployRoom(cA) < 4 || deployRoom(cB) < 4) return null;
+  // enough room to deploy a full company next to each castle, or the shape is no good
+  const deployRoom = (c) => cells.filter((x) => hdist(x, c) <= shp.deployR).length;
+  if (deployRoom(cA) < shp.room || deployRoom(cB) < shp.room) return null;
   const inward = (from, steps) => {
     let cur = from;
     for (let i = 0; i < steps; i++) {
@@ -1297,7 +1331,7 @@ function tacticsBoardTry(R, erode) {
   const castle = { A: hkey(cA.q, cA.r), B: hkey(cB.q, cB.r) };
   const fount = { A: hkey(fA.q, fA.r), B: hkey(fB.q, fB.r) };
   const reserved = new Set([castle.A, castle.B, fount.A, fount.B]);
-  const nearCastle = (c) => hdist(c, cA) <= TACT.DEPLOY_R || hdist(c, cB) <= TACT.DEPLOY_R;
+  const nearCastle = (c) => hdist(c, cA) <= shp.deployR || hdist(c, cB) <= shp.deployR;
   for (let attempt = 0; attempt < 60; attempt++) {
     const blocked = {};
     for (const c of cells) {
@@ -1306,26 +1340,43 @@ function tacticsBoardTry(R, erode) {
       if (Math.random() < TACT.BLOCK) blocked[k] = true;
     }
     const openSet = new Set(cells.map((c) => hkey(c.q, c.r)).filter((k) => !blocked[k]));
-    if (tacticsConnected(openSet) && openSet.has(castle.A) && openSet.has(castle.B)) return { cells, blocked, castle, fount };
+    if (!tacticsConnected(openSet) || !openSet.has(castle.A) || !openSet.has(castle.B)) continue;
+    // contested banners: open hexes out in the field, clear of both keeps and
+    // spread apart, so neither side owns them and the middle is worth taking.
+    const banners = [];
+    if (shp.banners > 0) {
+      const cand = [...openSet]
+        .map(unhkey)
+        .filter((c) => !reserved.has(hkey(c.q, c.r)) && hdist(c, cA) >= 3 && hdist(c, cB) >= 3)
+        .sort((a, b) => Math.abs(a.r) - Math.abs(b.r) || hdist(a, { q: 0, r: 0 }) - hdist(b, { q: 0, r: 0 }));
+      for (const c of cand) {
+        if (banners.every((bk) => hdist(unhkey(bk), c) >= 3)) banners.push(hkey(c.q, c.r));
+        if (banners.length >= shp.banners) break;
+      }
+    }
+    return { cells, blocked, castle, fount, banners, deployR: shp.deployR };
   }
   return null;
 }
 // A big, irregular island: chew a hexagon's edges into a jagged coast, keep the
 // largest piece, scatter rubble. Retries until it's playable; a plain hexagon
 // (no erosion) is the always-works fallback.
-function tacticsBoard() {
+function tacticsBoard(simple) {
+  const shp = tacticsShape(simple);
   for (let tries = 0; tries < 40; tries++) {
-    const b = tacticsBoardTry(TACT.R, true);
+    const b = tacticsBoardTry(shp.R, true, shp);
     if (b) return b;
   }
-  return tacticsBoardTry(TACT.R, false) || tacticsBoardTry(TACT.R - 1, false);
+  return tacticsBoardTry(shp.R, false, shp) || tacticsBoardTry(shp.R - 1, false, shp);
 }
 
 function dealTactics(dealer, opts, tally) {
+  const simple = !!(opts && opts.simple);
   return {
-    board: tacticsBoard(),
+    simple, // essential rules: two classes, fixed company of 4, small board, no banners
+    board: tacticsBoard(simple),
     phase: "roster", // roster → deploy → battle
-    roster: { A: null, B: null }, // chosen number of Fanti (1..3); Arcieri = 4 − that
+    roster: { A: null, B: null }, // drafted company (array of type keys), or null until chosen
     units: {}, // id → { id, owner, type, hp, max, q, r }
     order: [], // stable unit ids
     toPlace: { A: [], B: [] }, // unit types still to deploy
@@ -1347,24 +1398,35 @@ const tacticsOccupied = (g, k) => g.order.some((id) => hkey(g.units[id].q, g.uni
 const tacticsOpen = (g, k) => !g.board.blocked[k] && g.board.cells.some((c) => hkey(c.q, c.r) === k);
 function tacticsDeployable(g, seat, k) {
   if (!tacticsOpen(g, k) || tacticsOccupied(g, k)) return false;
-  return hdist(unhkey(k), unhkey(g.board.castle[seat])) <= TACT.DEPLOY_R;
+  return hdist(unhkey(k), unhkey(g.board.castle[seat])) <= g.board.deployR;
 }
 
-function tacticsRoster(gs, seat, fante) {
+// The essential company: exactly four, two classes, at least one of each.
+function tacticsSimpleLegal(company) {
+  return (
+    Array.isArray(company) &&
+    company.length === TACT.SIMPLE_UNITS &&
+    company.every((t) => t === "fante" || t === "arciere") &&
+    company.includes("fante") &&
+    company.includes("arciere")
+  );
+}
+
+// Lock in a drafted company (an array of type keys). Legality depends on the
+// mode: the essential four, or a budget draft of 3–6 from the full pool.
+function tacticsRoster(gs, seat, company) {
   if (gs.done || gs.phase !== "roster" || gs.turn !== seat || gs.roster[seat] != null) return null;
-  if (![1, 2, 3].includes(fante)) return null; // 4-unit roster, at least one of each kind
+  const legal = gs.simple ? tacticsSimpleLegal(company) : tacticsCompanyLegal(company);
+  if (!legal) return null;
   const g = clone(gs);
-  g.roster[seat] = fante;
+  g.roster[seat] = [...company];
   if (g.roster[other(seat)] == null) g.turn = other(seat);
   else {
-    for (const s of ["A", "B"]) {
-      const f = g.roster[s];
-      g.toPlace[s] = [...Array(f).fill("fante"), ...Array(4 - f).fill("arciere")];
-    }
+    for (const s of ["A", "B"]) g.toPlace[s] = [...g.roster[s]];
     g.phase = "deploy";
     g.turn = g.dealer;
   }
-  return { g, quiet: true, ev: { t: "roster", fante } };
+  return { g, quiet: true, ev: { t: "roster", n: company.length } };
 }
 
 function tacticsDeploy(gs, seat, type, k) {
@@ -1500,10 +1562,15 @@ function tacticsPassTurn(g) {
   g.round += 1;
   g.spent = {};
   if (g.round > TACT.ROUND_CAP) {
+    // a stalled game goes to whoever holds more banners, then to most total HP
+    const banners = (s) => g.board.banners.filter((k) => g.order.some((id) => g.units[id].owner === s && hkey(g.units[id].q, g.units[id].r) === k)).length;
     const hp = (s) => g.order.filter((id) => g.units[id].owner === s).reduce((t, id) => t + g.units[id].hp, 0);
+    const ba = banners("A"),
+      bb = banners("B");
     const a = hp("A"),
       b = hp("B");
-    tacticsWin(g, a === b ? null : a > b ? "A" : "B", "timeout");
+    const winner = ba !== bb ? (ba > bb ? "A" : "B") : a === b ? null : a > b ? "A" : "B";
+    tacticsWin(g, winner, "timeout");
     return;
   }
   g.turn = foe;
@@ -1560,6 +1627,7 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   if (alive) {
     if (uk === g.board.castle[seat]) unit.hp = unit.max; // rally to full at your keep
     else if (uk === g.board.fount[seat]) unit.hp = Math.min(unit.max, unit.hp + 3);
+    else if (g.board.banners.includes(uk)) unit.hp = Math.min(unit.max, unit.hp + TACT.BANNER_HEAL); // hold the field
   }
   g.last = { ...(roll || {}), unitId, to: uk };
   // holding the enemy castle doesn't win on contact: plant the siege and let it
@@ -2561,6 +2629,33 @@ function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
         <path {...P} d="M6 18A16 16 0 0 1 18 6" />
         <path {...P} d="M6 18 18 6" />
         <path {...P} d="M3.5 20.5 20 4M20 4h-4M20 4v4" />
+      </>
+    ),
+    horse: (
+      <>
+        <path {...P} d="M7 21h9" />
+        <path {...P} d="M9 21c-.5-3-.3-5 1.6-6.4" />
+        <path {...P} d="M10.6 14.6C8.5 15 6.7 13.9 6.7 12c0-2.4 2.3-3.4 3.6-5.4l-.7-1.3 2-.8.7 1.6c2.6 1 4.4 3.3 4.4 6.9V21" />
+      </>
+    ),
+    crossbow: (
+      <>
+        <path {...P} d="M4 8c2.3-2 4.9-3 8-3s5.7 1 8 3" />
+        <path {...P} d="M6 6.2v3.4M18 6.2v3.4" />
+        <path {...P} d="M12 4.5V20M9 20h6" />
+      </>
+    ),
+    sling: (
+      <>
+        <path {...P} d="M4 4c2.8 6 5.3 8.8 8 9" />
+        <path {...P} d="M20 4c-2 4.3-3.4 6.6-5.4 8" />
+        <circle {...P} cx="12.4" cy="16.4" r="3" />
+      </>
+    ),
+    flag: (
+      <>
+        <path {...P} d="M6 21V4" />
+        <path {...P} d="M6 4.5h11l-2.6 3.5L17 11.5H6" />
       </>
     ),
     castle: (
@@ -5172,7 +5267,7 @@ const rgbaOf = (hex, a) => {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 };
-const uIco = (type, s = 14, c) => <Ico n={type === "fante" ? "sword" : "bow"} s={s} c={c} />;
+const uIco = (type, s = 14, c) => <Ico n={TACT.units[type]?.icon || "sword"} s={s} c={c} />;
 const THEXR = 23; // hex size (centre → corner) — small enough to pan a big map
 const tpx = (q, r) => ({ x: THEXR * Math.sqrt(3) * (q + r / 2), y: THEXR * 1.5 * r });
 const tCorners = (cx, cy) =>
@@ -5257,7 +5352,7 @@ const TACT_SLIDES = [
   { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6." },
   { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
   { icon: "bow", title: "Muovi, poi tira", body: "A turno attivi una pedina: la sposti e attacchi. Puoi muovere la stessa pedina due volte per round." },
-  { icon: "castle", title: "Come si vince", body: "Stermina l’altro, oppure tieni il suo castello per un turno intero sotto il fuoco. Ogni castello colpisce chi gli si ferma accanto." },
+  { icon: "flag", title: "Come si vince", body: "Stermina l’altro o espugna il suo castello (tienilo un turno sotto tiro). Gli stendardi ti curano e, se il tempo scade, decidono la vittoria." },
 ];
 function TacticsHowTo({ onClose }) {
   const [i, setI] = useState(0);
@@ -5284,12 +5379,74 @@ function TacticsHowTo({ onClose }) {
   );
 }
 
+// The recruit screen (full rules): spend a budget across the pool of classes,
+// building a company of 3–6. Tap a class to add it, tap a drafted chip to drop it.
+function TacticsDraft({ draft, setDraft, onConfirm }) {
+  const spent = tacticsCompanyCost(draft);
+  const left = TACT.BUDGET - spent;
+  const full = draft.length >= TACT.MAX_UNITS;
+  const ready = draft.length >= TACT.MIN_UNITS;
+  const add = (t) => {
+    if (!full && TACT.units[t].cost <= left) setDraft([...draft, t]);
+  };
+  const removeAt = (i) => setDraft(draft.filter((_, j) => j !== i));
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+        <Micro>Recluta · {TACT.MIN_UNITS}–{TACT.MAX_UNITS} pedine</Micro>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 13, color: left > 0 ? T.ink : T.ink30 }}>{left} punti</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        {TYPE_ORDER.map((t) => {
+          const u = TACT.units[t];
+          const can = !full && u.cost <= left;
+          const rng = u.min === u.rng ? `${u.rng}` : `${u.min}–${u.rng}`;
+          return (
+            <button
+              key={t}
+              onClick={() => add(t)}
+              disabled={!can}
+              style={{ ...plain, textAlign: "left", border: `1.5px solid ${can ? T.ink : T.line}`, borderRadius: 12, padding: "9px 10px", cursor: can ? "pointer" : "default", opacity: can ? 1 : 0.5, WebkitTapHighlightColor: "transparent" }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: BRAND, fontWeight: 700, fontSize: 13 }}>
+                  {uIco(t, 15)} {u.name}
+                </span>
+                <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 13 }}>{u.cost}</span>
+              </div>
+              <Micro style={{ marginTop: 4 }}>d{u.max} · muove {u.move} · tiro {rng}</Micro>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10, minHeight: 32 }}>
+        {draft.length === 0 && <Micro>Tocca una classe per aggiungerla</Micro>}
+        {draft.map((t, i) => (
+          <button
+            key={i}
+            onClick={() => removeAt(i)}
+            style={{ ...plain, display: "inline-flex", alignItems: "center", gap: 5, border: `1px solid ${T.line}`, borderRadius: 999, padding: "5px 10px", cursor: "pointer", fontFamily: BRAND, fontWeight: 600, fontSize: 12.5, WebkitTapHighlightColor: "transparent" }}
+          >
+            {uIco(t, 13)} {TACT.units[t].name} <Ico n="minus" s={12} c={T.ink30} />
+          </button>
+        ))}
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <Button kind="solid" full onClick={onConfirm} disabled={!ready}>
+          {ready ? `Schiera ${draft.length} pedine` : `Almeno ${TACT.MIN_UNITS} pedine`}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function Tactics({ room, gs, seat, commit }) {
   const board = gs.board;
   const myTurn = gs.turn === seat && !gs.done;
   const [sel, setSel] = useState(null); // selected own unit id (battle)
   const [dest, setDest] = useState(null); // staged move hex key
   const [inspect, setInspect] = useState(null); // enemy unit id being previewed (move + range)
+  const [draft, setDraft] = useState([]); // company being recruited (roster phase)
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [help, setHelp] = useState(false);
@@ -5315,6 +5472,7 @@ function Tactics({ room, gs, seat, commit }) {
     setSel(null);
     setDest(null);
     setInspect(null);
+    setDraft([]);
   }, [gs.turn, gs.phase]);
 
   // layout — bounds computed from the irregular cell set
@@ -5525,6 +5683,10 @@ function Tactics({ room, gs, seat, commit }) {
     if (k === board.castle.B) return { kind: "castle", side: "B" };
     if (k === board.fount.A) return { kind: "fount", side: "A" };
     if (k === board.fount.B) return { kind: "fount", side: "B" };
+    if ((board.banners || []).includes(k)) {
+      const holder = gs.order.find((id) => hkey(gs.units[id].q, gs.units[id].r) === k);
+      return { kind: "banner", side: holder ? gs.units[holder].owner : null };
+    }
     return null;
   };
 
@@ -5590,6 +5752,7 @@ function Tactics({ room, gs, seat, commit }) {
               const isInsHex = insUnit && k === hkey(insUnit.q, insUnit.r);
               let fill = blocked ? "rgba(18,18,18,0.28)" : "rgba(255,255,255,0.9)";
               if (sp && sp.kind === "fount") fill = "rgba(44,120,160,0.22)";
+              if (sp && sp.kind === "banner") fill = sp.side ? rgbaOf(TSIDE[sp.side], 0.2) : "rgba(184,134,43,0.16)"; // contested field objective
               if (isInsReach) fill = rgbaOf(insCol, 0.16); // where the selected enemy could step
               if (isInsThreat) fill = rgbaOf(insCol, 0.3); // what the selected enemy threatens
               if (isThreat) fill = "rgba(165,52,47,0.12)"; // attack area — a light red wash
@@ -5608,6 +5771,10 @@ function Tactics({ room, gs, seat, commit }) {
                 ? rgbaOf(insCol, 0.6)
                 : sp && sp.kind === "castle"
                 ? TSIDE[sp.side]
+                : sp && sp.kind === "banner"
+                ? sp.side
+                  ? TSIDE[sp.side]
+                  : "#B8862B"
                 : T.line;
               return (
                 <g key={k}>
@@ -5615,14 +5782,19 @@ function Tactics({ room, gs, seat, commit }) {
                     points={tCorners(p.x, p.y)}
                     fill={fill}
                     stroke={stroke}
-                    strokeWidth={isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat ? 1.5 : 1}
+                    strokeWidth={isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat || (sp && sp.kind === "banner") ? 1.5 : 1}
                     className={isTarget || isDeploy ? "hexpulse" : ""}
                     onClick={() => tapHex(k)}
                     style={{ cursor: myTurn && (isReach || isDeploy || isTarget || isDest || isSelHex) ? "pointer" : "default" }}
                   />
                   {sp && (
                     <g transform={`translate(${p.x - 7} ${p.y - 7})`} style={{ pointerEvents: "none" }}>
-                      <Ico n={sp.kind === "castle" ? "castle" : "drop"} s={14} c={sp.kind === "castle" ? TSIDE[sp.side] : "#2C7AA0"} sw={1.9} />
+                      <Ico
+                        n={sp.kind === "castle" ? "castle" : sp.kind === "banner" ? "flag" : "drop"}
+                        s={14}
+                        c={sp.kind === "castle" ? TSIDE[sp.side] : sp.kind === "banner" ? (sp.side ? TSIDE[sp.side] : "#9A7B2E") : "#2C7AA0"}
+                        sw={1.9}
+                      />
                     </g>
                   )}
                 </g>
@@ -5678,20 +5850,24 @@ function Tactics({ room, gs, seat, commit }) {
       </div>
 
       {gs.phase === "roster" && myTurn && gs.roster[seat] == null && (
-        <div style={{ marginTop: 12 }}>
-          <Micro style={{ textAlign: "center" }}>Compagnia di 4 · almeno un Fante e un Arciere</Micro>
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            {[1, 2, 3].map((f) => (
-              <button
-                key={f}
-                onClick={() => commit(tacticsRoster(gs, seat, f))}
-                style={{ ...plain, flex: 1, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "10px 6px", cursor: "pointer", fontFamily: BRAND, fontWeight: 600, fontSize: 13, WebkitTapHighlightColor: "transparent" }}
-              >
-                {f} {uIco("fante", 14)} · {4 - f} {uIco("arciere", 14)}
-              </button>
-            ))}
+        gs.simple ? (
+          <div style={{ marginTop: 12 }}>
+            <Micro style={{ textAlign: "center" }}>Compagnia di 4 · almeno un Fante e un Arciere</Micro>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              {[1, 2, 3].map((f) => (
+                <button
+                  key={f}
+                  onClick={() => commit(tacticsRoster(gs, seat, [...Array(f).fill("fante"), ...Array(4 - f).fill("arciere")]))}
+                  style={{ ...plain, flex: 1, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "10px 6px", cursor: "pointer", fontFamily: BRAND, fontWeight: 600, fontSize: 13, WebkitTapHighlightColor: "transparent" }}
+                >
+                  {f} {uIco("fante", 14)} · {4 - f} {uIco("arciere", 14)}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        ) : (
+          <TacticsDraft draft={draft} setDraft={setDraft} onConfirm={() => commit(tacticsRoster(gs, seat, draft))} />
+        )
       )}
 
       {gs.phase === "battle" && myTurn && sel && (

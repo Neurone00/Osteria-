@@ -288,15 +288,45 @@ function tacticsConnectedKeys(openKeys) {
   }
   return seen.size === set.size;
 }
+// A random legal company for the current mode: the essential four, or a budget
+// draft of 3–6 from the full pool.
+function draftCompany(simple) {
+  if (simple) {
+    const k = 1 + Math.floor(Math.random() * 3); // 1..3 Fanti, rest Arcieri
+    return [...Array(k).fill("fante"), ...Array(4 - k).fill("arciere")];
+  }
+  const types = Object.keys(R.TACT.units);
+  const costOf = (t) => R.TACT.units[t].cost;
+  const cheapest = Math.min(...types.map(costOf));
+  const comp = [];
+  let budget = R.TACT.BUDGET;
+  while (comp.length < R.TACT.MAX_UNITS) {
+    const affordable = types.filter((t) => costOf(t) <= budget);
+    if (!affordable.length) break;
+    if (comp.length >= R.TACT.MIN_UNITS && Math.random() < 0.35) break;
+    const t = affordable[Math.floor(Math.random() * affordable.length)];
+    comp.push(t);
+    budget -= costOf(t);
+  }
+  while (comp.length < R.TACT.MIN_UNITS && budget >= cheapest) {
+    const t = types.find((x) => costOf(x) === cheapest);
+    comp.push(t);
+    budget -= cheapest;
+  }
+  return comp;
+}
 function playTactics() {
-  let g = R.dealTactics("A", {}, { A: 0, B: 0 });
+  const simple = Math.random() < 0.5; // exercise both the essential and full rules
+  let g = R.dealTactics("A", { simple }, { A: 0, B: 0 });
   const openKeys = g.board.cells.map((c) => R.hkey(c.q, c.r)).filter((k) => !g.board.blocked[k]);
   if (!tacticsConnectedKeys(openKeys)) return fail("tactics", "generated board is not fully connected");
-  // rosters (at least one of each kind is enforced by the engine: 1..3 Fanti)
-  let r = R.tacticsRoster(g, "A", 1 + Math.floor(Math.random() * 3));
+  for (const k of g.board.banners) if (!openKeys.includes(k)) return fail("tactics", "a banner sits on a blocked or off-board hex");
+  const compA = draftCompany(g.simple),
+    compB = draftCompany(g.simple);
+  let r = R.tacticsRoster(g, "A", compA);
   if (!r) return fail("tactics", "roster A refused");
   g = r.g;
-  r = R.tacticsRoster(g, "B", 1 + Math.floor(Math.random() * 3));
+  r = R.tacticsRoster(g, "B", compB);
   if (!r) return fail("tactics", "roster B refused");
   g = r.g;
   if (g.phase !== "deploy") return fail("tactics", "did not reach deploy after both rosters");
@@ -313,7 +343,7 @@ function playTactics() {
     g = d.g;
   }
   if (g.phase !== "battle") return fail("tactics", "did not reach battle");
-  if (g.order.length !== 8) return fail("tactics", `expected 8 units deployed, got ${g.order.length}`);
+  if (g.order.length !== compA.length + compB.length) return fail("tactics", `expected ${compA.length + compB.length} units deployed, got ${g.order.length}`);
   // battle: random legal activations to the end
   let steps = 0;
   const MAX = 4000;
