@@ -1184,8 +1184,8 @@ const TACT = {
   units: {
     // A big board with lots of rubble is the balance: a Fante needs several
     // turns to cross it, and an Arciere kites and picks it off on the way in.
-    fante: { name: "Fante", max: 8, move: 3, min: 1, rng: 1 }, // d8 melee
-    arciere: { name: "Arciere", max: 6, move: 3, min: 2, rng: 4 }, // d6, can't hit adjacent
+    fante: { name: "Fante", max: 8, move: 2, min: 1, rng: 1 }, // d8 melee, closes slowly
+    arciere: { name: "Arciere", max: 6, move: 3, min: 2, rng: 3 }, // d6, shoots 2–3 away, never adjacent
   },
 };
 const HEX_DIRS = [
