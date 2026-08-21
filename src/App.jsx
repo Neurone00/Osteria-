@@ -3910,11 +3910,14 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               )}
             </div>
 
-            {soloRef.current && (
-              <button onClick={openSolo} style={{ ...plain, display: "block", margin: "14px auto 0", color: T.ink, fontWeight: 600 }}>
-                🧪 Prova da solo
-              </button>
-            )}
+            {/* Always available so you can try any game on one device: it opens a
+                local two-seat table and you flip sides with the toggle up top. */}
+            <button
+              onClick={openSolo}
+              style={{ ...plain, display: "block", margin: "16px auto 0", color: soloRef.current ? T.ink : T.ink60, fontWeight: 600, fontSize: 13.5 }}
+            >
+              🧪 Prova da solo <span style={{ color: T.ink30, fontWeight: 400 }}>· due lati, un telefono</span>
+            </button>
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
             {!hasStore() && <InstallPrompt />}
           </div>
@@ -4934,6 +4937,12 @@ function Tactics({ room, gs, seat, commit }) {
     setSel(null);
     setDest(null);
   }, [gs.turn, gs.phase]);
+
+  // face the board toward whichever side you're playing — including after a
+  // solo seat-flip, so testing both sides on one phone always reads right-way-up
+  useEffect(() => {
+    setRot(seat === "B" ? 180 : 0);
+  }, [seat]);
 
   // layout
   const centers = board.cells.map((c) => ({ c, ...tpx(c.q, c.r) }));
