@@ -312,10 +312,12 @@ function scopaPlay(gs, seat, cardId, take, o) {
       g.scope[seat] += 1;
       (g.scopeCards[seat] || (g.scopeCards[seat] = [])).push([...got, card].map((c) => ({ s: c.s, v: c.v })));
       kind = "scopa";
-      ev = { t: "scopa" };
+      // carry the exact cards so both screens can show what the sweep took — the
+      // table clears instantly, so this is the only record of the play in flight
+      ev = { t: "scopa", card: { s: card.s, v: card.v }, got: got.map((c) => ({ s: c.s, v: c.v })) };
     } else {
       kind = "take";
-      ev = { t: "take", v: card.v, s: card.s, got: got.map((c) => c.v) };
+      ev = { t: "take", v: card.v, s: card.s, got: got.map((c) => ({ s: c.s, v: c.v })) };
     }
   } else if (o.acepile && card.v === 1) {
     // House rule: an asso played with nothing to capture is banked straight to
@@ -2239,13 +2241,17 @@ const suitName = (s, french) => (french ? FR_SUIT_NAME[s] : SUIT[s].name.toLower
 function describe(ev, french) {
   if (!ev) return "";
   const r = (v) => faceLbl(v, french);
+  // a card {s,v} → "il 5 di coppe" (falls back to bare rank for older value-only events)
+  const named = (c) => (c && typeof c === "object" ? `il ${r(c.v)} di ${suitName(c.s, french)}` : `il ${r(c)}`);
   switch (ev.t) {
     case "lay":
       return `cala il ${r(ev.v)} di ${suitName(ev.s, french)}`;
     case "take":
-      return `prende ${ev.got.map(r).join("+")} con il ${r(ev.v)}`;
+      return `prende ${(ev.got || []).map(named).join(" + ")} con ${named({ s: ev.s, v: ev.v })}`;
     case "scopa":
-      return "svuota il tavolo — scopa";
+      return ev.card
+        ? `scopa! prende ${(ev.got || []).map(named).join(" + ")} con ${named(ev.card)}`
+        : "svuota il tavolo — scopa";
     case "bank":
       return "incassa l’asso";
     case "steal":
@@ -2989,18 +2995,89 @@ function ScanQR({ onCode, onClose }) {
 }
 
 // A big shaking "Scopa!" across the middle of the table when someone clears it.
-function ScopaFlash({ id }) {
-  if (!id) return null;
+// A capture reveal on the scopa board: the cards a play swept — the table cards
+// it took, then the card from hand (ringed) — held centre-screen for a beat so
+// you can read exactly what was played, then flown off toward the taker's pile.
+// On a sweep it also flashes "Scopa!". Both screens show it from the shared anim.
+const CAP_HOLD = 1000; // ms the cards sit still before they fly
+const CAP_FLY = 640; // ms of the fly-to-pile animation (matches flypR/flypL)
+function CaptureReveal({ room, seat }) {
+  const [shot, setShot] = useState(null);
+  const [phase, setPhase] = useState("hold"); // hold → fly
+  const seen = useRef(null);
+  useEffect(() => {
+    const a = room?.anim;
+    const ev = room?.ev;
+    if (!a || a.id === seen.current) return;
+    seen.current = a.id;
+    if (ev && (ev.t === "take" || ev.t === "scopa") && ev.card) {
+      setShot({ id: a.id, by: a.seat, scopa: ev.t === "scopa", card: ev.card, got: ev.got || [] });
+    }
+  }, [room?.anim?.id]);
+  useEffect(() => {
+    if (!shot) return;
+    setPhase("hold");
+    const t1 = setTimeout(() => setPhase("fly"), CAP_HOLD);
+    const t2 = setTimeout(() => setShot(null), CAP_HOLD + CAP_FLY);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [shot && shot.id]);
+  if (!shot) return null;
+  const flyCls = shot.by === seat ? "flypR" : "flypL"; // toward the taker's pile (mine right, theirs left)
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 56, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18, pointerEvents: "none", padding: 20 }}>
+      {shot.scopa && (
+        <div
+          key={`t${shot.id}`}
+          className="scopaflash"
+          style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(56px, 20vw, 132px)", color: "#A5342F", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.10)", whiteSpace: "nowrap", lineHeight: 1 }}
+        >
+          Scopa<span style={{ color: T.ink }}>!</span>
+        </div>
+      )}
       <div
-        key={id}
-        className="scopaflash"
-        style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(66px, 23vw, 150px)", color: "#A5342F", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.10)", whiteSpace: "nowrap" }}
+        key={`c${shot.id}-${phase}`}
+        className={phase === "fly" ? flyCls : "pop"}
+        style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "center", maxWidth: 360, padding: "12px 14px", background: "rgba(247,246,243,0.96)", border: `1px solid ${T.line}`, borderRadius: 14, boxShadow: "0 14px 34px rgba(18,18,18,0.22)" }}
       >
-        Scopa<span style={{ color: T.ink }}>!</span>
+        {shot.got.map((c, i) => (
+          <Card key={`g${i}`} card={c} size="sm" rot={0} />
+        ))}
+        {shot.got.length > 0 && <Ico n="plus" s={16} c={T.ink30} />}
+        <div style={{ borderRadius: 8, outline: "2px solid #A5342F", outlineOffset: 2 }}>
+          <Card card={shot.card} size="sm" rot={0} />
+        </div>
       </div>
     </div>
+  );
+}
+
+// The scopas a player has swept this hand — always shown (independent of the
+// show-points toggle), since a scopa is a public event you want to keep count of.
+function ScopeTag({ n }) {
+  if (!n) return null;
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        background: "rgba(165,52,47,0.12)",
+        color: "#A5342F",
+        border: "1px solid rgba(165,52,47,0.34)",
+        borderRadius: 999,
+        padding: "1px 8px",
+        fontFamily: BRAND,
+        fontWeight: 700,
+        fontSize: 11,
+        letterSpacing: "0.02em",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {n} scopa
+    </span>
   );
 }
 
@@ -3417,7 +3494,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [sound, setSound] = useState(true);
   const [jolt, setJolt] = useState(false);
   const [slamId, setSlamId] = useState(null);
-  const [scopaFlash, setScopaFlash] = useState(0);
   const [booting, setBooting] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
   const [askLeave, setAskLeave] = useState(false);
@@ -3505,11 +3581,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     slamSound(a.kind, soundRef.current);
     buzz(a.kind);
     const timers = [setTimeout(() => setJolt(false), 200), setTimeout(() => setSlamId(null), 460)];
-    // A cleared table in scopa gets a big shaking "Scopa!" on both screens.
-    if (scopaLike(room.game) && room.ev && room.ev.t === "scopa") {
-      setScopaFlash((n) => n + 1);
-      timers.push(setTimeout(() => setScopaFlash(0), 1500));
-    }
+    // The "Scopa!" flash and the held card reveal are owned by the board itself
+    // (CaptureReveal), so a capture shows exactly which cards it swept.
     return () => timers.forEach(clearTimeout);
   }, [room?.anim?.id]);
 
@@ -4499,7 +4572,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   return (
     <Frame jolt={jolt}>
       <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-      <ScopaFlash id={scopaFlash} />
       <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />
       {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
       <EndGameOverlay room={room} seat={seat} onAgree={agreeEnd} onDecline={declineEnd} onCancel={declineEnd} />
@@ -4875,18 +4947,23 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
   const tally = isScopa ? gs.scores : { A: gs.piles.A.length, B: gs.piles.B.length };
   const unit = isScopa ? "punti" : "carte";
   const a = room.anim;
-  const taken = a && a.kind !== "lay" && a.card ? { id: a.card, s: a.card[0], v: +a.card.slice(1) } : null;
+  // scopa-likes get the fuller CaptureReveal (hold the swept cards, then fly);
+  // rubamazzo keeps the quick single-card fly toward the winning pile.
+  const taken = a && a.kind !== "lay" && a.card && !isScopa ? { id: a.card, s: a.card[0], v: +a.card.slice(1) } : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
+      {isScopa && <CaptureReveal room={room} seat={seat} />}
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</span>
+            {isScopa && <ScopeTag n={gs.scope[opp]} />}
+          </div>
           {showScores && (
             <Micro style={{ marginTop: 2 }}>
               {tally[opp]} {unit}
-              {isScopa && gs.scope[opp] ? ` · ${gs.scope[opp]} scopa` : ""}
             </Micro>
           )}
         </div>
@@ -5005,13 +5082,15 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
       {/* hand */}
       <div style={{ marginTop: 22 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>
-            {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>
+              {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
+            </span>
+            {isScopa && <ScopeTag n={gs.scope[seat]} />}
           </div>
           {showScores && (
             <Micro>
               {tally[seat]} {unit}
-              {isScopa && gs.scope[seat] ? ` · ${gs.scope[seat]} scopa` : ""}
             </Micro>
           )}
         </div>
