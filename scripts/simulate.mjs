@@ -36,7 +36,7 @@ const EXPORTS = [
   "dealRuba", "rubaOptions", "rubaPlay",
   "dealCamicia", "camiciaFlip", "demand",
   "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed", "peppaShuffle", "peppaReady", "peppaReorder", "peppaOffer",
-  "TACT", "dealTactics", "tacticsRoster", "tacticsDeploy", "tacticsActivate", "tacticsReach", "tacticsTargets",
+  "TACT", "dealTactics", "tacticsRoster", "tacticsDeploy", "tacticsDeployAll", "tacticsActivate", "tacticsReach", "tacticsTargets",
   "tacticsRoll", "tacticsDeployable", "tacticsBoard", "hdist", "hkey", "unhkey",
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
@@ -330,16 +330,23 @@ function playTactics() {
   if (!r) return fail("tactics", "roster B refused");
   g = r.g;
   if (g.phase !== "deploy") return fail("tactics", "did not reach deploy after both rosters");
-  // deploy every unit onto a legal hex near its castle
+  // both sides arrange their whole company, then lock it in as one move (the
+  // dealer commits first, so submit for whoever holds the turn each pass)
   let guard = 0;
   while (g.phase === "deploy") {
-    if (++guard > 200) return fail("tactics", "deploy never finished");
+    if (++guard > 4) return fail("tactics", "deploy never finished");
     const seat = g.turn;
-    const type = g.toPlace[seat][0];
-    const spot = openKeys.find((k) => R.tacticsDeployable(g, seat, k));
-    if (!spot) return fail("tactics", `no legal deploy hex for ${seat}`);
-    const d = R.tacticsDeploy(g, seat, type, spot);
-    if (!d) return fail("tactics", "deploy refused a legal placement");
+    const used = new Set();
+    const placements = [];
+    for (const type of g.toPlace[seat]) {
+      const spot = openKeys.find((k) => !used.has(k) && R.tacticsDeployable(g, seat, k));
+      if (!spot) return fail("tactics", `no legal deploy hex for ${seat}`);
+      used.add(spot);
+      const { q, r: rr } = R.unhkey(spot);
+      placements.push({ type, q, r: rr });
+    }
+    const d = R.tacticsDeployAll(g, seat, placements);
+    if (!d) return fail("tactics", "batch deploy refused a legal placement");
     g = d.g;
   }
   if (g.phase !== "battle") return fail("tactics", "did not reach battle");

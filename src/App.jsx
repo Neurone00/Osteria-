@@ -1454,6 +1454,38 @@ function tacticsDeploy(gs, seat, type, k) {
   return { g, quiet: true, ev: { t: "deploy", type } };
 }
 
+// Both sides arrange their whole company at once, in parallel and locally, then
+// lock it in as a single move. The submit stays serialized by turn (the dealer
+// commits first, then the other) so the two writes never race under the
+// one-writer-per-move transport — but neither player waits to *place* their
+// pieces. `placements` is [{ type, q, r }] covering exactly this seat's queue.
+function tacticsDeployAll(gs, seat, placements) {
+  if (gs.done || gs.phase !== "deploy" || gs.turn !== seat) return null;
+  const need = gs.toPlace[seat];
+  if (!Array.isArray(placements) || placements.length !== need.length) return null;
+  // the placed types must be exactly this seat's queue (as a multiset)
+  if ([...need].sort().join(",") !== placements.map((p) => p.type).sort().join(",")) return null;
+  const g = clone(gs);
+  const used = new Set();
+  for (const p of placements) {
+    const k = hkey(p.q, p.r);
+    if (used.has(k) || !tacticsDeployable(g, seat, k)) return null;
+    used.add(k);
+    const id = `${seat}${p.type[0]}${g.order.length}`;
+    g.units[id] = { id, owner: seat, type: p.type, hp: TACT.units[p.type].max, max: TACT.units[p.type].max, q: p.q, r: p.r };
+    g.order.push(id);
+  }
+  g.toPlace[seat] = [];
+  if (g.toPlace[other(seat)].length) g.turn = other(seat);
+  else {
+    g.phase = "battle";
+    g.turn = g.dealer;
+    g.round = 1;
+    g.spent = {};
+  }
+  return { g, quiet: true, ev: { t: "deploy", n: placements.length } };
+}
+
 // Hexes a unit can step to (BFS to its Move, around obstacles and other units).
 function tacticsReach(g, unit) {
   const start = hkey(unit.q, unit.r);
@@ -5529,11 +5561,20 @@ function Tactics({ room, gs, seat, commit }) {
   const [dest, setDest] = useState(null); // staged move hex key
   const [inspect, setInspect] = useState(null); // enemy unit id being previewed (move + range)
   const [draft, setDraft] = useState([]); // company being recruited (roster phase)
+  // deploy staging, kept per seat so a solo seat-flip doesn't lose either side's
+  // arrangement (each real device only ever touches its own seat)
+  const [layouts, setLayouts] = useState({ A: [], B: [] });
+  const [pendings, setPendings] = useState({ A: false, B: false });
+  const layout = layouts[seat];
+  const pending = pendings[seat];
+  const setLayout = (next) => setLayouts((l) => ({ ...l, [seat]: typeof next === "function" ? next(l[seat]) : next }));
+  const setPending = (v) => setPendings((p) => ({ ...p, [seat]: v }));
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [help, setHelp] = useState(false);
   const [shot, setShot] = useState(null);
   const drag = useRef(null);
+  const pinch = useRef(null); // two-finger zoom gesture state
   const moved = useRef(false);
   const seenAnim = useRef(null);
   const stageRef = useRef(null);
@@ -5556,6 +5597,33 @@ function Tactics({ room, gs, seat, commit }) {
     setInspect(null);
     setDraft([]);
   }, [gs.turn, gs.phase]);
+
+  // deploy is arranged locally and in parallel — reset the staging when the
+  // phase changes, when this seat has locked in (its queue emptied), or when the
+  // viewpoint flips seats in solo. NOT on turn change: our arrangement must
+  // survive the other side locking in first.
+  const toPlaceN = (gs.toPlace[seat] || []).length;
+  // drop a side's staged arrangement once it has locked in (its queue emptied)
+  // or once we leave the deploy phase — but never merely because we flipped seats.
+  const aOpen = gs.phase === "deploy" && (gs.toPlace.A || []).length > 0;
+  const bOpen = gs.phase === "deploy" && (gs.toPlace.B || []).length > 0;
+  useEffect(() => {
+    setLayouts((l) => ({ A: aOpen ? l.A : [], B: bOpen ? l.B : [] }));
+    setPendings((p) => ({ A: aOpen ? p.A : false, B: bOpen ? p.B : false }));
+  }, [gs.phase, aOpen, bOpen]);
+
+  // an arrangement that's already finished locks in the moment its turn comes
+  // (the dealer commits first). Keyed on whose turn it is, so in solo the second
+  // side resolves without a flip; on a real device only its own seat is ever
+  // pending, so this never double-submits.
+  useEffect(() => {
+    const t = gs.turn;
+    const need = (gs.toPlace[t] || []).length;
+    if (gs.phase === "deploy" && !gs.done && pendings[t] && need > 0 && layouts[t].length === need) {
+      commit(tacticsDeployAll(gs, t, layouts[t]));
+      setPendings((p) => ({ ...p, [t]: false }));
+    }
+  }, [pendings, gs.turn, gs.phase]);
 
   // layout — bounds computed from the irregular cell set
   const centers = board.cells.map((c) => ({ c, ...tpx(c.q, c.r) }));
@@ -5628,16 +5696,23 @@ function Tactics({ room, gs, seat, commit }) {
   }
   const insCol = insUnit ? TSIDE[insUnit.owner] : null;
 
-  const deploySet = myTurn && gs.phase === "deploy" ? new Set(board.cells.map((c) => hkey(c.q, c.r)).filter((k) => tacticsDeployable(gs, seat, k))) : new Set();
-  const nextType = gs.phase === "deploy" ? gs.toPlace[seat][0] : null;
+  // deploy: this seat can arrange its own company whenever it still has pieces
+  // to place — regardless of whose turn it is to lock in (both sides at once).
+  const myDeploy = gs.phase === "deploy" && !gs.done && toPlaceN > 0;
+  const layoutKeys = new Set(layout.map((p) => hkey(p.q, p.r)));
+  const nextType = myDeploy ? gs.toPlace[seat][layout.length] : null; // next piece to place, null once all placed
+  const deploySet = myDeploy && nextType ? new Set(board.cells.map((c) => hkey(c.q, c.r)).filter((k) => tacticsDeployable(gs, seat, k) && !layoutKeys.has(k))) : new Set();
 
   const tapHex = (k) => {
     if (moved.current) return;
-    if (!myTurn) return;
     if (gs.phase === "deploy") {
-      if (deploySet.has(k)) commit(tacticsDeploy(gs, seat, nextType, k));
+      if (myDeploy && nextType && deploySet.has(k)) {
+        const { q, r } = unhkey(k);
+        setLayout([...layout, { type: nextType, q, r }]);
+      }
       return;
     }
+    if (!myTurn) return;
     if (gs.phase === "battle" && unit) {
       const uk = hkey(unit.q, unit.r);
       if (k === uk) setDest(null);
@@ -5673,14 +5748,43 @@ function Tactics({ room, gs, seat, commit }) {
     setDest(null);
     setInspect(null);
   };
+  // lock in the whole arrangement; if it isn't our turn to commit yet, mark it
+  // pending and the effect above submits the moment the turn comes round.
+  const submitDeploy = () => {
+    if (layout.length !== toPlaceN || toPlaceN === 0) return;
+    if (gs.turn === seat) commit(tacticsDeployAll(gs, seat, layout));
+    else setPending(true);
+  };
 
-  // pan (screen-space), tap vs drag disambiguation
+  // pan (drag / one finger) and pinch-zoom (two fingers), with tap-vs-gesture
+  // disambiguation. Pinch keeps the point between the fingers pinned under them.
+  const dist2 = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const localMid = (t) => {
+    const el = stageRef.current;
+    const r = el ? el.getBoundingClientRect() : { left: 0, top: 0 };
+    return { x: (t[0].clientX + t[1].clientX) / 2 - r.left, y: (t[0].clientY + t[1].clientY) / 2 - r.top };
+  };
   const onDown = (e) => {
+    if (e.touches && e.touches.length >= 2) {
+      const m = localMid(e.touches);
+      pinch.current = { d0: dist2(e.touches), z0: zoom, bx: (m.x - pan.x) / zoom, by: (m.y - pan.y) / zoom };
+      drag.current = null;
+      moved.current = true; // a pinch is never a tap
+      return;
+    }
     const p = e.touches ? e.touches[0] : e;
     drag.current = { x: p.clientX, y: p.clientY, px: pan.x, py: pan.y };
     moved.current = false;
   };
   const onMove = (e) => {
+    if (pinch.current && e.touches && e.touches.length >= 2) {
+      const pc = pinch.current;
+      const nz = Math.max(0.55, Math.min(1.7, pc.z0 * (dist2(e.touches) / pc.d0)));
+      const m = localMid(e.touches);
+      setPan({ x: m.x - nz * pc.bx, y: m.y - nz * pc.by });
+      setZoom(nz);
+      return;
+    }
     if (!drag.current) return;
     const p = e.touches ? e.touches[0] : e;
     const dx = p.clientX - drag.current.x,
@@ -5688,7 +5792,8 @@ function Tactics({ room, gs, seat, commit }) {
     if (Math.abs(dx) + Math.abs(dy) > 7) moved.current = true;
     if (moved.current) setPan({ x: drag.current.px + dx, y: drag.current.py + dy });
   };
-  const onUp = () => {
+  const onUp = (e) => {
+    if (pinch.current && (!e || !e.touches || e.touches.length < 2)) pinch.current = null;
     drag.current = null;
     setTimeout(() => (moved.current = false), 0);
   };
@@ -5726,9 +5831,13 @@ function Tactics({ room, gs, seat, commit }) {
       ? "Scegli la tua compagnia"
       : `${who(room, other(seat))} sta scegliendo…`
     : gs.phase === "deploy"
-    ? myTurn
-      ? `Schiera vicino al castello — ${TACT.units[nextType]?.name} (${gs.toPlace[seat].length} rimasti)`
-      : `${who(room, gs.turn)} sta schierando…`
+    ? myDeploy
+      ? nextType
+        ? `Schiera vicino al castello — ${TACT.units[nextType]?.name} (${toPlaceN - layout.length} da piazzare)`
+        : pending
+        ? `Pronto — aspetto ${who(room, other(seat))}`
+        : "Compagnia pronta — conferma lo schieramento"
+      : `${who(room, other(seat))} sta schierando…`
     : myTurn
     ? sel
       ? healing
@@ -5867,7 +5976,7 @@ function Tactics({ room, gs, seat, commit }) {
                     strokeWidth={isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat || (sp && sp.kind === "banner") ? 1.5 : 1}
                     className={isTarget || isDeploy ? "hexpulse" : ""}
                     onClick={() => tapHex(k)}
-                    style={{ cursor: myTurn && (isReach || isDeploy || isTarget || isDest || isSelHex) ? "pointer" : "default" }}
+                    style={{ cursor: isDeploy || (myTurn && (isReach || isTarget || isDest || isSelHex)) ? "pointer" : "default" }}
                   />
                   {sp && (
                     <g transform={`translate(${p.x - 7} ${p.y - 7})`} style={{ pointerEvents: "none" }}>
@@ -5923,6 +6032,39 @@ function Tactics({ room, gs, seat, commit }) {
               </div>
             );
           })}
+
+          {/* pieces this seat has arranged but not yet locked in (deploy phase);
+              dashed to read as provisional — tap one to pick it back up */}
+          {layout.map((pl, i) => {
+            const p = at(pl.q, pl.r);
+            const col = TSIDE[seat];
+            const u = TACT.units[pl.type];
+            return (
+              <div
+                key={`stg${i}`}
+                onClick={() => setLayout(layout.filter((_, j) => j !== i))}
+                style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", cursor: "pointer", transition: "left 160ms ease, top 160ms ease" }}
+              >
+                <div
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 8,
+                    background: "#fff",
+                    border: `2.5px dashed ${col}`,
+                    boxShadow: `0 2px 5px rgba(18,18,18,0.22)`,
+                    display: "grid",
+                    placeItems: "center",
+                    position: "relative",
+                    opacity: 0.9,
+                  }}
+                >
+                  <span style={{ position: "absolute", top: 0, left: 2 }}>{uIco(pl.type, 9, col)}</span>
+                  <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18, color: col, lineHeight: 1 }}>{u.max}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -5950,6 +6092,17 @@ function Tactics({ room, gs, seat, commit }) {
         ) : (
           <TacticsDraft draft={draft} setDraft={setDraft} onConfirm={() => commit(tacticsRoster(gs, seat, draft))} />
         )
+      )}
+
+      {gs.phase === "deploy" && myDeploy && (
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <Button kind="outline" full disabled={layout.length === 0 || pending} onClick={() => setLayout(layout.slice(0, -1))}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> Annulla</span>
+          </Button>
+          <Button kind="solid" full disabled={layout.length !== toPlaceN || pending} onClick={submitDeploy}>
+            {pending ? "In attesa…" : layout.length === toPlaceN ? "Schiera" : `Piazza ${toPlaceN - layout.length}`}
+          </Button>
+        </div>
       )}
 
       {gs.phase === "battle" && myTurn && sel && (
