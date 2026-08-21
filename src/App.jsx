@@ -1171,15 +1171,17 @@ function s40Discard(gs, seat, cardId) {
    A dice skirmish on a hex board. Each unit IS a die: its face shows its
    current HP, and because a wounded die hits weaker, an attack rolls 1..HP —
    the die literally shrinks as it takes damage. Rolling the top face (≥2)
-   explodes for a crit. Five classes (Fante, Arciere, Cavaliere, Balestriere,
-   Fromboliere), each a die with its own move, range and point cost; draft a
-   company under a budget. Deploy near your castle, then take turns activating
-   one unit (move, then attack) — a unit may be activated twice in a round, so
-   you can push the same one across the map. Heal on your fountain (+3), your
-   castle (full), or a contested banner out in the field (+2, and you may still
-   attack). A castle bombards any enemy that ends its turn beside it for 2. Win
-   by wiping the enemy — or by holding their castle: step in, survive their
-   retaliation, and the keep is yours. A round cap ends stalls on banners held,
+   explodes for a crit. Six classes (Fante, Arciere, Cavaliere, Balestriere,
+   Fromboliere, Mago — the Mago's attack blasts everything within 2 of the
+   target), each a die with its own move, range and point cost; draft a company
+   under a budget. Deploy near your castle, then fight with no turns: either side
+   activates any of its own units whenever it likes (move, then attack), a unit
+   twice before it must rest — and a side that runs its units out gets them all
+   back, so no one is ever stuck waiting. Heal on your fountain (+3), your castle
+   (full), or a contested banner out in the field (+2, and you may still attack).
+   A castle bombards any enemy that ends beside it for 2. Win by wiping the enemy
+   — or by holding their castle: step in, survive their answer, and the keep is
+   yours. The battle ends after a fixed number of moves, decided on banners held,
    then total HP. Obstacles block movement and line of sight; there is no
    elevation. A house-rule toggle plays the essential version: two classes, a
    fixed company of four, a small board, no banners. */
@@ -1188,8 +1190,9 @@ const TACT = {
   ERODE: 0.34, // chance a border hex is chipped away each pass (2 passes) → random shape
   BLOCK: 0.2, // share of the open interior turned to rubble — cover + broken lines of sight
   DEPLOY_R: 3, // deploy within this many hexes of your castle (room for a full company)
-  ROUND_CAP: 40,
-  ACTS: 2, // activations a single unit may spend per round — you can move the same one twice
+  MOVE_CAP: 40, // no turns: either side moves freely, the battle ends after this many moves total
+  SIEGE_STALL: 3, // if the enemy won't answer a siege, the keep falls after this many moves anyway
+  ACTS: 2, // moves a single unit may spend before it must rest — you can move the same one twice
   CASTLE_DMG: 2, // a castle bombards any enemy that ends its turn next to it
   BANNER_HEAL: 2, // standing on a contested banner mends this much (and you may still attack)
   BUDGET: 15, // points to spend drafting a company
@@ -1210,9 +1213,10 @@ const TACT = {
     cavaliere: { name: "Cavaliere", max: 6, move: 3, min: 1, rng: 1, cost: 4, icon: "horse" }, // d6 fast flanker
     balestriere: { name: "Balestriere", max: 8, move: 1, min: 2, rng: 4, cost: 5, icon: "crossbow" }, // d8 slow sniper, 2–4
     fromboliere: { name: "Fromboliere", max: 4, move: 3, min: 1, rng: 2, cost: 2, icon: "sling" }, // d4 cheap skirmisher
+    mago: { name: "Mago", max: 6, move: 2, min: 2, rng: 3, cost: 5, icon: "spark", aoe: 2 }, // d6 blast: hits everything within 2 of the target
   },
 };
-const TYPE_ORDER = ["fante", "arciere", "cavaliere", "balestriere", "fromboliere"];
+const TYPE_ORDER = ["fante", "arciere", "cavaliere", "balestriere", "fromboliere", "mago"];
 // A drafted company is legal when it has 3..6 units and fits the budget.
 function tacticsCompanyCost(company) {
   return company.reduce((t, type) => t + (TACT.units[type]?.cost || 0), 0);
@@ -1382,10 +1386,10 @@ function dealTactics(dealer, opts, tally) {
     units: {}, // id → { id, owner, type, hp, max, q, r }
     order: [], // stable unit ids
     toPlace: { A: [], B: [] }, // unit types still to deploy
-    turn: dealer || "A",
-    spent: {}, // unit id → activations used this round (capped at TACT.ACTS)
-    siege: null, // { seat, unitId, armed } — a unit sitting in the enemy castle
-    round: 1,
+    turn: dealer || "A", // used only for the roster pick and the deploy hand-off; battle is turn-free
+    spent: {}, // unit id → moves used before it must rest (capped at TACT.ACTS)
+    siege: null, // { seat, unitId, at, armed } — a unit sitting in the enemy castle
+    moves: 0, // battle moves made by either side; the game ends at TACT.MOVE_CAP
     dealer: dealer || "A",
     tally: tally || { A: 0, B: 0 },
     last: null, // last resolved attack, for the roll reveal
@@ -1447,7 +1451,7 @@ function tacticsDeploy(gs, seat, type, k) {
     else {
       g.phase = "battle";
       g.turn = g.dealer;
-      g.round = 1;
+      g.moves = 0;
       g.spent = {};
     }
   }
@@ -1480,7 +1484,7 @@ function tacticsDeployAll(gs, seat, placements) {
   else {
     g.phase = "battle";
     g.turn = g.dealer;
-    g.round = 1;
+    g.moves = 0;
     g.spent = {};
   }
   return { g, quiet: true, ev: { t: "deploy", n: placements.length } };
@@ -1567,54 +1571,49 @@ function tacticsWin(g, winner, how) {
   g.how = how;
   if (winner) g.tally[winner] += 1;
 }
-// A unit sitting in the enemy castle only takes it if it survives one round of
-// the opponent's retaliation: arming happens when control passes to the foe,
-// and the capture lands when the turn comes back with the unit still in place.
-function tacticsResolveSiege(g) {
+// After every move (there are no turns — either side moves whenever it likes):
+// count the move, refresh a side that has run its units out so nobody is ever
+// stuck, resolve a standing siege, and end the battle at the move cap.
+function tacticsAfterMove(g, mover) {
+  g.moves += 1;
+  // a side with no rested unit gets its whole company back — you can always act
+  for (const s of ["A", "B"]) {
+    const owns = g.order.some((id) => g.units[id].owner === s);
+    const ready = g.order.some((id) => g.units[id].owner === s && (g.spent[id] || 0) < TACT.ACTS);
+    if (owns && !ready) for (const id of g.order) if (g.units[id].owner === s) delete g.spent[id];
+  }
+  // siege: holding the enemy keep takes it once the defender has had a move to
+  // answer and the keep still stands — or, if they simply won't answer, after a
+  // few moves regardless. Broken the moment the besieger dies or steps off.
   const s = g.siege;
-  if (!s || g.done) return;
-  const u = g.units[s.unitId];
-  if (!u || hkey(u.q, u.r) !== g.board.castle[other(s.seat)]) {
-    g.siege = null; // it died or left the keep — siege broken
-    return;
+  if (s) {
+    const u = g.units[s.unitId];
+    if (!u || hkey(u.q, u.r) !== g.board.castle[other(s.seat)]) g.siege = null;
+    else {
+      if (mover === other(s.seat)) s.armed = true;
+      if (s.armed || g.moves - s.at >= TACT.SIEGE_STALL) {
+        tacticsWin(g, s.seat, "castle");
+        return;
+      }
+    }
   }
-  if (g.turn === other(s.seat)) s.armed = true; // the defender gets their turn
-  else if (g.turn === s.seat && s.armed) tacticsWin(g, s.seat, "castle");
-}
-function tacticsPassTurn(g) {
-  const unspent = (s) => g.order.some((id) => g.units[id].owner === s && (g.spent[id] || 0) < TACT.ACTS);
-  const foe = other(g.turn);
-  if (unspent(foe)) {
-    g.turn = foe;
-    tacticsResolveSiege(g);
-    return;
-  }
-  if (unspent(g.turn)) {
-    tacticsResolveSiege(g); // opponent is out of units this round; keep going
-    return;
-  }
-  g.round += 1;
-  g.spent = {};
-  if (g.round > TACT.ROUND_CAP) {
-    // a stalled game goes to whoever holds more banners, then to most total HP
-    const banners = (s) => g.board.banners.filter((k) => g.order.some((id) => g.units[id].owner === s && hkey(g.units[id].q, g.units[id].r) === k)).length;
-    const hp = (s) => g.order.filter((id) => g.units[id].owner === s).reduce((t, id) => t + g.units[id].hp, 0);
+  // the battle ends after the move cap — decide on banners held, then total HP
+  if (g.moves >= TACT.MOVE_CAP) {
+    const banners = (x) => g.board.banners.filter((k) => g.order.some((id) => g.units[id].owner === x && hkey(g.units[id].q, g.units[id].r) === k)).length;
+    const hp = (x) => g.order.filter((id) => g.units[id].owner === x).reduce((t, id) => t + g.units[id].hp, 0);
     const ba = banners("A"),
-      bb = banners("B");
-    const a = hp("A"),
+      bb = banners("B"),
+      a = hp("A"),
       b = hp("B");
-    const winner = ba !== bb ? (ba > bb ? "A" : "B") : a === b ? null : a > b ? "A" : "B";
-    tacticsWin(g, winner, "timeout");
-    return;
+    tacticsWin(g, ba !== bb ? (ba > bb ? "A" : "B") : a === b ? null : a > b ? "A" : "B", "timeout");
   }
-  g.turn = foe;
-  tacticsResolveSiege(g);
 }
 
 // One activation, resolved atomically: optionally move to `toKey`, then either
-// attack a target or wait. Healing on your own castle/fountain is automatic.
+// attack a target or wait. No turns — either seat may activate any of its own
+// rested units at any time. Healing on your own castle/fountain is automatic.
 function tacticsActivate(gs, seat, unitId, toKey, action) {
-  if (gs.done || gs.phase !== "battle" || gs.turn !== seat) return null;
+  if (gs.done || gs.phase !== "battle") return null;
   const g = clone(gs);
   const unit = g.units[unitId];
   if (!unit || unit.owner !== seat || (g.spent[unitId] || 0) >= TACT.ACTS) return null;
@@ -1636,14 +1635,31 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     const d = hdist(unit, target);
     if (d < u.min || d > u.rng || (u.rng > 1 && !tacticsLoS(g, unit, target))) return null;
     const res = tacticsRoll(unit.hp);
+    const tpos = { q: target.q, r: target.r }; // remember the impact hex before anything dies
     target.hp -= res.total;
     const killed = target.hp <= 0;
     if (killed) {
       delete g.units[action.targetId];
       g.order = g.order.filter((id) => id !== action.targetId);
     }
+    // a Mago's blast splashes the same roll onto every other enemy within its aoe
+    let splash = 0;
+    if (u.aoe) {
+      for (const id of [...g.order]) {
+        const o = g.units[id];
+        if (!o || o.owner === seat || id === action.targetId) continue;
+        if (hdist(tpos, o) <= u.aoe) {
+          o.hp -= res.total;
+          splash += 1;
+          if (o.hp <= 0) {
+            delete g.units[id];
+            g.order = g.order.filter((x) => x !== id);
+          }
+        }
+      }
+    }
     roll = { attacker: unitId, target: action.targetId, atkType: unit.type, tgtType: target.type, dmg: res.total, crit: res.crit, killed };
-    ev = { t: "attack", unit: unit.type, target: target.type, dmg: res.total, crit: res.crit, killed };
+    ev = { t: "attack", unit: unit.type, target: target.type, dmg: res.total, crit: res.crit, killed, splash };
     kind = res.crit ? "scopa" : "take"; // a crit gets the big slam + shake
   }
   // castle bombardment: a unit that ends its turn adjacent to the ENEMY castle
@@ -1665,9 +1681,9 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   }
   g.last = { ...(roll || {}), unitId, to: uk };
   // holding the enemy castle doesn't win on contact: plant the siege and let it
-  // ride out the opponent's retaliation (the capture lands in tacticsPassTurn).
+  // ride out the opponent's retaliation (the capture lands in tacticsAfterMove).
   if (alive && uk === foeCastle) {
-    if (!g.siege || g.siege.unitId !== unitId) g.siege = { seat, unitId, armed: false };
+    if (!g.siege || g.siege.unitId !== unitId) g.siege = { seat, unitId, at: g.moves, armed: false };
   } else if (g.siege && g.siege.unitId === unitId) {
     g.siege = null; // this unit is the besieger no longer
   }
@@ -1675,7 +1691,7 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   else if (!g.order.some((id) => g.units[id].owner === "B")) tacticsWin(g, "A", "wipe");
   if (!g.done) {
     g.spent[unitId] = (g.spent[unitId] || 0) + 1;
-    tacticsPassTurn(g);
+    tacticsAfterMove(g, seat);
   }
   return { g, kind, ev, roll };
 }
@@ -2696,6 +2712,12 @@ function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
         <path {...P} d="M6 4.5h11l-2.6 3.5L17 11.5H6" />
       </>
     ),
+    spark: (
+      <>
+        <path {...P} d="M12 2.5l1.9 6.6 6.6 1.9-6.6 1.9L12 19.5l-1.9-6.6L3.5 11l6.6-1.9z" />
+        <path {...P} d="M18.5 3.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z" />
+      </>
+    ),
     castle: (
       <>
         <path {...P} d="M5 21V10M19 21V10M4 21h16" />
@@ -3572,7 +3594,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const receive = useCallback((r) => {
     if (!r || !r.code) return;
     const cur = roomRef.current;
-    if (cur && r.v <= cur.v) return;
+    // Higher version wins. Turn-free Condottieri means two moves can land on the
+    // same version at once; break that tie by timestamp so both devices converge
+    // on the later write (one move is dropped, but the state never diverges).
+    if (cur && (r.v < cur.v || (r.v === cur.v && (r.ts || 0) <= (cur.ts || 0)))) return;
     roomRef.current = r;
     setRoom(r);
     setPick(null);
@@ -5454,6 +5479,11 @@ function RollReveal({ shot, onDone }) {
             <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 17, color: "#fff", marginTop: 2 }}>
               {shot.dmg} danni{shot.killed ? " — abbattuto!" : ""}
             </div>
+            {shot.splash > 0 && (
+              <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14, color: "#E9B54B", marginTop: 3, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
+                <Ico n="spark" s={15} c="#E9B54B" /> e {shot.splash} nell’area
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -5465,7 +5495,7 @@ function RollReveal({ shot, onDone }) {
 const TACT_SLIDES = [
   { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6." },
   { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
-  { icon: "bow", title: "Muovi, poi tira", body: "A turno attivi una pedina: la sposti e attacchi. Puoi muovere la stessa pedina due volte per round." },
+  { icon: "bow", title: "Niente turni", body: "Muovi quando vuoi, anche entrambi insieme: attivi una pedina (la sposti e attacchi), due volte prima che riposi. Il Mago colpisce un’area." },
   { icon: "flag", title: "Come si vince", body: "Stermina l’altro o espugna il suo castello (tienilo un turno sotto tiro). Gli stendardi ti curano e, se il tempo scade, decidono la vittoria." },
 ];
 function TacticsHowTo({ onClose }) {
@@ -5556,7 +5586,8 @@ function TacticsDraft({ draft, setDraft, onConfirm }) {
 
 function Tactics({ room, gs, seat, commit }) {
   const board = gs.board;
-  const myTurn = gs.turn === seat && !gs.done;
+  const myTurn = gs.turn === seat && !gs.done; // turn matters only for roster/deploy hand-off
+  const canPlay = !gs.done && gs.phase === "battle"; // battle is turn-free: act any time on your own units
   const [sel, setSel] = useState(null); // selected own unit id (battle)
   const [dest, setDest] = useState(null); // staged move hex key
   const [inspect, setInspect] = useState(null); // enemy unit id being previewed (move + range)
@@ -5586,7 +5617,7 @@ function Tactics({ room, gs, seat, commit }) {
     if (!a || a.id === seenAnim.current) return;
     seenAnim.current = a.id;
     if (room.ev && room.ev.t === "attack" && gs.last && gs.last.dmg != null) {
-      setShot({ id: a.id, dmg: gs.last.dmg, crit: !!gs.last.crit, killed: !!gs.last.killed, atkType: gs.last.atkType, tgtType: gs.last.tgtType, side: room.ev.seat, faceMax: TACT.units[gs.last.atkType]?.max || 8 });
+      setShot({ id: a.id, dmg: gs.last.dmg, crit: !!gs.last.crit, killed: !!gs.last.killed, atkType: gs.last.atkType, tgtType: gs.last.tgtType, side: room.ev.seat, faceMax: TACT.units[gs.last.atkType]?.max || 8, splash: room.ev.splash || 0 });
     }
   }, [room?.anim?.id]);
 
@@ -5654,7 +5685,7 @@ function Tactics({ room, gs, seat, commit }) {
 
   // interaction sets
   const unit = sel ? gs.units[sel] : null;
-  const active = unit && myTurn && gs.phase === "battle";
+  const active = unit && canPlay;
   const reach = active ? tacticsReach(gs, unit) : {};
   const stagePos = unit ? (dest ? unhkey(dest) : { q: unit.q, r: unit.r }) : null;
   const stageKey = unit ? hkey(stagePos.q, stagePos.r) : null;
@@ -5712,8 +5743,8 @@ function Tactics({ room, gs, seat, commit }) {
       }
       return;
     }
-    if (!myTurn) return;
-    if (gs.phase === "battle" && unit) {
+    if (!canPlay) return;
+    if (unit) {
       const uk = hkey(unit.q, unit.r);
       if (k === uk) setDest(null);
       else if (reach[k] !== undefined) setDest(k);
@@ -5724,7 +5755,7 @@ function Tactics({ room, gs, seat, commit }) {
     if (gs.phase !== "battle") return;
     const u = gs.units[id];
     if (u.owner === seat) {
-      if (myTurn && (gs.spent[id] || 0) < TACT.ACTS) {
+      if (canPlay && (gs.spent[id] || 0) < TACT.ACTS) {
         setSel(id);
         setDest(null);
         setInspect(null);
@@ -5732,7 +5763,7 @@ function Tactics({ room, gs, seat, commit }) {
       return;
     }
     // enemy unit: attack it if it's a valid target, otherwise preview its reach
-    if (myTurn && sel && targetIds.includes(id)) {
+    if (canPlay && sel && targetIds.includes(id)) {
       commit(tacticsActivate(gs, seat, sel, dest, { kind: "attack", targetId: id }));
       setSel(null);
       setDest(null);
@@ -5838,15 +5869,13 @@ function Tactics({ room, gs, seat, commit }) {
         ? `Pronto — aspetto ${who(room, other(seat))}`
         : "Compagnia pronta — conferma lo schieramento"
       : `${who(room, other(seat))} sta schierando…`
-    : myTurn
-    ? sel
-      ? healing
-        ? "In cura qui — niente attacco questo turno"
-        : dest
-        ? "Tocca un nemico in rosso, o Fermati qui"
-        : "Muovi, o colpisci un nemico in rosso"
-      : "Tocca una tua pedina"
-    : `Turno di ${who(room, gs.turn)}`;
+    : sel
+    ? healing
+      ? "In cura qui — niente attacco"
+      : dest
+      ? "Tocca un nemico in rosso, o Fermati qui"
+      : "Muovi, o colpisci un nemico in rosso"
+    : "Gioca quando vuoi — niente turni, muovi le tue pedine";
   const insU = insUnit ? TACT.units[insUnit.type] : null;
   const status =
     insUnit && !sel
@@ -5886,12 +5915,12 @@ function Tactics({ room, gs, seat, commit }) {
       {shot && <RollReveal shot={shot} onDone={() => setShot(null)} />}
       {help && <TacticsHowTo onClose={() => setHelp(false)} />}
 
-      {/* top bar: turn/round + view controls + how-to */}
+      {/* top bar: phase / move count + view controls + how-to */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ width: 12, height: 12, borderRadius: 3, background: TSIDE[gs.turn], display: "inline-block", opacity: gs.done ? 0.3 : 1 }} />
+          <span style={{ width: 12, height: 12, borderRadius: 3, background: gs.phase === "battle" ? T.ink : TSIDE[gs.turn], display: "inline-block", opacity: gs.done ? 0.3 : 1 }} />
           <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 13 }}>
-            {gs.phase === "battle" ? `Round ${gs.round}` : gs.phase === "deploy" ? "Schieramento" : "Compagnia"}
+            {gs.phase === "battle" ? `Mossa ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} di ${TACT.MOVE_CAP}` : gs.phase === "deploy" ? "Schieramento" : "Compagnia"}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
@@ -5976,7 +6005,7 @@ function Tactics({ room, gs, seat, commit }) {
                     strokeWidth={isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat || (sp && sp.kind === "banner") ? 1.5 : 1}
                     className={isTarget || isDeploy ? "hexpulse" : ""}
                     onClick={() => tapHex(k)}
-                    style={{ cursor: isDeploy || (myTurn && (isReach || isTarget || isDest || isSelHex)) ? "pointer" : "default" }}
+                    style={{ cursor: isDeploy || (canPlay && (isReach || isTarget || isDest || isSelHex)) ? "pointer" : "default" }}
                   />
                   {sp && (
                     <g transform={`translate(${p.x - 7} ${p.y - 7})`} style={{ pointerEvents: "none" }}>
@@ -6007,7 +6036,7 @@ function Tactics({ room, gs, seat, commit }) {
               <div
                 key={id}
                 onClick={() => tapUnit(id)}
-                style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", cursor: myTurn ? "pointer" : "default", transition: "left 200ms ease, top 200ms ease" }}
+                style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", cursor: canPlay ? "pointer" : "default", transition: "left 200ms ease, top 200ms ease" }}
               >
                 <div
                   className={isSel ? "floaty" : ""}
@@ -6105,7 +6134,7 @@ function Tactics({ room, gs, seat, commit }) {
         </div>
       )}
 
-      {gs.phase === "battle" && myTurn && sel && (
+      {gs.phase === "battle" && canPlay && sel && (
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
           {dest ? (
             <Button kind="outline" full onClick={() => setDest(null)}>
