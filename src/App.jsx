@@ -1176,12 +1176,14 @@ function s40Discard(gs, seat, cardId) {
    cap ends stalls on total HP. Obstacles block movement and line of sight;
    there is no elevation. */
 const TACT = {
-  W: 7,
-  H: 8,
-  BLOCK: 0.15, // share of non-reserved hexes turned to rubble
+  R: 6, // map radius — a hexagon this many rings across, then eroded to an irregular coast
+  ERODE: 0.34, // chance a border hex is chipped away each pass (2 passes) → random shape
+  BLOCK: 0.2, // share of the open interior turned to rubble — cover + broken lines of sight
   DEPLOY_R: 2, // deploy within this many hexes of your castle
-  ROUND_CAP: 30,
+  ROUND_CAP: 40,
   units: {
+    // A big board with lots of rubble is the balance: a Fante needs several
+    // turns to cross it, and an Arciere kites and picks it off on the way in.
     fante: { name: "Fante", max: 8, move: 3, min: 1, rng: 1 }, // d8 melee
     arciere: { name: "Arciere", max: 6, move: 3, min: 2, rng: 4 }, // d6, can't hit adjacent
   },
@@ -1201,15 +1203,6 @@ const unhkey = (k) => {
 };
 const hdist = (a, b) => (Math.abs(a.q - b.q) + Math.abs(a.r - b.r) + Math.abs(a.q + a.r - b.q - b.r)) / 2;
 
-// Rectangular pointy-top map in axial coordinates (Red Blob's rectangle layout).
-function tacticsCells(W, H) {
-  const cells = [];
-  for (let r = 0; r < H; r++) {
-    const off = Math.floor(r / 2);
-    for (let q = -off; q < W - off; q++) cells.push({ q, r });
-  }
-  return cells;
-}
 // Flood-fill: are all open hexes one connected region? (No unit ever walled off.)
 function tacticsConnected(openSet) {
   const keys = [...openSet];
@@ -1228,16 +1221,73 @@ function tacticsConnected(openSet) {
   }
   return seen.size === openSet.size;
 }
-function tacticsBoard() {
-  const W = TACT.W,
-    H = TACT.H;
-  const cells = tacticsCells(W, H);
-  const row = (r) => cells.filter((c) => c.r === r);
-  const mid = (arr) => arr[Math.floor(arr.length / 2)];
-  const cA = mid(row(H - 1)),
-    cB = mid(row(0)); // castles at opposite ends
-  const fA = mid(row(H - 3)),
-    fB = mid(row(2)); // fountains a little forward of each castle
+// The largest connected clump of a hex set — used to drop islands after erosion.
+function tacticsLargest(set) {
+  const seen = new Set();
+  let best = new Set();
+  for (const start of set) {
+    if (seen.has(start)) continue;
+    const comp = new Set([start]);
+    const stack = [start];
+    seen.add(start);
+    while (stack.length) {
+      const { q, r } = unhkey(stack.pop());
+      for (const [dq, dr] of HEX_DIRS) {
+        const nk = hkey(q + dq, r + dr);
+        if (set.has(nk) && !seen.has(nk)) {
+          seen.add(nk);
+          comp.add(nk);
+          stack.push(nk);
+        }
+      }
+    }
+    if (comp.size > best.size) best = comp;
+  }
+  return best;
+}
+// One attempt at an irregular island. Returns null if the shape can't seat both
+// squads or can't stay connected once rubble is added, so the caller can retry.
+function tacticsBoardTry(R, erode) {
+  let set = new Set();
+  for (let q = -R; q <= R; q++) for (let r = Math.max(-R, -q - R); r <= Math.min(R, -q + R); r++) set.add(hkey(q, r));
+  if (erode) {
+    const onCoast = (k) => {
+      const { q, r } = unhkey(k);
+      return HEX_DIRS.some(([dq, dr]) => !set.has(hkey(q + dq, r + dr)));
+    };
+    for (let pass = 0; pass < 2; pass++) for (const k of [...set]) if (onCoast(k) && Math.random() < TACT.ERODE) set.delete(k);
+    set = tacticsLargest(set);
+  }
+  const cells = [...set].map(unhkey);
+  const rMin = Math.min(...cells.map((c) => c.r)),
+    rMax = Math.max(...cells.map((c) => c.r));
+  const midOf = (rr) => {
+    const row = cells.filter((c) => c.r === rr).sort((a, b) => a.q - b.q);
+    return row[Math.floor(row.length / 2)];
+  };
+  const cB = midOf(rMin),
+    cA = midOf(rMax); // castles at the far vertical ends
+  // enough room to deploy 4 next to each castle, or this shape is no good
+  const deployRoom = (c) => cells.filter((x) => hdist(x, c) <= TACT.DEPLOY_R).length;
+  if (deployRoom(cA) < 4 || deployRoom(cB) < 4) return null;
+  const inward = (from, steps) => {
+    let cur = from;
+    for (let i = 0; i < steps; i++) {
+      let best = cur,
+        bd = hdist(cur, { q: 0, r: 0 });
+      for (const [dq, dr] of HEX_DIRS) {
+        const n = { q: cur.q + dq, r: cur.r + dr };
+        if (set.has(hkey(n.q, n.r)) && hdist(n, { q: 0, r: 0 }) < bd) {
+          best = n;
+          bd = hdist(n, { q: 0, r: 0 });
+        }
+      }
+      cur = best;
+    }
+    return cur;
+  };
+  const fA = inward(cA, 3),
+    fB = inward(cB, 3);
   const castle = { A: hkey(cA.q, cA.r), B: hkey(cB.q, cB.r) };
   const fount = { A: hkey(fA.q, fA.r), B: hkey(fB.q, fB.r) };
   const reserved = new Set([castle.A, castle.B, fount.A, fount.B]);
@@ -1250,9 +1300,19 @@ function tacticsBoard() {
       if (Math.random() < TACT.BLOCK) blocked[k] = true;
     }
     const openSet = new Set(cells.map((c) => hkey(c.q, c.r)).filter((k) => !blocked[k]));
-    if (tacticsConnected(openSet)) return { w: W, h: H, cells, blocked, castle, fount };
+    if (tacticsConnected(openSet) && openSet.has(castle.A) && openSet.has(castle.B)) return { cells, blocked, castle, fount };
   }
-  return { w: W, h: H, cells, blocked: {}, castle, fount };
+  return null;
+}
+// A big, irregular island: chew a hexagon's edges into a jagged coast, keep the
+// largest piece, scatter rubble. Retries until it's playable; a plain hexagon
+// (no erosion) is the always-works fallback.
+function tacticsBoard() {
+  for (let tries = 0; tries < 40; tries++) {
+    const b = tacticsBoardTry(TACT.R, true);
+    if (b) return b;
+  }
+  return tacticsBoardTry(TACT.R, false) || tacticsBoardTry(TACT.R - 1, false);
 }
 
 function dealTactics(dealer, opts, tally) {
@@ -5048,7 +5108,7 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
 /* ── condottieri (tactics) ── */
 const TSIDE = { A: "#2C557E", B: "#A5342F" }; // blue vs red
 const uIco = (type, s = 14, c) => <Ico n={type === "fante" ? "sword" : "bow"} s={s} c={c} />;
-const THEXR = 27; // hex size (centre → corner), tuned to fit a phone
+const THEXR = 23; // hex size (centre → corner) — small enough to pan a big map
 const tpx = (q, r) => ({ x: THEXR * Math.sqrt(3) * (q + r / 2), y: THEXR * 1.5 * r });
 const tCorners = (cx, cy) =>
   Array.from({ length: 6 }, (_, i) => {
@@ -5164,8 +5224,6 @@ function Tactics({ room, gs, seat, commit }) {
   const myTurn = gs.turn === seat && !gs.done;
   const [sel, setSel] = useState(null); // selected own unit id (battle)
   const [dest, setDest] = useState(null); // staged move hex key
-  const [rot, setRot] = useState(seat === "B" ? 180 : 0);
-  const [tilt, setTilt] = useState(46);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [help, setHelp] = useState(false);
@@ -5173,6 +5231,8 @@ function Tactics({ room, gs, seat, commit }) {
   const drag = useRef(null);
   const moved = useRef(false);
   const seenAnim = useRef(null);
+  const stageRef = useRef(null);
+  const centeredRef = useRef("");
 
   // fire the roll reveal from the shared animation id
   useEffect(() => {
@@ -5190,13 +5250,7 @@ function Tactics({ room, gs, seat, commit }) {
     setDest(null);
   }, [gs.turn, gs.phase]);
 
-  // face the board toward whichever side you're playing — including after a
-  // solo seat-flip, so testing both sides on one phone always reads right-way-up
-  useEffect(() => {
-    setRot(seat === "B" ? 180 : 0);
-  }, [seat]);
-
-  // layout
+  // layout — bounds computed from the irregular cell set
   const centers = board.cells.map((c) => ({ c, ...tpx(c.q, c.r) }));
   const xs = centers.map((p) => p.x),
     ys = centers.map((p) => p.y);
@@ -5209,6 +5263,19 @@ function Tactics({ room, gs, seat, commit }) {
     const p = tpx(q, r);
     return { x: p.x - minX + PAD, y: p.y - minY + PAD };
   };
+
+  // Centre the view on your own castle when a new board is dealt or you flip
+  // seats — you start looking at your base, then pan across the big map.
+  const sig = `${board.castle.A}|${board.castle.B}|${board.cells.length}|${seat}`;
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || centeredRef.current === sig) return;
+    centeredRef.current = sig;
+    const cc = unhkey(board.castle[seat]);
+    const c = at(cc.q, cc.r);
+    setZoom(1);
+    setPan({ x: el.clientWidth / 2 - c.x, y: el.clientHeight / 2 - c.y });
+  }, [sig]);
 
   // interaction sets
   const unit = sel ? gs.units[sel] : null;
@@ -5273,11 +5340,25 @@ function Tactics({ room, gs, seat, commit }) {
     drag.current = null;
     setTimeout(() => (moved.current = false), 0);
   };
+  // zoom about the centre of the screen so the view doesn't lurch
+  const zoomBy = (f) => {
+    const el = stageRef.current;
+    const nz = Math.max(0.55, Math.min(1.7, zoom * f));
+    if (!el) return setZoom(nz);
+    const cx = el.clientWidth / 2,
+      cy = el.clientHeight / 2;
+    const bx = (cx - pan.x) / zoom,
+      by = (cy - pan.y) / zoom;
+    setPan({ x: cx - nz * bx, y: cy - nz * by });
+    setZoom(nz);
+  };
   const resetView = () => {
-    setRot(seat === "B" ? 180 : 0);
-    setTilt(46);
+    const el = stageRef.current;
     setZoom(1);
-    setPan({ x: 0, y: 0 });
+    if (!el) return setPan({ x: 0, y: 0 });
+    const cc = unhkey(board.castle[seat]);
+    const c = at(cc.q, cc.r);
+    setPan({ x: el.clientWidth / 2 - c.x, y: el.clientHeight / 2 - c.y });
   };
 
   const status = gs.done
@@ -5340,17 +5421,17 @@ function Tactics({ room, gs, seat, commit }) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
-          <button style={vbtn} onClick={() => setRot((r) => r - 60)} title="ruota"><Ico n="rotateL" s={16} /></button>
-          <button style={vbtn} onClick={() => setRot((r) => r + 60)} title="ruota"><Ico n="rotateR" s={16} /></button>
-          <button style={vbtn} onClick={() => setZoom((z) => Math.min(1.8, z + 0.15))} title="zoom"><Ico n="plus" s={16} /></button>
-          <button style={vbtn} onClick={() => setZoom((z) => Math.max(0.6, z - 0.15))} title="zoom"><Ico n="minus" s={16} /></button>
-          <button style={vbtn} onClick={resetView} title="reset vista"><Ico n="recenter" s={16} /></button>
+          <button style={vbtn} onClick={() => zoomBy(1.2)} title="zoom"><Ico n="plus" s={16} /></button>
+          <button style={vbtn} onClick={() => zoomBy(1 / 1.2)} title="zoom"><Ico n="minus" s={16} /></button>
+          <button style={vbtn} onClick={resetView} title="centra sul castello"><Ico n="recenter" s={16} /></button>
           <button style={vbtn} onClick={() => setHelp(true)} title="come si gioca"><Ico n="help" s={16} /></button>
         </div>
       </div>
 
-      {/* the 2.5D board */}
+      {/* the board — flat, full-bleed, no frame; pan by dragging, pinch-free zoom
+          with the buttons. It breaks out of the centred column to fill the width. */}
       <div
+        ref={stageRef}
         onTouchStart={onDown}
         onTouchMove={onMove}
         onTouchEnd={onUp}
@@ -5360,105 +5441,92 @@ function Tactics({ room, gs, seat, commit }) {
         onMouseLeave={onUp}
         style={{
           flex: 1,
-          minHeight: 300,
+          minHeight: 320,
+          width: "100vw",
+          marginLeft: "calc(-50vw + 50%)",
           position: "relative",
           overflow: "hidden",
-          perspective: 900,
           touchAction: "none",
           userSelect: "none",
           WebkitUserSelect: "none",
-          borderRadius: 14,
-          background: "linear-gradient(180deg, rgba(18,18,18,0.03), rgba(18,18,18,0.06))",
         }}
       >
-        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-          <div style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
-            <div style={{ transformStyle: "preserve-3d", transform: `rotateX(${tilt}deg) rotateZ(${rot}deg)`, width: BW, height: BH, position: "relative" }}>
-              <svg width={BW} height={BH} viewBox={`0 0 ${BW} ${BH}`} style={{ position: "absolute", inset: 0, overflow: "visible" }}>
-                {centers.map(({ c }) => {
-                  const k = hkey(c.q, c.r);
-                  const p = at(c.q, c.r);
-                  const blocked = board.blocked[k];
-                  const sp = specialMark(k);
-                  const isReach = reach[k] !== undefined;
-                  const isTarget = targetSet.has(k);
-                  const isDeploy = deploySet.has(k);
-                  const isSelHex = unit && k === hkey(unit.q, unit.r);
-                  const isDest = dest === k;
-                  let fill = blocked ? "rgba(18,18,18,0.30)" : "rgba(255,255,255,0.82)";
-                  if (sp && sp.kind === "fount") fill = "rgba(44,120,160,0.20)";
-                  if (isReach || isDest) fill = "rgba(46,120,90,0.28)";
-                  if (isDeploy) fill = "rgba(184,134,43,0.22)";
-                  if (isTarget) fill = "rgba(165,52,47,0.30)";
-                  return (
-                    <g key={k}>
-                      <polygon
-                        points={tCorners(p.x, p.y)}
-                        fill={fill}
-                        stroke={isSelHex ? T.ink : sp && sp.kind === "castle" ? TSIDE[sp.side] : T.line}
-                        strokeWidth={isSelHex || (sp && sp.kind === "castle") ? 2.4 : 1}
-                        className={isTarget || isDeploy ? "hexpulse" : ""}
-                        onClick={() => tapHex(k)}
-                        style={{ cursor: myTurn && (isReach || isDeploy || isTarget || isDest || isSelHex) ? "pointer" : "default" }}
-                      />
-                      {sp && (
-                        <g transform={`translate(${p.x - 8} ${p.y - 8})`} style={{ pointerEvents: "none" }}>
-                          <Ico n={sp.kind === "castle" ? "castle" : "drop"} s={16} c={sp.kind === "castle" ? TSIDE[sp.side] : "#2C7AA0"} sw={1.8} />
-                        </g>
-                      )}
+        <div style={{ position: "absolute", left: 0, top: 0, transformOrigin: "0 0", transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, width: BW, height: BH }}>
+          <svg width={BW} height={BH} viewBox={`0 0 ${BW} ${BH}`} style={{ position: "absolute", inset: 0, overflow: "visible" }}>
+            {centers.map(({ c }) => {
+              const k = hkey(c.q, c.r);
+              const p = at(c.q, c.r);
+              const blocked = board.blocked[k];
+              const sp = specialMark(k);
+              const isReach = reach[k] !== undefined;
+              const isTarget = targetSet.has(k);
+              const isDeploy = deploySet.has(k);
+              const isSelHex = unit && k === hkey(unit.q, unit.r);
+              const isDest = dest === k;
+              let fill = blocked ? "rgba(18,18,18,0.28)" : "rgba(255,255,255,0.9)";
+              if (sp && sp.kind === "fount") fill = "rgba(44,120,160,0.22)";
+              if (isReach || isDest) fill = "rgba(46,120,90,0.30)";
+              if (isDeploy) fill = "rgba(184,134,43,0.24)";
+              if (isTarget) fill = "rgba(165,52,47,0.32)";
+              return (
+                <g key={k}>
+                  <polygon
+                    points={tCorners(p.x, p.y)}
+                    fill={fill}
+                    stroke={isSelHex ? T.ink : sp && sp.kind === "castle" ? TSIDE[sp.side] : T.line}
+                    strokeWidth={isSelHex || (sp && sp.kind === "castle") ? 2.2 : 1}
+                    className={isTarget || isDeploy ? "hexpulse" : ""}
+                    onClick={() => tapHex(k)}
+                    style={{ cursor: myTurn && (isReach || isDeploy || isTarget || isDest || isSelHex) ? "pointer" : "default" }}
+                  />
+                  {sp && (
+                    <g transform={`translate(${p.x - 7} ${p.y - 7})`} style={{ pointerEvents: "none" }}>
+                      <Ico n={sp.kind === "castle" ? "castle" : "drop"} s={14} c={sp.kind === "castle" ? TSIDE[sp.side] : "#2C7AA0"} sw={1.9} />
                     </g>
-                  );
-                })}
-              </svg>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
 
-              {/* unit dice, billboarded to face the camera */}
-              {gs.order.map((id) => {
-                const u = gs.units[id];
-                const showAt = sel === id && dest ? unhkey(dest) : { q: u.q, r: u.r };
-                const p = at(showAt.q, showAt.r);
-                const mineU = u.owner === seat;
-                const spent = gs.spent[id] && gs.phase === "battle";
-                const isSel = sel === id;
-                const isTgt = targetSet.has(hkey(u.q, u.r)) && !(sel === id);
-                const col = TSIDE[u.owner];
-                return (
-                  <div
-                    key={id}
-                    onClick={() => tapUnit(id)}
-                    style={{
-                      position: "absolute",
-                      left: p.x,
-                      top: p.y,
-                      transform: `translate(-50%,-50%) rotateZ(${-rot}deg) rotateX(${-tilt}deg) translateZ(16px)`,
-                      cursor: myTurn ? "pointer" : "default",
-                      transition: "left 200ms ease, top 200ms ease",
-                    }}
-                  >
-                    <div
-                      className={isSel ? "floaty" : ""}
-                      style={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: 10,
-                        background: "#fff",
-                        border: `3px solid ${col}`,
-                        outline: isSel ? `2px solid ${T.ink}` : isTgt ? `2px solid #A5342F` : "none",
-                        outlineOffset: 1,
-                        boxShadow: `0 6px 10px rgba(18,18,18,0.32)`,
-                        display: "grid",
-                        placeItems: "center",
-                        position: "relative",
-                        opacity: spent ? 0.5 : 1,
-                      }}
-                    >
-                      <span style={{ position: "absolute", top: 1, left: 3 }}>{uIco(u.type, 11, col)}</span>
-                      <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 21, color: col, lineHeight: 1 }}>{u.hp}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          {/* unit dice, flat on the board */}
+          {gs.order.map((id) => {
+            const u = gs.units[id];
+            const showAt = sel === id && dest ? unhkey(dest) : { q: u.q, r: u.r };
+            const p = at(showAt.q, showAt.r);
+            const spent = gs.spent[id] && gs.phase === "battle";
+            const isSel = sel === id;
+            const isTgt = targetSet.has(hkey(u.q, u.r)) && !(sel === id);
+            const col = TSIDE[u.owner];
+            return (
+              <div
+                key={id}
+                onClick={() => tapUnit(id)}
+                style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", cursor: myTurn ? "pointer" : "default", transition: "left 200ms ease, top 200ms ease" }}
+              >
+                <div
+                  className={isSel ? "floaty" : ""}
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 8,
+                    background: "#fff",
+                    border: `2.5px solid ${col}`,
+                    outline: isSel ? `2px solid ${T.ink}` : isTgt ? `2px solid #A5342F` : "none",
+                    outlineOffset: 1,
+                    boxShadow: `0 2px 5px rgba(18,18,18,0.28)`,
+                    display: "grid",
+                    placeItems: "center",
+                    position: "relative",
+                    opacity: spent ? 0.5 : 1,
+                  }}
+                >
+                  <span style={{ position: "absolute", top: 0, left: 2 }}>{uIco(u.type, 9, col)}</span>
+                  <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18, color: col, lineHeight: 1 }}>{u.hp}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 

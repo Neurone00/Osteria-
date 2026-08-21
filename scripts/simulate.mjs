@@ -37,7 +37,7 @@ const EXPORTS = [
   "dealCamicia", "camiciaFlip", "demand",
   "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed", "peppaShuffle", "peppaReady", "peppaReorder", "peppaOffer",
   "TACT", "dealTactics", "tacticsRoster", "tacticsDeploy", "tacticsActivate", "tacticsReach", "tacticsTargets",
-  "tacticsRoll", "tacticsDeployable", "tacticsBoard", "tacticsCells", "hdist", "hkey", "unhkey",
+  "tacticsRoll", "tacticsDeployable", "tacticsBoard", "hdist", "hkey", "unhkey",
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
