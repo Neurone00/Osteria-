@@ -1771,6 +1771,17 @@ function loadPeerJs() {
     document.head.appendChild(s);
   });
 }
+// ICE servers for the peer-to-peer fallback. STUN lets two phones find each
+// other; the TURN relays carry the data when they can't reach each other
+// directly — the usual case on a shared hotspot that isolates its clients or
+// puts both behind one NAT. Only used on the PeerJS path (never in the artifact,
+// which has no network). Both phones need internet, which the hotspot provides.
+const ICE_SERVERS = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
+  { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+  { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+];
 
 /* ═══════════════════════════ qr ═══════════════════════════
    Self-contained QR encoder (byte mode, ECC M, versions 1–6) for the join link.
@@ -3498,7 +3509,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     async (code, host, nm) => {
       const Peer = await loadPeerJs();
       const id = "osteria-tavolo-" + code;
-      const peer = new Peer(host ? id : undefined, { debug: 0 });
+      const peer = new Peer(host ? id : undefined, { debug: 0, config: { iceServers: ICE_SERVERS } });
       let idRetries = 0;
       let conn = null;
       let queued = null;
