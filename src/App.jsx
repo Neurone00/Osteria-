@@ -3229,14 +3229,17 @@ function CaptureReveal({ room, seat }) {
 
 // The scopas a player has swept this hand — always shown (independent of the
 // show-points toggle), since a scopa is a public event you want to keep count of.
-function ScopeTag({ n }) {
+function ScopeTag({ n, cards }) {
+  const french = useContext(SuitCtx);
   if (!n) return null;
+  // the card that made each sweep — stored last in every scopeCards entry
+  const takers = (cards || []).map((set) => (set && set.length ? set[set.length - 1] : null)).filter(Boolean);
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
-        gap: 4,
+        gap: 5,
         background: "rgba(165,52,47,0.12)",
         color: "#A5342F",
         border: "1px solid rgba(165,52,47,0.34)",
@@ -3250,6 +3253,12 @@ function ScopeTag({ n }) {
       }}
     >
       {n} scopa
+      {takers.map((c, i) => (
+        <span key={i} title="la carta che ha fatto scopa" style={{ display: "inline-flex", alignItems: "center", gap: 0, fontWeight: 700, fontSize: 12, borderLeft: i === 0 ? "1px solid rgba(165,52,47,0.34)" : "none", paddingLeft: i === 0 ? 5 : 0 }}>
+          {faceLbl(c.v, french)}
+          <Pip suit={c.s} size={13} />
+        </span>
+      ))}
     </span>
   );
 }
@@ -5401,7 +5410,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</span>
-            {isScopa && <ScopeTag n={gs.scope[opp]} />}
+            {isScopa && <ScopeTag n={gs.scope[opp]} cards={gs.scopeCards && gs.scopeCards[opp]} />}
           </div>
           {showScores && (
             <Micro style={{ marginTop: 2 }}>
@@ -5528,7 +5537,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
             <span style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>
               {who(room, seat)} <span style={{ color: T.ink30, fontWeight: 400 }}>tu</span>
             </span>
-            {isScopa && <ScopeTag n={gs.scope[seat]} />}
+            {isScopa && <ScopeTag n={gs.scope[seat]} cards={gs.scopeCards && gs.scopeCards[seat]} />}
           </div>
           {showScores && (
             <Micro>
