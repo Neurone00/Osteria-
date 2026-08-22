@@ -751,10 +751,18 @@ function dealBriscola(dealer, tally, pre) {
     dealer,
     tally: tally || { A: 0, B: 0 },
     summary: null,
+    reveal: { A: false, B: false }, // both must eye the trump before play begins
     done: false,
     matchDone: false,
     win: null,
   };
+}
+// each player taps the big trump to confirm they've seen it; play starts when both have
+function briscolaReveal(gs, seat) {
+  if (!gs.reveal || gs.reveal[seat]) return null;
+  const g = clone(gs);
+  g.reveal = { ...g.reveal, [seat]: true };
+  return { g, quiet: true, ev: { t: "reveal" } };
 }
 
 function brisWinner(lead, resp, trump) {
@@ -3380,8 +3388,10 @@ input{font-family:inherit}
 .deckcard{position:relative;transform-style:preserve-3d;transition:transform 560ms cubic-bezier(.2,.8,.2,1)}
 .deckcard.flip{transform:rotateY(180deg)}
 .deckface{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;overflow:hidden}
+@keyframes bristuck{from{transform:translate(-50%,-50%) scale(1) rotate(0);opacity:1}to{transform:translate(-190%,-28%) scale(.34) rotate(90deg);opacity:0}}
+.bristuck{animation:bristuck 640ms cubic-bezier(.4,0,.2,1) forwards}
 .deckback{transform:rotateY(180deg)}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL,.tumble,.settle,.critshake,.hexpulse{animation:none!important}.deckcard{transition:none}}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL,.tumble,.settle,.critshake,.hexpulse,.bristuck{animation:none!important}.deckcard{transition:none}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -6678,6 +6688,24 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
   const play = (card) => {
     if (mine) commit(briscolaPlay(gs, seat, card.id));
   };
+  // the trump reveal: both players eye the big briscola and tap; then it tucks
+  // under the deck and play begins.
+  const revealDone = !gs.reveal || (gs.reveal.A && gs.reveal.B);
+  const iRevealed = gs.reveal && gs.reveal[seat];
+  const [tucking, setTucking] = useState(false);
+  const wasDone = useRef(revealDone);
+  useEffect(() => {
+    if (!wasDone.current && revealDone) {
+      setTucking(true);
+      const t = setTimeout(() => setTucking(false), 640);
+      wasDone.current = revealDone;
+      return () => clearTimeout(t);
+    }
+    wasDone.current = revealDone;
+  }, [revealDone]);
+  const confirmReveal = () => {
+    if (!iRevealed) commit(briscolaReveal(gs, seat));
+  };
   const a = room.anim;
   const played = a && a.card ? { id: a.card, s: a.card[0], v: +a.card.slice(1) } : null;
   const nameRow = (s, you) => (
@@ -6692,6 +6720,24 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
+      {!revealDone && (
+        <div onClick={confirmReveal} style={{ position: "fixed", inset: 0, zIndex: 80, background: SCRIM, display: "grid", placeItems: "center", padding: 24, cursor: iRevealed ? "default" : "pointer" }}>
+          <div style={{ textAlign: "center" }}>
+            <Micro style={{ color: "rgba(255,255,255,0.7)" }}>{L("La briscola", "The trump")}</Micro>
+            <div className="pop" style={{ marginTop: 14, display: "inline-block" }}>
+              <Card card={gs.briscola} size="xl" rot={-2} />
+            </div>
+            <div style={{ marginTop: 18, fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: "#fff" }}>
+              {iRevealed ? `${L("Aspetta", "Waiting for")} ${who(room, opp)}…` : L("Tocca per confermare", "Tap to confirm")}
+            </div>
+          </div>
+        </div>
+      )}
+      {tucking && (
+        <div className="bristuck" style={{ position: "fixed", left: "50%", top: "44%", zIndex: 79, pointerEvents: "none" }}>
+          <Card card={gs.briscola} size="xl" rot={0} />
+        </div>
+      )}
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         {nameRow(opp, false)}
@@ -6720,7 +6766,9 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
               <Pip suit={gs.trump} size={22} />
             </div>
           )}
-          <Micro>{gs.deck.length > 0 ? `${gs.deck.length} nel mazzo` : "mazzo finito"}</Micro>
+          {gs.deck.length > 0 && (
+            <div style={{ width: 40, textAlign: "center", fontFamily: MONO, fontSize: 13, fontWeight: 700, color: T.ink60 }}>{gs.deck.length}</div>
+          )}
         </div>
 
         {/* the trick */}
