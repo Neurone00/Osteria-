@@ -32,7 +32,7 @@ const SUIT = {
 const RANKS = { 1: "A", 8: "F", 9: "C", 10: "R" };
 const lbl = (v) => RANKS[v] || String(v);
 const other = (s) => (s === "A" ? "B" : "A");
-const who = (room, s) => room.names[s] || (s === "A" ? "Oste" : "Ospite");
+const who = (room, s) => room.names[s] || (s === "A" ? L("Oste", "Host") : L("Ospite", "Guest"));
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 function makeDeck() {
@@ -2199,9 +2199,12 @@ const SuitCtx = createContext(false);
 const FR_SUIT = { D: { g: "♦", c: "#B23A2E" }, C: { g: "♥", c: "#B23A2E" }, S: { g: "♠", c: "#15181C" }, B: { g: "♣", c: "#15181C" } };
 const FR_RANK = { 1: "A", 8: "J", 9: "Q", 10: "K" };
 const FR_SUIT_NAME = { D: "quadri", C: "cuori", S: "picche", B: "fiori" };
+const EN_SUIT_NAME = { D: "diamonds", C: "hearts", S: "spades", B: "clubs" };
+// Napoletane suits keep their Italian names (proper terms of the deck); English
+// only kicks in for the French deck's four familiar suits.
 const VS_TEXT = String.fromCharCode(0xfe0e); // force text (not emoji) rendering of ♦♥♠♣
 const faceLbl = (v, french) => (french ? FR_RANK[v] || String(v) : lbl(v));
-const suitName = (s, french) => (french ? FR_SUIT_NAME[s] : SUIT[s].name.toLowerCase());
+const suitName = (s, french) => (french ? (LANG === "en" ? EN_SUIT_NAME[s] : FR_SUIT_NAME[s]) : SUIT[s].name.toLowerCase());
 
 // Render a move event into a sentence using the READER's deck, so the log always
 // matches the card names that reader sees (Napoletane A/F/C/R vs Francesi A/J/Q/K).
@@ -2864,7 +2867,7 @@ function InstallPrompt() {
         const res = await bip.userChoice;
         setBip(null);
         window.__osteriaBIP = null;
-        if (res && res.outcome === "accepted") setNote("Fatto! La trovi nella schermata Home.");
+        if (res && res.outcome === "accepted") setNote(L("Fatto! La trovi nella schermata Home.", "Done! You’ll find it on your Home screen."));
         else setHelp(true);
       } catch {
         setBip(null);
@@ -2882,19 +2885,43 @@ function InstallPrompt() {
 
   const steps =
     inApp && isAndroid ? (
-      <>
-        Stai aprendo il gioco <b>dentro un’altra app</b> (WhatsApp, Instagram…), che non può installare.
-        Tocca <b>⋮</b> in alto e scegli <b>“Apri in Chrome”</b>, poi da lì <b>“Installa app”</b>.
-      </>
+      LANG === "en" ? (
+        <>
+          You’re opening the game <b>inside another app</b> (WhatsApp, Instagram…), which can’t install it.
+          Tap <b>⋮</b> at the top and choose <b>“Open in Chrome”</b>, then <b>“Install app”</b> from there.
+        </>
+      ) : (
+        <>
+          Stai aprendo il gioco <b>dentro un’altra app</b> (WhatsApp, Instagram…), che non può installare.
+          Tocca <b>⋮</b> in alto e scegli <b>“Apri in Chrome”</b>, poi da lì <b>“Installa app”</b>.
+        </>
+      )
     ) : inApp && isIOS ? (
-      <>
-        Stai aprendo il gioco <b>dentro un’altra app</b>. Tocca <b>⋯</b> e scegli <b>“Apri in Safari”</b>,
-        poi <b>Condividi → “Aggiungi a Home”</b>.
-      </>
+      LANG === "en" ? (
+        <>
+          You’re opening the game <b>inside another app</b>. Tap <b>⋯</b> and choose <b>“Open in Safari”</b>,
+          then <b>Share → “Add to Home Screen”</b>.
+        </>
+      ) : (
+        <>
+          Stai aprendo il gioco <b>dentro un’altra app</b>. Tocca <b>⋯</b> e scegli <b>“Apri in Safari”</b>,
+          poi <b>Condividi → “Aggiungi a Home”</b>.
+        </>
+      )
     ) : isIOS ? (
       iosSafari ? (
+        LANG === "en" ? (
+          <>
+            Tap <b>Share</b> <Ico n="share" s={14} style={{ verticalAlign: "-0.2em" }} /> at the bottom, then <b>“Add to Home Screen”</b>.
+          </>
+        ) : (
+          <>
+            Tocca <b>Condividi</b> <Ico n="share" s={14} style={{ verticalAlign: "-0.2em" }} /> in basso, poi <b>“Aggiungi a Home”</b>.
+          </>
+        )
+      ) : LANG === "en" ? (
         <>
-          Tocca <b>Condividi</b> <Ico n="share" s={14} style={{ verticalAlign: "-0.2em" }} /> in basso, poi <b>“Aggiungi a Home”</b>.
+          Open this page in <b>Safari</b>, then <b>Share → “Add to Home Screen”</b>.
         </>
       ) : (
         <>
@@ -2902,8 +2929,18 @@ function InstallPrompt() {
         </>
       )
     ) : samsung ? (
+      LANG === "en" ? (
+        <>
+          Open the browser’s <b>≡</b> menu, then <b>“Add page to” → “Home screen”</b>.
+        </>
+      ) : (
+        <>
+          Apri il menu <b>≡</b> del browser, poi <b>“Aggiungi pagina a” → “Schermata Home”</b>.
+        </>
+      )
+    ) : LANG === "en" ? (
       <>
-        Apri il menu <b>≡</b> del browser, poi <b>“Aggiungi pagina a” → “Schermata Home”</b>.
+        Open the browser’s <b>⋮</b> menu, then <b>“Install app”</b> (or <b>“Add to Home screen”</b>).
       </>
     ) : (
       <>
@@ -5051,7 +5088,7 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
                     {isMid && (
                       <>
                         {back(key)}
-                        <button onClick={() => setFlip(false)} title="gira" style={{ ...plain, position: "absolute", top: 12, right: 12, width: 30, height: 30, borderRadius: 9, border: `1px solid ${T.line}`, background: T.bg, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                        <button onClick={() => setFlip(false)} title={L("gira", "flip")} style={{ ...plain, position: "absolute", top: 12, right: 12, width: 30, height: 30, borderRadius: 9, border: `1px solid ${T.line}`, background: T.bg, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
                           <Ico n="rotateL" s={15} />
                         </button>
                       </>
@@ -5236,7 +5273,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
   };
 
   const tally = isScopa ? gs.scores : { A: gs.piles.A.length, B: gs.piles.B.length };
-  const unit = isScopa ? "punti" : "carte";
+  const unit = isScopa ? L("punti", "points") : L("carte", "cards");
   const a = room.anim;
   // scopa-likes get the fuller CaptureReveal (hold the swept cards, then fly);
   // rubamazzo keeps the quick single-card fly toward the winning pile.
@@ -5549,16 +5586,16 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
   const status = done
     ? gs.win
       ? gs.win === seat
-        ? "L’altro resta con la Peppa — hai vinto!"
-        : "Resti tu con la Peppa…"
-      : "Pareggio"
+        ? L("L’altro resta con la Peppa — hai vinto!", "The other is left with the Peppa — you win!")
+        : L("Resti tu con la Peppa…", "You’re left with the Peppa…")
+      : L("Pareggio", "Draw")
     : arranging
     ? iAmHolder
       ? L("Trascina per sistemare, su per offrire — poi presenta","Drag to arrange, up to offer — then present")
-      : `${who(room, holder)} sta sistemando la sua mano`
+      : `${who(room, holder)} ${L("sta sistemando la sua mano", "is arranging their hand")}`
     : iAmDrawer
     ? L("Pesca una carta coperta","Draw a face-down card")
-    : `${who(room, gs.turn)} sta pescando dalla tua mano`;
+    : `${who(room, gs.turn)} ${L("sta pescando dalla tua mano", "is drawing from your hand")}`;
 
   const topMode = canDraw ? "draw" : "watch";
   const topOffer = opp === holder ? gs.offer : null; // the offer lives on the holder's hand
@@ -5866,7 +5903,7 @@ function TacticsDraft({ draft, setDraft, onConfirm, tone }) {
         })}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10, minHeight: 32 }}>
-        {draft.length === 0 && <Micro>Tocca una classe per aggiungerla</Micro>}
+        {draft.length === 0 && <Micro>{L("Tocca una classe per aggiungerla", "Tap a class to add it")}</Micro>}
         {draft.map((t, i) => (
           <button
             key={i}
@@ -6244,22 +6281,22 @@ function Tactics({ room, gs, seat, commit }) {
     ? gs.win
       ? gs.win === seat
         ? gs.how === "castle"
-          ? "Hai preso il castello — vittoria!"
+          ? L("Hai preso il castello — vittoria!", "You took the castle — victory!")
           : gs.how === "flags"
-          ? "Hai preso tutti gli stendardi — vittoria!"
-          : "Nemico sterminato — vittoria!"
-        : "Sconfitta…"
-      : "Pareggio"
+          ? L("Hai preso tutti gli stendardi — vittoria!", "You hold every banner — victory!")
+          : L("Nemico sterminato — vittoria!", "Enemy wiped out — victory!")
+        : L("Sconfitta…", "Defeat…")
+      : L("Pareggio", "Draw")
     : gs.phase === "setup"
     ? !mySetup
-      ? `Pronto — aspetto ${who(room, other(seat))}`
+      ? `${L("Pronto — aspetto", "Ready — waiting for")} ${who(room, other(seat))}`
       : step === "roster"
       ? L("Recluta la tua compagnia — di nascosto", "Recruit your company — in secret")
       : nextType
       ? `${L("Piazza vicino al tuo castello", "Place near your castle")} — ${TACT.units[nextType]?.name} (${draft.length - layout.length} ${L("da piazzare", "to place")})`
       : submitted
-      ? `Pronto — aspetto ${who(room, other(seat))}`
-      : "Compagnia schierata — conferma"
+      ? `${L("Pronto — aspetto", "Ready — waiting for")} ${who(room, other(seat))}`
+      : L("Compagnia schierata — conferma", "Company deployed — confirm")
     : sel
     ? isMage
       ? blast && blast.a && blast.b
@@ -6333,7 +6370,7 @@ function Tactics({ room, gs, seat, commit }) {
         <div style={{ display: "flex", gap: 6 }}>
           <button style={vbtn} onClick={() => zoomBy(1.2)} title="zoom"><Ico n="plus" s={16} /></button>
           <button style={vbtn} onClick={() => zoomBy(1 / 1.2)} title="zoom"><Ico n="minus" s={16} /></button>
-          <button style={vbtn} onClick={resetView} title="centra sul castello"><Ico n="recenter" s={16} /></button>
+          <button style={vbtn} onClick={resetView} title={L("centra sul castello", "center on your castle")}><Ico n="recenter" s={16} /></button>
           <button style={vbtn} onClick={() => setHelp(true)} title={L("come si gioca", "how to play")}><Ico n="help" s={16} /></button>
         </div>
       </div>
@@ -6598,7 +6635,7 @@ function Tactics({ room, gs, seat, commit }) {
 function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
   const opp = other(seat);
   const shown = gs.center.slice(-5);
-  const attack = room.opts.intl ? "A 4 · R 3 · C 2 · F 1" : "A 1 · 2 due · 3 tre";
+  const attack = room.opts.intl ? "A 4 · R 3 · C 2 · F 1" : L("A 1 · 2 due · 3 tre", "A 1 · 2 two · 3 three");
   const flip = () => {
     if (mine && !gs.done) commit(camiciaFlip(gs, seat, room.opts));
   };
@@ -6661,14 +6698,14 @@ function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
           >
             {gs.done
               ? gs.win
-                ? `${who(room, gs.win)} prende tutto`
-                : "Bloccati in un ciclo — pareggio"
+                ? `${who(room, gs.win)} ${L("prende tutto", "takes it all")}`
+                : L("Bloccati in un ciclo — pareggio", "Stuck in a loop — draw")
               : gs.debt > 0
-              ? `${who(room, gs.turn)} deve ${gs.debt}`
-              : `gira ${who(room, gs.turn)}`}
+              ? `${who(room, gs.turn)} ${L("deve", "owes")} ${gs.debt}`
+              : `${L("gira", "to play")} ${who(room, gs.turn)}`}
           </div>
           <Micro style={{ marginTop: 5 }}>
-            {gs.center.length} in mezzo · {attack}
+            {gs.center.length} {L("in mezzo", "in the middle")} · {attack}
           </Micro>
         </div>
       </div>
@@ -7049,7 +7086,7 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
           the way of the dice and your own card */}
       <button
         onClick={() => setShowOpp((v) => !v)}
-        aria-label={`Scheda di ${who(room, opp)}`}
+        aria-label={`${L("Scheda di", "Sheet for")} ${who(room, opp)}`}
         style={{
           position: "fixed",
           right: "calc(14px + env(safe-area-inset-right))",
@@ -7115,15 +7152,15 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
         <Sheet title={L("Come si contano i punti","How scoring works")} onClose={() => setShowHelp(false)}>
           <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink80 || T.ink }}>
             {[
-              ["Uno–Sei", "somma dei dadi di quel numero"],
-              ["Bonus", "+35 se in alto (Uno–Sei) arrivi a 63"],
-              ["Tris", "con almeno 3 dadi uguali, vale la somma di tutti e cinque i dadi (non solo dei tre uguali)"],
-              ["Poker", "con almeno 4 dadi uguali, vale la somma di tutti e cinque i dadi (non solo dei quattro uguali)"],
-              ["Full", "25 — tre uguali più due uguali"],
-              ["Scala", "30 — quattro in fila"],
-              ["Scalona", "40 — cinque in fila"],
-              ["Cinquina", "50 — cinque uguali"],
-              ["Chance", "somma di tutti i dadi, sempre"],
+              ["Uno–Sei", L("somma dei dadi di quel numero", "sum of the dice showing that number")],
+              ["Bonus", L("+35 se in alto (Uno–Sei) arrivi a 63", "+35 if the upper section (Uno–Sei) reaches 63")],
+              ["Tris", L("con almeno 3 dadi uguali, vale la somma di tutti e cinque i dadi (non solo dei tre uguali)", "with 3 or more matching dice, scores all five dice (not just the three)")],
+              ["Poker", L("con almeno 4 dadi uguali, vale la somma di tutti e cinque i dadi (non solo dei quattro uguali)", "with 4 or more matching dice, scores all five dice (not just the four)")],
+              ["Full", L("25 — tre uguali più due uguali", "25 — three of a kind plus a pair")],
+              ["Scala", L("30 — quattro in fila", "30 — four in a row")],
+              ["Scalona", L("40 — cinque in fila", "40 — five in a row")],
+              ["Cinquina", L("50 — cinque uguali", "50 — five of a kind")],
+              ["Chance", L("somma di tutti i dadi, sempre", "sum of all five dice, always")],
             ].map(([k, v]) => (
               <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0" }}>
                 <span style={{ fontWeight: 700, minWidth: 78, color: T.ink }}>{k}</span>
@@ -7149,7 +7186,7 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
             </div>
           ))}
         </div>
-        <Micro style={{ marginTop: 8, minHeight: 14 }}>{gs.rolled && canRoll ? "tocca i dadi da tenere" : ""}</Micro>
+        <Micro style={{ marginTop: 8, minHeight: 14 }}>{gs.rolled && canRoll ? L("tocca i dadi da tenere", "tap the dice to keep") : ""}</Micro>
         <div style={{ marginTop: 10 }}>
           {mine && !gs.done ? (
             gs.rollsLeft > 0 ? (
@@ -7584,7 +7621,7 @@ function Scala({ room, gs, seat, mine, commit }) {
               <button
                 key={m}
                 onClick={() => setSortMode((cur) => (cur === m ? null : m))}
-                title={on ? "attivo — le carte pescate si ordinano da sole" : "ordina e tieni ordinato"}
+                title={on ? L("attivo — le carte pescate si ordinano da sole", "on — drawn cards sort themselves") : L("ordina e tieni ordinato", "sort and keep sorted")}
                 style={{ ...plain, cursor: "pointer", color: on ? T.bg : T.ink, background: on ? T.ink : "transparent", border: `1px solid ${on ? T.ink : T.line}`, borderRadius: 999, padding: "2px 9px", fontFamily: BRAND, fontWeight: 600, fontSize: 12, WebkitTapHighlightColor: "transparent" }}
               >
                 {m}
