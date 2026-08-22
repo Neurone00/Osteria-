@@ -1546,12 +1546,15 @@ function tacticsTargets(g, unit) {
 const tacticsHeals = (g, seat, k) => k === g.board.castle[seat] || k === g.board.fount[seat];
 
 // Roll 1..HP; rolling the top face (≥2) explodes and rolls again — a crit.
+// `rolls` keeps each face in order so the reveal can throw them one die at a time.
 function tacticsRoll(hp) {
   const face = hp;
   let total = 0,
     crit = false;
+  const rolls = [];
   for (let i = 0; i < 6; i++) {
     const r = 1 + Math.floor(Math.random() * face);
+    rolls.push(r);
     total += r;
     if (r === face && face >= 2) {
       crit = true;
@@ -1559,7 +1562,7 @@ function tacticsRoll(hp) {
     }
     break;
   }
-  return { total, crit };
+  return { total, crit, rolls };
 }
 
 function tacticsWin(g, winner, how) {
@@ -1669,7 +1672,8 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     const d = hdist(unit, target);
     if (d < u.min || d > u.rng || (u.rng > 1 && !tacticsLoS(g, unit, target))) return null;
     const res = tacticsRoll(unit.hp);
-    const dmg = res.total + (g.rules.flagAtk && g.board.banners.includes(uk) ? TACT.FLAG_DMG : 0); // +1 attacking from a flag
+    const bonus = g.rules.flagAtk && g.board.banners.includes(uk) ? TACT.FLAG_DMG : 0; // +1 attacking from a flag
+    const dmg = res.total + bonus;
     const tpos = { q: target.q, r: target.r }; // remember the impact hex before anything dies
     target.hp -= dmg;
     const killed = target.hp <= 0;
@@ -1693,7 +1697,7 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
         }
       }
     }
-    roll = { attacker: unitId, target: action.targetId, atkType: unit.type, tgtType: target.type, dmg, crit: res.crit, killed };
+    roll = { attacker: unitId, target: action.targetId, atkType: unit.type, tgtType: target.type, dmg, crit: res.crit, killed, rolls: res.rolls, bonus, die: unit.hp };
     ev = { t: "attack", unit: unit.type, target: target.type, dmg, crit: res.crit, killed, splash };
     kind = res.crit ? "scopa" : "take"; // a crit gets the big slam + shake
   }
@@ -5481,15 +5485,19 @@ function UnitToken({ type, label, col, stroke, sw = 2.4, dashed, floaty, dim }) 
   const dash = dashed ? "3.5 2.5" : undefined;
   const tri = kind === "tri";
   return (
-    <div className={floaty ? "floaty" : ""} style={{ width: TOKEN, height: TOKEN, position: "relative", opacity: dim ? 0.45 : dashed ? 0.9 : 1 }}>
+    <div className={floaty ? "floaty" : ""} style={{ width: TOKEN, height: TOKEN, position: "relative", overflow: "visible", opacity: dim ? 0.45 : dashed ? 0.9 : 1 }}>
       <svg width={TOKEN} height={TOKEN} viewBox="0 0 34 34" style={{ position: "absolute", inset: 0, overflow: "visible", filter: "drop-shadow(0 2px 3px rgba(18,18,18,0.26))" }}>
         {kind === "coin" && <circle cx="17" cy="17" r="14.5" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeDasharray={dash} />}
         {kind === "sq" && <rect x="2.5" y="2.5" width="29" height="29" rx="7" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeDasharray={dash} />}
         {kind === "tri" && <path d="M17 2.4 32 30.6 2 30.6 Z" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeLinejoin="round" strokeDasharray={dash} />}
         {kind === "oct" && <polygon points="11,2.5 23,2.5 31.5,11 31.5,23 23,31.5 11,31.5 2.5,23 2.5,11" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeLinejoin="round" strokeDasharray={dash} />}
       </svg>
-      <span style={{ position: "absolute", top: tri ? 9 : 2, left: "50%", transform: "translateX(-50%)", pointerEvents: "none", lineHeight: 0 }}>{uIco(type, 9, col)}</span>
-      <span style={{ position: "absolute", left: 0, right: 0, top: tri ? "62%" : "53%", transform: "translateY(-50%)", textAlign: "center", fontFamily: BRAND, fontWeight: 700, fontSize: 17, color: col, lineHeight: 1, pointerEvents: "none" }}>{label}</span>
+      {/* HP — the die's face — big and centred inside the shape */}
+      <span style={{ position: "absolute", left: 0, right: 0, top: tri ? "64%" : "50%", transform: "translateY(-50%)", textAlign: "center", fontFamily: BRAND, fontWeight: 700, fontSize: 18, color: col, lineHeight: 1, pointerEvents: "none" }}>{label}</span>
+      {/* class badge — its own colour bubble pinned to the corner, so the symbol reads at a glance */}
+      <span style={{ position: "absolute", top: -5, right: -5, width: 18, height: 18, borderRadius: "50%", background: col, border: "1.6px solid #fff", boxShadow: "0 1px 3px rgba(18,18,18,0.4)", display: "grid", placeItems: "center", pointerEvents: "none" }}>
+        {uIco(type, 11, "#fff")}
+      </span>
     </div>
   );
 }
@@ -5501,77 +5509,115 @@ const tCorners = (cx, cy) =>
     return `${(cx + THEXR * Math.cos(a)).toFixed(1)},${(cy + THEXR * Math.sin(a)).toFixed(1)}`;
   }).join(" ");
 
-// Full-screen dice-roll reveal: the die tumbles through faces, lands on the
-// damage, and a crit explodes. Fires on both devices from the shared anim id.
+// Full-screen dice-roll reveal. The die tumbles and lands on its face; on a crit
+// (top face) a fresh die is thrown next to it and the total climbs — so an
+// exploding roll is something you watch happen, one die at a time. Fires on both
+// devices from the shared anim id.
 function RollReveal({ shot, onDone }) {
-  const [n, setN] = useState(1);
-  const [phase, setPhase] = useState("roll");
+  const seq = shot && shot.rolls && shot.rolls.length ? shot.rolls : shot ? [Math.max(1, shot.dmg)] : [];
+  const [face, setFace] = useState(1); // number tumbling on the die in flight
+  const [done, setDone] = useState(0); // dice that have settled
+  const [live, setLive] = useState(true); // a die is currently tumbling
   useEffect(() => {
     if (!shot) return;
-    setPhase("roll");
-    const face = Math.max(2, shot.faceMax || 8);
-    const iv = setInterval(() => setN(1 + Math.floor(Math.random() * face)), 55);
-    const t1 = setTimeout(() => {
-      clearInterval(iv);
-      setN(shot.dmg);
-      setPhase("show");
-    }, 560);
-    const t2 = setTimeout(() => onDone && onDone(), shot.crit ? 2000 : 1300);
+    setDone(0);
+    setLive(true);
+    const fmax = Math.max(2, shot.faceMax || 8);
+    const timers = [];
+    let iv = null;
+    const toss = (i) => {
+      setLive(true);
+      iv = setInterval(() => setFace(1 + Math.floor(Math.random() * fmax)), 55);
+      timers.push(
+        setTimeout(() => {
+          clearInterval(iv);
+          setFace(seq[i]);
+          setLive(false);
+          setDone(i + 1);
+          if (i + 1 < seq.length) timers.push(setTimeout(() => toss(i + 1), 600)); // it exploded — throw the next
+          else timers.push(setTimeout(() => onDone && onDone(), shot.crit ? 1700 : 1150));
+        }, i === 0 ? 540 : 470)
+      );
+    };
+    toss(0);
     return () => {
       clearInterval(iv);
-      clearTimeout(t1);
-      clearTimeout(t2);
+      timers.forEach(clearTimeout);
     };
   }, [shot && shot.id]);
   if (!shot) return null;
   const col = TSIDE[shot.side] || T.ink;
-  const rolling = phase === "roll";
+  const crit = shot.crit && seq.length > 1;
+  const complete = done >= seq.length && !live;
+  const shown = Math.min(seq.length, done + (live ? 1 : 0));
+  const runTotal = seq.slice(0, done).reduce((a, b) => a + b, 0) + (complete ? shot.bonus || 0 : 0);
+  // build the dice row as a flat, keyed list (named React import → no Fragment)
+  const row = [];
+  for (let i = 0; i < shown; i++) {
+    const settled = i < done;
+    const val = settled ? seq[i] : face;
+    const isTop = settled && crit && seq[i] === shot.faceMax; // a die that exploded
+    const big = !settled; // the die in flight is the big one
+    if (i > 0) row.push(<span key={`p${i}`} style={{ color: "rgba(255,255,255,0.55)", fontFamily: BRAND, fontWeight: 700, fontSize: 24 }}>+</span>);
+    row.push(
+      <div
+        key={`${shot.id}-d${i}-${settled ? "s" : "l"}`}
+        className={big ? "tumble" : isTop ? "critshake" : "settle"}
+        style={{
+          width: big ? 104 : 72,
+          height: big ? 104 : 72,
+          borderRadius: big ? 18 : 13,
+          background: "#fff",
+          border: `3px solid ${isTop ? "#E9B54B" : col}`,
+          boxShadow: "0 14px 40px rgba(0,0,0,0.5)",
+          display: "grid",
+          placeItems: "center",
+          fontFamily: BRAND,
+          fontWeight: 700,
+          fontSize: big ? 56 : 38,
+          color: isTop ? "#C98A1A" : col,
+          transition: "width 150ms ease, height 150ms ease, font-size 150ms ease",
+        }}
+      >
+        {val}
+      </div>
+    );
+  }
+  if (complete && (shot.bonus || 0) > 0) {
+    row.push(<span key="pb" style={{ color: "rgba(255,255,255,0.55)", fontFamily: BRAND, fontWeight: 700, fontSize: 24 }}>+</span>);
+    row.push(
+      <div key="bonus" className="settle" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, color: "#E9B54B" }}>
+        <Ico n="flag" s={26} c="#E9B54B" />
+        <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 14 }}>+{shot.bonus}</span>
+      </div>
+    );
+  }
   return (
-    <div
-      onClick={onDone}
-      style={{ position: "fixed", inset: 0, zIndex: 84, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}
-    >
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+    <div onClick={onDone} style={{ position: "fixed", inset: 0, zIndex: 84, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
         <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(255,255,255,0.7)" }}>
           {uIco(shot.atkType, 13, "rgba(255,255,255,0.75)")} attacca {uIco(shot.tgtType, 13, "rgba(255,255,255,0.75)")}
         </div>
-        <div
-          key={`${shot.id}-${phase}`}
-          className={rolling ? "tumble" : shot.crit ? "critshake" : "settle"}
-          style={{
-            width: 132,
-            height: 132,
-            borderRadius: 22,
-            background: "#fff",
-            border: `3px solid ${col}`,
-            boxShadow: `0 18px 48px rgba(0,0,0,0.5)`,
-            display: "grid",
-            placeItems: "center",
-            fontFamily: BRAND,
-            fontWeight: 700,
-            fontSize: 72,
-            color: col,
-          }}
-        >
-          {rolling ? n : shot.dmg}
-        </div>
-        {!rolling && (
-          <div className="settle" style={{ textAlign: "center" }}>
-            {shot.crit && (
-              <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: "#E9B54B", letterSpacing: "0.04em", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                CRITICO! <Ico n="burst" s={20} c="#E9B54B" sw={2} />
-              </div>
-            )}
-            <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 17, color: "#fff", marginTop: 2 }}>
-              {shot.dmg} danni{shot.killed ? " — abbattuto!" : ""}
-            </div>
-            {shot.splash > 0 && (
-              <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14, color: "#E9B54B", marginTop: 3, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
-                <Ico n="spark" s={15} c="#E9B54B" /> e {shot.splash} nell’area
-              </div>
-            )}
+        {crit && done >= 1 && (
+          <div className="settle" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 20, color: "#E9B54B", letterSpacing: "0.04em", display: "flex", alignItems: "center", gap: 6 }}>
+            CRITICO! <Ico n="burst" s={18} c="#E9B54B" sw={2} />
           </div>
         )}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 8, maxWidth: 330 }}>{row}</div>
+        <div className="settle" style={{ textAlign: "center", minHeight: 40 }}>
+          {done >= 1 && (
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 34, color: "#fff", lineHeight: 1 }}>
+              {complete ? shot.dmg : runTotal}
+              <span style={{ fontSize: 16, fontWeight: 600, marginLeft: 5 }}>danni</span>
+            </div>
+          )}
+          {complete && shot.killed && <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: "#E9B54B", marginTop: 4 }}>abbattuto!</div>}
+          {complete && shot.splash > 0 && (
+            <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14, color: "#E9B54B", marginTop: 4, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
+              <Ico n="spark" s={15} c="#E9B54B" /> e {shot.splash} nell’area
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -5579,9 +5625,11 @@ function RollReveal({ shot, onDone }) {
 
 // Animated 3/4-slide "how to play", little text.
 const TACT_SLIDES = [
-  { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6." },
+  { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6, Esploratore d2." },
   { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
-  { icon: "bow", title: "Uno per uno", body: "A turno, una mossa a testa: attivi una pedina (la sposti e attacchi), fino a due volte prima che riposi. Il Mago colpisce un’area." },
+  { icon: "burst", title: "Il colpo pieno esplode", body: "Se tiri la faccia più alta è un Critico: rilanci il dado e sommi. Può incatenarsi — un colpo può valere doppio o più." },
+  { icon: "spark", title: "Il Mago colpisce in area", body: "Tira da lontano (2–3 caselle) e lo stesso danno investe ogni nemico entro 2 dal bersaglio. Non colpisce chi ha addosso." },
+  { icon: "bow", title: "Uno per uno", body: "A turno, una mossa a testa: attivi una pedina (la sposti e attacchi), fino a due volte prima che riposi." },
   { icon: "flag", title: "Come si vince", body: "Stermina l’altro, espugna il suo castello (tienilo un turno sotto tiro), o conquista tutti gli stendardi. Uno stendardo dà +1 danno a chi ci combatte." },
 ];
 function TacticsHowTo({ onClose }) {
@@ -5702,7 +5750,7 @@ function Tactics({ room, gs, seat, commit }) {
     if (!a || a.id === seenAnim.current) return;
     seenAnim.current = a.id;
     if (room.ev && room.ev.t === "attack" && gs.last && gs.last.dmg != null) {
-      setShot({ id: a.id, dmg: gs.last.dmg, crit: !!gs.last.crit, killed: !!gs.last.killed, atkType: gs.last.atkType, tgtType: gs.last.tgtType, side: room.ev.seat, faceMax: TACT.units[gs.last.atkType]?.max || 8, splash: room.ev.splash || 0 });
+      setShot({ id: a.id, dmg: gs.last.dmg, crit: !!gs.last.crit, killed: !!gs.last.killed, atkType: gs.last.atkType, tgtType: gs.last.tgtType, side: room.ev.seat, faceMax: gs.last.die || TACT.units[gs.last.atkType]?.max || 8, splash: room.ev.splash || 0, rolls: gs.last.rolls || null, bonus: gs.last.bonus || 0 });
     }
   }, [room?.anim?.id]);
 
@@ -6192,7 +6240,7 @@ function Tactics({ room, gs, seat, commit }) {
           icon = d.icon;
           tint = TSIDE[iu.owner];
           title = `${d.name}${iu.owner !== seat ? " · nemico" : ""}`;
-          desc = `d${d.max} · vita ${iu.hp}/${iu.max} · muove ${d.move} · tiro ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.aoe ? ` · area ${d.aoe}` : ""}`;
+          desc = `d${d.max} · vita ${iu.hp}/${iu.max} · muove ${d.move} · tiro ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.aoe ? ` · l’attacco investe ogni nemico entro ${d.aoe} dal bersaglio` : ""}`;
         } else if (it.kind === "castle") {
           icon = "castle";
           tint = TSIDE[it.side];
