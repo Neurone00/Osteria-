@@ -3588,7 +3588,12 @@ input{font-family:inherit}
 .critshake{animation:critshake 460ms ease-in-out}
 @keyframes hexpulse{0%,100%{opacity:.35}50%{opacity:.7}}
 .hexpulse{animation:hexpulse 1.6s ease-in-out infinite}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL,.tumble,.settle,.critshake,.hexpulse{animation:none!important}}
+.deck3d{perspective:1600px}
+.deckcard{position:relative;transform-style:preserve-3d;transition:transform 560ms cubic-bezier(.2,.8,.2,1)}
+.deckcard.flip{transform:rotateY(180deg)}
+.deckface{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;overflow:hidden}
+.deckback{transform:rotateY(180deg)}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL,.tumble,.settle,.critshake,.hexpulse{animation:none!important}.deckcard{transition:none}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -4581,6 +4586,62 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   if (room.status === "lobby") {
     const host = seat === "A";
     const g = GAMES[room.game];
+    const gkeys = Object.keys(GAMES);
+    const gIndex = Math.max(0, gkeys.indexOf(room.game));
+    const frontFace = (key, isMid) => {
+      const gm = GAMES[key];
+      return (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center", padding: "30px 22px", gap: 10 }}>
+          <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, letterSpacing: "0.26em", textTransform: "uppercase", color: T.ink30 }}>{gm.tag}</div>
+          <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(28px, 8vw, 44px)", letterSpacing: "-0.02em", lineHeight: 1.04 }}>{gm.name}</div>
+          <p style={{ color: T.ink60, fontSize: 13, lineHeight: 1.5, margin: "6px 0 0", maxWidth: 260 }}>{gm.line}</p>
+          {isMid && <div style={{ marginTop: 10, fontFamily: "ui-monospace, monospace", fontSize: 9.5, letterSpacing: "0.2em", textTransform: "uppercase", color: T.ink30 }}>Tocca per le regole ↻</div>}
+        </div>
+      );
+    };
+    const backFace = (key) => {
+      const gm = GAMES[key];
+      return (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, padding: "18px 18px 16px" }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 19 }}>{gm.name}</div>
+            <Micro>Regole della casa{host ? "" : " · l’host"}</Micro>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", marginTop: 12, paddingRight: 2 }}>
+            {gm.opts.length > 0 ? (
+              <RuleChips conf={gm} opts={room.opts} setOpt={host ? setOpt : null} />
+            ) : (
+              <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 12.5, lineHeight: 1.5 }}>Nessuna regola da scegliere per questo gioco.</Micro>
+            )}
+            {usesRitual(key) && (
+              <>
+                <Micro style={{ marginTop: 18 }}>Punti e prese{host ? "" : " · li decide l’host"}</Micro>
+                <Segmented
+                  options={[
+                    { v: false, label: "Nascondi" },
+                    { v: true, label: "Mostra" },
+                  ]}
+                  value={!!room.scores}
+                  onPick={host ? setScores : null}
+                  style={{ marginTop: 8 }}
+                />
+                <Micro style={{ marginTop: 18 }}>Carte · sul tuo telefono</Micro>
+                <FaceToggle french={french} setFrench={setFrench} />
+              </>
+            )}
+          </div>
+          <div style={{ marginTop: 14 }}>
+            {host ? (
+              <Button full disabled={!seated} onClick={start}>
+                {seated ? `Distribuisci · ${gm.name}` : "Aspetta il 2º giocatore…"}
+              </Button>
+            ) : (
+              <Micro>{room.names.A} sta preparando il tavolo — un attimo.</Micro>
+            )}
+          </div>
+        </div>
+      );
+    };
     return (
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
@@ -4638,69 +4699,21 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
 
           <Rule />
 
-          <Micro>Gioco</Micro>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-            {Object.entries(GAMES).map(([k, gm]) => {
-              const on = k === room.game;
-              return (
-                <button
-                  key={k}
-                  onClick={host ? () => pickGame(k) : undefined}
-                  disabled={!host}
-                  style={{
-                    textAlign: "left",
-                    border: `1.5px solid ${on ? T.ink : T.line}`,
-                    background: on ? T.ink : "transparent",
-                    color: on ? T.bg : T.ink,
-                    borderRadius: 12,
-                    padding: "11px 13px",
-                    cursor: host ? "pointer" : "default",
-                    transition: "background 160ms ease, color 160ms ease, border-color 160ms ease",
-                    WebkitTapHighlightColor: "transparent",
-                  }}
-                >
-                  <div style={{ fontFamily: BRAND, fontSize: 16, fontWeight: 600, letterSpacing: "-0.01em" }}>{gm.name}</div>
-                  <div style={{ fontSize: 11, fontFamily: "ui-monospace, monospace", opacity: 0.7, marginTop: 2 }}>{gm.tag}</div>
-                </button>
-              );
-            })}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <Micro>Gioco</Micro>
+            <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 11, color: T.ink30 }}>
+              {host ? "Scorri · tocca per le regole" : "Sceglie l’host"}
+            </Micro>
           </div>
-          <p style={{ color: T.ink60, fontSize: 13, lineHeight: 1.45, margin: "12px 0 0" }}>{g.line}</p>
-
-          {g.opts.length > 0 && (
-            <div style={{ marginTop: 20 }}>
-              <Accordion label={`Regole della casa${host ? "" : " · le sceglie l’host"}`} open={!!g.board}>
-                <RuleChips conf={g} opts={room.opts} setOpt={host ? setOpt : null} />
-              </Accordion>
-            </div>
-          )}
-
-          {usesRitual(room.game) && (
-            <>
-              <Micro style={{ marginTop: 20 }}>Punti e prese{host ? "" : " · li decide l’host"}</Micro>
-              <Segmented
-                options={[
-                  { v: false, label: "Nascondi" },
-                  { v: true, label: "Mostra" },
-                ]}
-                value={!!room.scores}
-                onPick={host ? setScores : null}
-                style={{ marginTop: 8 }}
-              />
-
-              <Micro style={{ marginTop: 20 }}>Carte · sul tuo telefono</Micro>
-              <FaceToggle french={french} setFrench={setFrench} />
-            </>
-          )}
-
-          <div style={{ marginTop: 24 }}>
-            {host ? (
-              <Button full disabled={!seated} onClick={start}>
-                {seated ? `Distribuisci · ${g.name}` : "In attesa del secondo giocatore…"}
-              </Button>
-            ) : (
-              <Micro>{room.names.A} sta preparando il tavolo — un attimo.</Micro>
-            )}
+          <div style={{ marginTop: 10 }}>
+            <GameCarousel
+              gkeys={gkeys}
+              index={gIndex}
+              host={host}
+              onSettle={host ? (i) => pickGame(gkeys[i]) : null}
+              front={frontFace}
+              back={backFace}
+            />
           </div>
         </div>
       </Frame>
@@ -4972,6 +4985,202 @@ function RuleChips({ conf, opts, setOpt }) {
     </div>
   );
 }
+
+/* A circular, inertial game picker. One card per game at 65% of the width so the
+   neighbours peek; drag (host) to spin it, tap a peeking card to bring it to the
+   middle, tap the middle card to flip it — its back holds the rules and the deal
+   button. Only the middle card flips; focusing a neighbour never rotates it. */
+const nowMs = () => (typeof performance !== "undefined" && performance.now ? performance.now() : 0);
+function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
+  const N = gkeys.length;
+  const wrapRef = useRef(null);
+  const [w, setW] = useState(360);
+  const [pos, setPos] = useState(index); // continuous index; round(pos) is the middle card
+  const [flip, setFlip] = useState(false);
+  const posRef = useRef(index);
+  posRef.current = pos;
+  const raf = useRef(0);
+  const drag = useRef(null);
+  const mod = (i) => ((i % N) + N) % N;
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const set = () => setW(el.clientWidth || 360);
+    set();
+    window.addEventListener("resize", set);
+    return () => window.removeEventListener("resize", set);
+  }, []);
+
+  const animateTo = (target) => {
+    cancelAnimationFrame(raf.current);
+    const tick = () => {
+      const cur = posRef.current;
+      const diff = target - cur;
+      if (Math.abs(diff) < 0.002) {
+        posRef.current = target;
+        setPos(target);
+        return;
+      }
+      const np = cur + diff * 0.22;
+      posRef.current = np;
+      setPos(np);
+      raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
+  };
+
+  // follow the shared choice (guest sees the host pick; reconnect re-centres)
+  useEffect(() => {
+    if (mod(Math.round(posRef.current)) === mod(index)) return;
+    setFlip(false);
+    let best = index,
+      bestD = Infinity;
+    for (let k = -2; k <= 2; k++) {
+      const cand = index + k * N;
+      const d = Math.abs(cand - posRef.current);
+      if (d < bestD) {
+        bestD = d;
+        best = cand;
+      }
+    }
+    animateTo(best);
+  }, [index]); // eslint-disable-line
+
+  const cardW = Math.round(w * 0.65);
+  const step = cardW + 18;
+
+  const settle = (target) => {
+    animateTo(target);
+    if (host && onSettle) onSettle(mod(target));
+  };
+
+  const gest = useRef({ blocked: false }); // a real drag/scroll happened → the release is not a tap
+  const onDown = (e) => {
+    cancelAnimationFrame(raf.current);
+    const p = e.touches ? e.touches[0] : e;
+    drag.current = { x0: p.clientX, y0: p.clientY, pos0: posRef.current, axis: null, moved: 0, lastX: p.clientX, lastT: nowMs(), vel: 0 };
+    gest.current.blocked = false;
+  };
+  const onMove = (e) => {
+    const d = drag.current;
+    if (!d) return;
+    const p = e.touches ? e.touches[0] : e;
+    const dx = p.clientX - d.x0;
+    const dy = p.clientY - d.y0;
+    if (!d.axis && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) d.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    if (d.axis !== "x") return; // vertical → let the card back scroll; the page is left alone
+    gest.current.blocked = true;
+    d.moved = Math.max(d.moved, Math.abs(dx));
+    if (host) {
+      const np = d.pos0 - dx / step;
+      posRef.current = np;
+      setPos(np);
+      setFlip(false);
+    }
+    const t = nowMs();
+    const dt = t - d.lastT || 16;
+    d.vel = (p.clientX - d.lastX) / dt;
+    d.lastX = p.clientX;
+    d.lastT = t;
+  };
+  const onUp = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d || d.axis !== "x" || d.moved < 6 || !host) return; // taps are handled per-card
+    // inertia in index-space, then snap to the nearest card
+    let v = (-d.vel / step) * 16;
+    v = Math.max(-1.3, Math.min(1.3, v));
+    cancelAnimationFrame(raf.current);
+    const glide = () => {
+      v *= 0.9;
+      const np = posRef.current + v;
+      posRef.current = np;
+      setPos(np);
+      if (Math.abs(v) > 0.012) raf.current = requestAnimationFrame(glide);
+      else settle(Math.round(posRef.current));
+    };
+    raf.current = requestAnimationFrame(glide);
+  };
+
+  const tapCard = (j) => {
+    if (gest.current.blocked) return;
+    const mid = Math.round(posRef.current);
+    if (j === mid) {
+      setFlip((f) => !f); // flip the middle card to its rules/deal back
+    } else if (host) {
+      setFlip(false);
+      settle(j); // focus a neighbour — no rotation
+    }
+  };
+
+  const center = Math.round(pos);
+  const cards = [];
+  for (let j = center - 2; j <= center + 2; j++) {
+    const delta = j - pos;
+    if (Math.abs(delta) > 2.4) continue;
+    const key = gkeys[mod(j)];
+    const isMid = j === center;
+    const x = delta * step;
+    const scale = isMid ? 1 : 0.84;
+    cards.push(
+      <div
+        key={j}
+        onClick={() => tapCard(j)}
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: 0,
+          width: cardW,
+          height: "100%",
+          transform: `translateX(-50%) translateX(${x}px) scale(${scale})`,
+          transition: drag.current ? "none" : "transform 320ms cubic-bezier(.2,.8,.2,1), opacity 320ms ease",
+          opacity: isMid ? 1 : 0.5,
+          zIndex: isMid ? 2 : 1,
+          cursor: "pointer",
+          WebkitTapHighlightColor: "transparent",
+        }}
+      >
+        <div className="deck3d" style={{ width: "100%", height: "100%" }}>
+          <div className={`deckcard${isMid && flip ? " flip" : ""}`} style={{ width: "100%", height: "100%" }}>
+            <div className="deckface" style={deckShell}>
+              {front(key, isMid)}
+            </div>
+            <div className="deckface deckback" style={deckShell}>
+              {isMid ? back(key) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={wrapRef}
+      onTouchStart={onDown}
+      onTouchMove={onMove}
+      onTouchEnd={onUp}
+      onMouseDown={onDown}
+      onMouseMove={onMove}
+      onMouseUp={onUp}
+      onMouseLeave={onUp}
+      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(60vh, 500px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "hidden" }}
+    >
+      {cards}
+    </div>
+  );
+}
+const deckShell = {
+  width: "100%",
+  height: "100%",
+  border: `1.5px solid ${T.line}`,
+  borderRadius: 20,
+  background: T.bg,
+  boxShadow: "0 18px 44px rgba(18,18,18,0.14)",
+  display: "flex",
+  flexDirection: "column",
+};
 
 /* Personal deck-face switch. Napoletane (Italian suits) or Francesi (♦♥♠♣). */
 function FaceToggle({ french, setFrench }) {
