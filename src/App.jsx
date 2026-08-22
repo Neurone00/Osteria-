@@ -2753,12 +2753,6 @@ function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
         <path {...P} d="M12 2v3M12 19v3M2 12h3M19 12h3" />
       </>
     ),
-    nfc: (
-      <>
-        <path {...P} d="M5.5 8a10 10 0 0 1 0 8M9 6a15 15 0 0 1 0 12" />
-        <path {...P} d="M13 15V9l4 6V9" />
-      </>
-    ),
     help: (
       <>
         <circle {...P} cx="12" cy="12" r="9" />
@@ -3186,7 +3180,7 @@ function BumpVeil({ show, onCancel }) {
       <div style={{ textAlign: "center", maxWidth: 320, transform: `translate(${off.x}px, ${off.y}px) rotate(${off.r}deg)` }}>
         <div><Ico n="bump" s={44} c={T.ink} sw={1.6} /></div>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 12 }}>Bump!</div>
-        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 18px" }}>{L("Avvicinate i telefoni, o scuoteteli insieme.", "Bring your phones close, or shake them together.")}</p>
+        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 18px" }}>{L("Avvicinate i telefoni e toccate Bump insieme.", "Bring your phones close and tap Bump together.")}</p>
         <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 20 }}>
           <span className="recdot" style={{ animationDelay: "0ms" }} />
           <span className="recdot" style={{ animationDelay: "140ms" }} />
@@ -3496,7 +3490,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [reconnecting, setReconnecting] = useState(false);
   const [askLeave, setAskLeave] = useState(false);
   const [bumping, setBumping] = useState(false); // waiting in the bump lobby
-  const [shakeArmed, setShakeArmed] = useState(false); // gyro armed → a shake joins the bump lobby
   const [board, setBoard] = useState({}); // local head-to-head record between name pairs
   const bumpRef = useRef(null);
   const boardRef = useRef({});
@@ -3904,51 +3897,17 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const share = async (code) => {
     const url = joinUrl(code);
     try {
-      if (navigator.share) return await navigator.share({ title: "Osteria!", text: "Gioca a Osteria con me", url });
+      if (navigator.share) return await navigator.share({ title: "Osteria!", text: L("Gioca a Osteria con me", "Play Osteria with me"), url });
     } catch {
       return;
     }
     try {
       await navigator.clipboard.writeText(url);
-      setMsg("Link copiato");
+      setMsg(L("Link copiato", "Link copied"));
     } catch {
       setMsg(url);
     }
   };
-  // NFC (Android/Chrome only): write the link to a tag, or read one to join.
-  const writeNfc = async (code) => {
-    if (!hasNfc()) return;
-    try {
-      await new window.NDEFReader().write({ records: [{ recordType: "url", data: joinUrl(code) }] });
-      setMsg(L("Avvicina un tag NFC per scrivere il link", "Hold an NFC tag near to write the link"));
-    } catch {
-      setMsg("NFC non disponibile");
-    }
-  };
-  const readNfc = async () => {
-    if (!hasNfc()) return;
-    try {
-      const r = new window.NDEFReader();
-      await r.scan();
-      setMsg(L("Avvicina il telefono al tag NFC…", "Hold your phone near the NFC tag…"));
-      r.onreading = (e) => {
-        for (const rec of e.message.records) {
-          try {
-            const url = new TextDecoder().decode(rec.data);
-            const t = (new URL(url, location.origin).searchParams.get("t") || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
-            if (t.length === 4) {
-              setCodeIn(t);
-              joinTable(t);
-              return;
-            }
-          } catch {}
-        }
-      };
-    } catch {
-      setMsg("NFC non disponibile");
-    }
-  };
-
   // Bump: both phones tap Bump; the lobby pairs them into a fresh table.
   const bump = (graceMs = 3200) => {
     if (hasStore()) return setMsg(L("Il bump funziona solo online.", "Bump works online only."));
@@ -4039,39 +3998,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     setBumping(false);
   };
 
-  // Shake to connect: arm the gyro (a tap is needed once for iOS permission),
-  // then a firm shake joins the bump lobby — with a longer grace window so two
-  // phones shaking within a few seconds of each other still meet.
-  const armShake = async () => {
-    if (hasStore()) return setMsg(L("Il bump funziona solo online.", "Bump works online only."));
-    try {
-      if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function") {
-        const p = await DeviceMotionEvent.requestPermission();
-        if (p !== "granted") return setMsg(L("Consenti il movimento per scuotere.", "Allow motion access to shake."));
-      }
-    } catch {}
-    setMsg("");
-    setShakeArmed(true);
-  };
-  useEffect(() => {
-    if (!shakeArmed || typeof window === "undefined") return;
-    let last = 0;
-    const onMotion = (e) => {
-      const g = e.accelerationIncludingGravity,
-        a = e.acceleration;
-      const m = a && a.x != null ? Math.hypot(a.x, a.y, a.z) : g ? Math.abs(Math.hypot(g.x || 0, g.y || 0, g.z || 0) - 9.8) : 0;
-      const now = performance.now();
-      if (m > 14 && now - last > 1200) {
-        last = now;
-        try {
-          navigator.vibrate?.(20);
-        } catch {}
-        bump(8000); // long grace so the other shaker can catch up
-      }
-    };
-    window.addEventListener("devicemotion", onMotion);
-    return () => window.removeEventListener("devicemotion", onMotion);
-  }, [shakeArmed]); // eslint-disable-line
 
   const leave = () => {
     dropSession();
@@ -4423,22 +4349,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               </Button>
             </div>
 
-            {/* quick-pair: Bump is the headline way in; shake + NFC are alternates */}
+            {/* quick-pair: both phones tap Bump together and the lobby pairs them */}
             {!hasStore() && (
-              <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-                <button onClick={() => { armShake(); bump(); }} style={{ ...plain, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "12px 14px", fontFamily: BRAND, fontWeight: 700, fontSize: 16, color: T.ink, WebkitTapHighlightColor: "transparent" }}>
-                  <Ico n="bump" s={20} /> {L("Bump — tocca o scuoti", "Bump — tap or shake")}
+              <div style={{ marginTop: 14 }}>
+                <button onClick={() => bump()} style={{ ...plain, cursor: "pointer", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "12px 14px", fontFamily: BRAND, fontWeight: 700, fontSize: 16, color: T.ink, WebkitTapHighlightColor: "transparent" }}>
+                  <Ico n="bump" s={20} /> {L("Bump — avvicina i telefoni", "Bump — tap phones together")}
                 </button>
-                <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "6px 20px" }}>
-                  <button onClick={armShake} style={{ ...plain, color: shakeArmed ? "#B8862B" : T.ink30, fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    {shakeArmed ? L("Scuoti ora!", "Shake now!") : L("attiva solo scuotimento", "arm shake only")}
-                  </button>
-                  {hasNfc() && (
-                    <button onClick={readNfc} style={{ ...plain, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                      <Ico n="nfc" s={15} /> {L("Tag NFC", "NFC tag")}
-                    </button>
-                  )}
-                </div>
               </div>
             )}
 
@@ -4575,11 +4491,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               <button onClick={() => share(room.code)} style={sharePill}>
                 {L("Condividi link", "Share link")}
               </button>
-              {hasNfc() && (
-                <button onClick={() => writeNfc(room.code)} style={sharePill}>
-                  {L("Tag NFC", "NFC tag")}
-                </button>
-              )}
             </div>
           )}
           {!seated && msg && <Micro style={{ marginTop: 8, textTransform: "none", letterSpacing: 0, fontSize: 12 }}>{msg}</Micro>}
@@ -5179,7 +5090,6 @@ function FaceToggle({ french, setFrench }) {
 }
 
 const joinUrl = (code) => (typeof location !== "undefined" ? location.origin : "") + "/?t=" + code;
-const hasNfc = () => typeof window !== "undefined" && "NDEFReader" in window;
 
 /* The join link as a scannable QR, rendered as inline SVG (no external service). */
 const rnd = (n) => Math.floor(Math.random() * n);
