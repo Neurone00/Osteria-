@@ -167,6 +167,19 @@ const GAMES = {
     opts: [],
     def: {},
   },
+  diecimila: {
+    name: "Diecimila",
+    tag: "sei dadi, o la va o la spacca",
+    line: "Rilancia per accumulare, ma un tiro che non vale niente — Farkle — brucia tutto. Incassa quando vuoi. Primo al traguardo, poi l’altro ha un ultimo giro.",
+    en: { tag: "six dice, push your luck", line: "Roll on to pile up points, but a roll that scores nothing — a Farkle — burns the lot. Bank when you like. First to the target, then the other gets one last turn." },
+    dice: true,
+    opts: [
+      { k: "target", label: "Partita a", cycle: [2500, 5000, 10000], hint: "Punti che chiudono la partita", le: "Game to", he: "Points that end the game" },
+      { k: "entry", label: "Punti per aprire", cycle: [false, true], hint: "Servono 500 in un turno prima del primo incasso", le: "Opening points", he: "You need 500 in one turn before your first bank" },
+      { k: "lastRound", label: "Ultimo giro", cycle: [true, false], hint: "Chi arriva al traguardo lascia all’altro un turno per rimontare", le: "Last round", he: "Reaching the target gives the other one turn to overtake" },
+    ],
+    def: { target: 5000, entry: false, lastRound: true },
+  },
   scala: {
     name: "Scala 40",
     tag: "aprire a quaranta",
@@ -995,6 +1008,158 @@ function yahtScore(gs, seat, cat) {
     g.win = w;
   }
   return { g, kind: "scopa", nojolt: true, ev: { t: "score", cat } };
+}
+
+/* ── diecimila (farkle) ────────────────────────────────────────
+   The traditional osteria press-your-luck dice game. Six dice; a turn keeps
+   re-rolling to pile up points, but a roll that scores nothing at all — a
+   Farkle — wipes the whole turn. Scoring:
+     · a single 1 = 100, a single 5 = 50
+     · three 1s = 1000, three of any other = face × 100 (2→200 … 6→600)
+     · four/five/six of a kind double the triple, again, and again (×2, ×4, ×8)
+     · a 1–6 straight = 1500, three pairs = 1500
+   Each roll you set aside at least one scoring die, then bank or roll on. Clear
+   all six and they're "hot" — roll all six afresh, points carried. First to the
+   target opens a last round; the other gets one turn to overtake. */
+
+// Points for a chosen set of dice, but only if EVERY die earns — otherwise null,
+// so a selection with a dead die (a lone 2/3/4/6) is rejected, not silently
+// under-counted.
+function farkleSelectionScore(vals) {
+  if (!vals || !vals.length) return null;
+  const c = [0, 0, 0, 0, 0, 0, 0];
+  for (const v of vals) c[v]++;
+  if (vals.length === 6) {
+    if (c.slice(1).every((n) => n === 1)) return 1500; // straight 1–6
+    if (c.slice(1).filter((n) => n === 2).length === 3) return 1500; // three pairs
+  }
+  let score = 0;
+  for (let f = 1; f <= 6; f++) {
+    const n = c[f];
+    if (!n) continue;
+    if (n >= 3) score += (f === 1 ? 1000 : f * 100) * Math.pow(2, n - 3);
+    else if (f === 1) score += n * 100;
+    else if (f === 5) score += n * 50;
+    else return null; // a 2/3/4/6 outside a triple is dead — illegal selection
+  }
+  return score;
+}
+// Is any scoring possible in this roll? Drives Farkle detection.
+function farkleHasScore(vals) {
+  const c = [0, 0, 0, 0, 0, 0, 0];
+  for (const v of vals) c[v]++;
+  if (c[1] || c[5]) return true; // a straight always has these too
+  if (c[2] >= 3 || c[3] >= 3 || c[4] >= 3 || c[6] >= 3) return true;
+  if (vals.length === 6 && c.slice(1).filter((n) => n === 2).length === 3) return true; // three pairs, no 1/5
+  return false;
+}
+function dealFarkle(dealer, tally, opts) {
+  return {
+    turn: dealer,
+    dice: [], // the current live roll, awaiting the player's pick
+    live: 6, // dice still to roll this segment
+    kept: [], // dice set aside this turn (values), for display
+    turnScore: 0, // points banked-aside this turn, not yet safe
+    rolled: false, // are `dice` a fresh roll waiting to be picked from?
+    farkle: false, // the last roll busted (drives the reveal)
+    hot: false, // all six were cleared — a fresh six is coming
+    scores: { A: 0, B: 0 },
+    target: opts?.target || 5000,
+    entry: opts?.entry ? 500 : 0, // points needed to make your first bank
+    lastRound: opts?.lastRound !== false, // catch-up final turn (default on)
+    trigger: null, // seat that reached the target — the final round is underway
+    dealer,
+    tally: tally || { A: 0, B: 0 },
+    summary: null,
+    done: false,
+    matchDone: false,
+    win: null,
+  };
+}
+// Wrap up a turn: reset the per-turn pot and either hand over or, if the
+// catch-up round is done, settle the game.
+function farkleEndTurn(g, seat) {
+  g.turnScore = 0;
+  g.kept = [];
+  g.live = 6;
+  g.rolled = false;
+  g.hot = false;
+  const finalOver = g.trigger != null && (seat === other(g.trigger) || !g.lastRound);
+  if (finalOver) {
+    const a = g.scores.A,
+      b = g.scores.B;
+    g.win = a === b ? null : a > b ? "A" : "B";
+    if (g.win) g.tally[g.win] += 1;
+    g.summary = { a, b, win: g.win };
+    g.done = true;
+    g.matchDone = true;
+    return g;
+  }
+  g.turn = other(seat);
+  return g;
+}
+// Set aside the chosen dice (indices into the live roll). Mutates g; returns the
+// points gained, or null if the pick is illegal.
+function farkleTake(g, seat, sel) {
+  if (g.turn !== seat || g.done || !g.rolled || !sel || !sel.length) return null;
+  if (new Set(sel).size !== sel.length) return null;
+  if (sel.some((i) => i < 0 || i >= g.dice.length)) return null;
+  const vals = sel.map((i) => g.dice[i]);
+  const pts = farkleSelectionScore(vals);
+  if (pts == null || pts === 0) return null;
+  g.turnScore += pts;
+  g.kept = g.kept.concat(vals);
+  g.live -= sel.length;
+  g.rolled = false;
+  if (g.live === 0) {
+    g.live = 6; // hot dice — a whole fresh six, points carried
+    g.kept = [];
+    g.hot = true;
+  }
+  return pts;
+}
+// The opening roll of a turn (nothing to set aside yet). A dead roll busts.
+function farkleRoll(gs, seat) {
+  const g = clone(gs);
+  if (g.turn !== seat || g.done || g.rolled) return null;
+  g.dice = rollN(g.live);
+  g.rolled = true;
+  g.hot = false;
+  g.farkle = false;
+  if (!farkleHasScore(g.dice)) {
+    g.farkle = true;
+    g.turnScore = 0;
+    farkleEndTurn(g, seat);
+    return { g, kind: "lay", nojolt: true, ev: { t: "farkle" } };
+  }
+  return { g, kind: "take", nojolt: true, ev: { t: "roll" } };
+}
+// Set the pick aside, then roll on (risking a Farkle).
+function farkleRollOn(gs, seat, sel) {
+  const g = clone(gs);
+  if (farkleTake(g, seat, sel) == null) return null;
+  g.dice = rollN(g.live);
+  g.rolled = true;
+  g.farkle = false;
+  if (!farkleHasScore(g.dice)) {
+    g.farkle = true;
+    g.turnScore = 0;
+    farkleEndTurn(g, seat);
+    return { g, kind: "lay", nojolt: true, ev: { t: "farkle" } };
+  }
+  return { g, kind: "take", nojolt: true, ev: { t: "roll", hot: g.hot } };
+}
+// Set the pick aside and bank the turn's points.
+function farkleBank(gs, seat, sel) {
+  const g = clone(gs);
+  const pts = farkleTake(g, seat, sel);
+  if (pts == null) return null;
+  const gained = g.turnScore;
+  if (g.entry && g.scores[seat] === 0 && gained < g.entry) return null; // not enough to open
+  g.scores[seat] += gained;
+  if (g.trigger == null && g.scores[seat] >= g.target) g.trigger = seat; // opens the last round
+  farkleEndTurn(g, seat);
+  return { g, kind: "scopa", ev: { t: "bank", pts: gained } };
 }
 
 /* ── scala 40 ──────────────────────────────────────────────────
@@ -4210,6 +4375,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealPerudo(dealer, cont?.tally || null)
       : game === "yahtzee"
       ? dealYahtzee(dealer, cont?.tally || null)
+      : game === "diecimila"
+      ? dealFarkle(dealer, cont?.tally || null, o)
       : game === "scala"
       ? dealScala(dealer, cont?.tally || null, deck)
       : game === "peppa"
@@ -4564,6 +4731,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Perudo room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "yahtzee" ? (
         <Yahtzee room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+      ) : room.game === "diecimila" ? (
+        <Farkle room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "scala" ? (
         <Scala room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "peppa" ? (
@@ -5057,6 +5226,8 @@ function GameArt({ game, size = 88 }) {
       art = (<g>{die(38, 42, 3)}{die(64, 48, 5)}<path d="M30 64h40l-6 14H36z" {...C} /></g>); break;
     case "yahtzee":
       art = (<g>{die(30, 50, 5, 22)}{die(53, 43, 3, 22)}{die(72, 54, 2, 22)}</g>); break;
+    case "diecimila":
+      art = (<g>{die(32, 40, 1, 18)}{die(52, 36, 1, 18)}{die(70, 44, 5, 18)}{die(34, 62, 5, 18)}{die(54, 60, 1, 18)}{die(72, 66, 2, 18)}</g>); break;
     case "scala":
       art = (<g>{card(36, 62, -4, 24, 34)}{card(50, 52, -4, 24, 34)}{card(64, 42, -4, 24, 34)}</g>); break;
     case "peppa":
@@ -7154,6 +7325,183 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
   );
 }
 
+/* ── diecimila (farkle) ── */
+const FARKLE_HELP = [
+  ["1", L("un 1 vale 100", "a single 1 is 100")],
+  ["5", L("un 5 vale 50", "a single 5 is 50")],
+  ["1·1·1", L("tre 1 valgono 1000", "three 1s are 1000")],
+  ["2·2·2 … 6·6·6", L("tre uguali: la faccia × 100 (2→200 … 6→600)", "three of a kind: face × 100 (2→200 … 6→600)")],
+  ["4·5·6 uguali", L("quattro, cinque o sei uguali raddoppiano il tris (×2, ×4, ×8)", "four, five or six of a kind double the triple (×2, ×4, ×8)")],
+  ["1·2·3·4·5·6", L("scala completa: 1500", "full straight: 1500")],
+  [L("tre coppie", "three pairs"), L("1500", "1500")],
+  ["Farkle", L("un tiro senza punti brucia tutto il turno", "a roll that scores nothing burns the whole turn")],
+];
+function Farkle({ room, gs, seat, mine, commit }) {
+  const opp = other(seat);
+  const [sel, setSel] = useState([]); // indices into gs.dice chosen to set aside
+  const [showHelp, setShowHelp] = useState(false);
+  const rollKey = gs.dice.join(",") + "|" + gs.turn + "|" + (gs.rolled ? 1 : 0);
+  useEffect(() => setSel([]), [rollKey]); // a new roll (or handover) clears the pick
+
+  const preview = mine && gs.rolled ? farkleSelectionScore(sel.map((i) => gs.dice[i])) : null;
+  const valid = preview != null && preview > 0;
+  const wouldBank = gs.turnScore + (valid ? preview : 0);
+  const opensOk = !gs.entry || gs.scores[seat] > 0 || wouldBank >= gs.entry;
+  const toggle = (i) => {
+    if (!mine || !gs.rolled || gs.done) return;
+    setSel((s) => (s.includes(i) ? s.filter((x) => x !== i) : s.concat(i)));
+  };
+
+  // farkle bust + hot-dice flashes, shared off the anim so both screens react
+  const [flash, setFlash] = useState(null);
+  const seen = useRef(null);
+  useEffect(() => {
+    const a = room?.anim,
+      ev = room?.ev;
+    if (!a || a.id === seen.current) return;
+    seen.current = a.id;
+    if (ev?.t === "farkle") setFlash({ id: a.id, kind: "farkle" });
+    else if (ev?.t === "roll" && ev.hot) setFlash({ id: a.id, kind: "hot" });
+  }, [room?.anim?.id]);
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 1600);
+    return () => clearTimeout(t);
+  }, [flash?.id]);
+
+  const pct = Math.min(1, gs.scores[seat] / gs.target);
+  const oppPct = Math.min(1, gs.scores[opp] / gs.target);
+
+  return (
+    <div style={{ paddingBottom: 56 }}>
+      {flash && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+          <div key={flash.id} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(48px, 16vw, 118px)", color: flash.kind === "farkle" ? "#B23A2E" : "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap" }}>
+            {flash.kind === "farkle" ? "Farkle!" : L("Dadi caldi!", "Hot dice!")}
+          </div>
+        </div>
+      )}
+
+      {/* opponent + target progress */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
+        <Micro>
+          {gs.scores[opp]} / {gs.target}
+        </Micro>
+      </div>
+      <div style={{ height: 4, background: T.line, borderRadius: 2, marginTop: 6, overflow: "hidden" }}>
+        <div style={{ width: `${oppPct * 100}%`, height: "100%", background: TSIDE[opp] }} />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
+        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <Ico n="help" s={15} /> {L("come si conta", "how scoring works")}
+        </button>
+      </div>
+      {showHelp && (
+        <Sheet title={L("Come si contano i punti", "How scoring works")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink80 || T.ink }}>
+            {FARKLE_HELP.map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0" }}>
+                <span style={{ fontWeight: 700, minWidth: 96, color: T.ink }}>{k}</span>
+                <span style={{ color: T.ink60 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Sheet>
+      )}
+
+      {/* set-aside dice this turn */}
+      {gs.kept.length > 0 && (
+        <div style={{ marginTop: 16, textAlign: "center" }}>
+          <Micro style={{ marginBottom: 6 }}>{L("messi da parte", "set aside")}</Micro>
+          <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+            {gs.kept.map((d, i) => (
+              <Die key={i} v={d} size={34} hi />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* the live roll */}
+      <div style={{ margin: "18px 0 6px", textAlign: "center" }}>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", minHeight: 58, alignItems: "flex-end", flexWrap: "wrap" }}>
+          {gs.rolled && gs.dice.length ? (
+            gs.dice.map((d, i) => {
+              const on = sel.includes(i);
+              return (
+                <div key={i} style={{ transform: on ? "translateY(-7px)" : "none", transition: "transform 150ms ease" }}>
+                  <Die v={d} size={48} hi={on} roll={!!d} onClick={mine ? () => toggle(i) : undefined} />
+                </div>
+              );
+            })
+          ) : (
+            <Micro>{gs.farkle ? L("niente punti — turno perso", "no points — turn lost") : L("sei dadi pronti", "six dice ready")}</Micro>
+          )}
+        </div>
+      </div>
+
+      {/* this turn's running pot */}
+      <div style={{ textAlign: "center", marginTop: 6 }}>
+        <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 20, color: T.ink }}>{gs.turnScore}</span>
+        <Micro style={{ display: "inline", marginLeft: 8 }}>
+          {L("in gioco", "in play")}
+          {valid ? ` · +${preview}` : ""}
+        </Micro>
+      </div>
+
+      {/* controls */}
+      <div style={{ marginTop: 12 }}>
+        {!mine || gs.done ? (
+          <Micro style={{ textAlign: "center", display: "block" }}>{gs.done ? "" : `${L("tocca a", "over to")} ${who(room, opp)}`}</Micro>
+        ) : !gs.rolled ? (
+          <Button full onClick={() => commit(farkleRoll(gs, seat))}>
+            {L("Lancia i dadi", "Roll the dice")}
+          </Button>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Button full kind="line" disabled={!valid} onClick={() => valid && commit(farkleRollOn(gs, seat, sel))}>
+                {L("Rilancia", "Roll on")}
+              </Button>
+              <Button full disabled={!valid || !opensOk} onClick={() => valid && opensOk && commit(farkleBank(gs, seat, sel))}>
+                {L("Incassa", "Bank")} {wouldBank}
+              </Button>
+            </div>
+            <Micro style={{ textAlign: "center", marginTop: 8, minHeight: 14 }}>
+              {!sel.length
+                ? L("scegli i dadi che valgono", "pick the dice that score")
+                : !valid
+                ? L("selezione non valida", "that pick doesn’t score")
+                : !opensOk
+                ? L("servono 500 per aprire", "you need 500 to open")
+                : ""}
+            </Micro>
+          </>
+        )}
+      </div>
+
+      {/* your score */}
+      <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, seat)}</div>
+        <Micro>
+          {gs.scores[seat]} / {gs.target}
+        </Micro>
+      </div>
+      <div style={{ height: 4, background: T.line, borderRadius: 2, marginTop: 6, overflow: "hidden" }}>
+        <div style={{ width: `${pct * 100}%`, height: "100%", background: TSIDE[seat] }} />
+      </div>
+      {gs.trigger != null && !gs.done && (
+        <Micro style={{ textAlign: "center", display: "block", marginTop: 10, color: "#B8862B" }}>
+          {gs.trigger === seat
+            ? L("Sei al traguardo — un ultimo giro all’altro", "You hit the target — one last turn for the other")
+            : L("Ultimo giro: supera il punteggio per vincere", "Last turn: beat the score to win")}
+        </Micro>
+      )}
+    </div>
+  );
+}
+
 /* ── scala 40 ── */
 const S40_SUIT = { H: { g: "♥", c: "#B23A2E" }, D: { g: "♦", c: "#B23A2E" }, C: { g: "♣", c: "#1A1A1A" }, S: { g: "♠", c: "#1A1A1A" } };
 const s40lbl = (v) => ({ 1: "A", 11: "J", 12: "Q", 13: "K" }[v] || String(v));
@@ -7936,7 +8284,7 @@ function Summary({ room, gs }) {
         </div>
       </div>
     );
-  if ((room.game === "ruba" || room.game === "briscola" || room.game === "yahtzee") && gs.summary)
+  if ((room.game === "ruba" || room.game === "briscola" || room.game === "yahtzee" || room.game === "diecimila") && gs.summary)
     return (
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 22, fontWeight: 700, fontFamily: BRAND }}>
@@ -7944,7 +8292,7 @@ function Summary({ room, gs }) {
         </div>
         <Micro style={{ marginTop: 4 }}>
           {who(room, "A")} · {who(room, "B")}
-          {room.game === "briscola" ? L(" · punti su 120", " · points out of 120") : room.game === "yahtzee" ? L(" · punti totali", " · total points") : ""} · {L("mani", "hands")} {gs.tally.A}–{gs.tally.B}
+          {room.game === "briscola" ? L(" · punti su 120", " · points out of 120") : room.game === "yahtzee" || room.game === "diecimila" ? L(" · punti totali", " · total points") : ""} · {L("mani", "hands")} {gs.tally.A}–{gs.tally.B}
         </Micro>
       </div>
     );

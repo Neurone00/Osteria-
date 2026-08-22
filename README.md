@@ -9,6 +9,7 @@ opening a shared link. One player opens a table, the other joins. No accounts, n
 - **Briscola** — trump-suit trick-taking, 120 points over twenty tricks
 - **Perudo** (dice) — five hidden dice each, bid on a face across all dice or call Dudo; shake to roll
 - **Yahtzee** (dice) — three rolls a turn, thirteen scoring boxes, the +35 upper bonus; shake to roll
+- **Diecimila** (dice) — six-dice press-your-luck; roll on to pile up points, but a scoreless roll (a *Farkle*) burns the turn
 
 Card games begin with a shuffle-and-cut ritual: one player taps the deck to shuffle (the randomness is seeded by
 the rhythm of their taps), the other drags to cut. Dice games throw on a phone shake (or a tap).
@@ -194,6 +195,29 @@ A famous 2017 result showed a 40-card deal that loops forever, so the app calls 
 
 Sicily plays a slap rule — matching cards mean first hand on the pile takes it. It isn't implemented here, because
 network latency would decide the race instead of your reflexes.
+
+### Diecimila
+
+The traditional osteria dice game — elsewhere *10.000*, and the same family as Farkle. Six dice, one cup, pure
+press-your-luck. On your turn you roll, set aside at least one scoring die, then choose: bank what you've gathered,
+or roll the rest and risk it. A roll that scores *nothing at all* is a **Farkle** — the whole turn's points are
+gone and play passes.
+
+Scoring:
+
+- a single **1** = 100, a single **5** = 50
+- **three 1s** = 1000; three of any other = face × 100 (three 2s = 200 … three 6s = 600)
+- **four / five / six of a kind** double the triple, then double again, then again — ×2, ×4, ×8 (four 1s = 2000,
+  six 1s = 8000)
+- a **1-2-3-4-5-6 straight** = 1500; **three pairs** = 1500
+
+Clear all six dice as scoring and they turn **hot** — roll all six again, the turn's points carried. First to the
+target (2500 / 5000 / 10000, default 5000) opens a **last round**: the other player gets one final turn to overtake,
+then the higher score wins. Two optional house rules: an **opening threshold** (gather 500 in a single turn before
+your first bank) and turning the last round off (first past the target wins outright).
+
+Only 1s and 5s score on their own; a lone 2, 3, 4 or 6 is dead, so the app won't let you set one aside — you keep
+only dice that actually earn.
 
 ## Layout
 

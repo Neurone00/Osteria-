@@ -41,6 +41,7 @@ const EXPORTS = [
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
+  "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
@@ -515,6 +516,73 @@ function playYahtzee() {
   return steps;
 }
 
+/* ── diecimila (farkle) ─────────────────────────────────────── */
+// A greedy legal pick: everything that scores. Straights/three-pairs take all
+// six; otherwise every 1, every 5, and every face appearing three or more times.
+function farkleSelect(dice) {
+  const c = [0, 0, 0, 0, 0, 0, 0];
+  dice.forEach((d) => c[d]++);
+  if (dice.length === 6) {
+    if (c.slice(1).every((n) => n === 1)) return dice.map((_, i) => i);
+    if (c.slice(1).filter((n) => n === 2).length === 3) return dice.map((_, i) => i);
+  }
+  const idx = [];
+  dice.forEach((d, i) => {
+    if (d === 1 || d === 5 || c[d] >= 3) idx.push(i);
+  });
+  return idx;
+}
+function playFarkle(opts) {
+  let g = R.dealFarkle("A", { A: 0, B: 0 }, opts);
+  let steps = 0;
+  const MAX = 40000;
+  while (!g.done) {
+    if (++steps > MAX) return fail("diecimila", `no end after ${MAX} steps`);
+    const seat = g.turn;
+    if (!g.rolled) {
+      const res = R.farkleRoll(g, seat);
+      if (!res) return fail("diecimila", "opening roll refused");
+      g = res.g;
+      continue;
+    }
+    const sel = farkleSelect(g.dice);
+    if (!sel.length) return fail("diecimila", "no scoring pick though the roll wasn't a farkle");
+    const pts = R.farkleSelectionScore(sel.map((i) => g.dice[i]));
+    if (pts == null || pts <= 0) return fail("diecimila", "greedy pick scored as invalid");
+    const wantBank = g.turnScore + pts >= 350 || Math.random() < 0.35;
+    let res = wantBank ? R.farkleBank(g, seat, sel) : R.farkleRollOn(g, seat, sel);
+    if (!res) res = R.farkleRollOn(g, seat, sel); // bank can be blocked by the entry rule
+    if (!res) return fail("diecimila", "neither bank nor roll-on accepted");
+    g = res.g;
+  }
+  if (g.scores.A < g.target && g.scores.B < g.target) fail("diecimila", "ended before anyone reached the target");
+  if (g.win == null && g.summary && g.summary.a !== g.summary.b) fail("diecimila", "no winner but totals differ");
+  if (g.win != null && g.scores[g.win] < g.scores[g.win === "A" ? "B" : "A"]) fail("diecimila", "declared winner has the lower score");
+  return steps;
+}
+// The scoring table is the game — check every rule it states.
+function farkleScoreTests() {
+  const S = R.farkleSelectionScore;
+  const H = R.farkleHasScore;
+  const cases = [
+    [[1], 100], [[5], 50], [[1, 5], 150],
+    [[1, 1, 1], 1000], [[2, 2, 2], 200], [[6, 6, 6], 600], [[5, 5, 5], 500],
+    [[1, 1, 1, 1], 2000], [[1, 1, 1, 1, 1], 4000], [[1, 1, 1, 1, 1, 1], 8000],
+    [[6, 6, 6, 6], 1200], [[5, 5, 5, 5], 1000],
+    [[1, 2, 3, 4, 5, 6], 1500], [[2, 2, 3, 3, 4, 4], 1500],
+    [[2, 2, 2, 5], 250], [[3, 3, 3, 1], 400],
+    [[2, 2], null], [[3], null], [[2, 3, 4, 6], null],
+  ];
+  for (const [dice, want] of cases) {
+    const got = S(dice);
+    if (got !== want) fail("diecimila scoring", `${dice.join("")} → ${got}, expected ${want}`);
+  }
+  const busts = [[2, 3, 4, 6], [2, 2, 3, 3, 6], [2, 2, 4, 4, 6]];
+  for (const d of busts) if (H(d)) fail("diecimila scoring", `${d.join("")} wrongly reads as scoring`);
+  const scoring = [[1], [5], [2, 2, 3, 3, 4, 4], [6, 6, 6, 2], [1, 2, 3, 4, 5, 6]];
+  for (const d of scoring) if (!H(d)) fail("diecimila scoring", `${d.join("")} wrongly reads as a farkle`);
+}
+
 /* ── scala 40 ───────────────────────────────────────────────── */
 function scalaCensus(g, label) {
   const ids = [];
@@ -711,6 +779,8 @@ const runs = [
   ["briscola", () => playBriscola()],
   ["perudo", () => playPerudo()],
   ["yahtzee", () => playYahtzee()],
+  ["diecimila (farkle)", () => playFarkle({ target: 2000 })],
+  ["diecimila, no last round + entry 500", () => playFarkle({ target: 2000, entry: true, lastRound: false })],
   ["scala 40", () => playScala()],
 ];
 
@@ -746,6 +816,11 @@ for (const [label, run] of runs) {
   const before = failures;
   tacticsHexChecks();
   console.log(`${failures === before ? "✓" : "✗"} ${"condottieri hex math".padEnd(44)} distance, neighbors, rounding`);
+}
+{
+  const before = failures;
+  farkleScoreTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"diecimila scoring table".padEnd(44)} singles, triples, doubling, straight, pairs`);
 }
 
 console.log(failures ? `\n${failures} failure(s)` : "\nAll invariants held: 40 cards accounted for throughout, no stuck seats, every hand terminated.");
