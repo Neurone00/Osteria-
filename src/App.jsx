@@ -5712,7 +5712,7 @@ function Tactics({ room, gs, seat, commit }) {
   useEffect(() => {
     let card = null;
     if (gs.phase === "battle" && !gs.done) card = { title: "ALLE ARMI", sub: null };
-    else if (gs.phase === "setup" && mySetup) card = step === "roster" ? { title: "ROSTER", sub: "Phase" } : { title: "DEPLOYMENT", sub: "Phase" };
+    else if (gs.phase === "setup" && mySetup) card = step === "roster" ? { title: "COMPAGNIA", sub: "Fase 1" } : { title: "SCHIERAMENTO", sub: "Fase 2" };
     if (!card) return;
     setBanner(card);
     const t = setTimeout(() => setBanner(null), card.sub ? 1300 : 1600);
@@ -6006,7 +6006,7 @@ function Tactics({ room, gs, seat, commit }) {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ width: 12, height: 12, borderRadius: 3, background: TSIDE[gs.turn], display: "inline-block", opacity: gs.done ? 0.3 : 1 }} />
           <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 13 }}>
-            {gs.phase === "battle" ? `Mossa ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} di ${TACT.MOVE_CAP}` : gs.phase === "setup" ? (step === "roster" ? "Roster" : "Schieramento") : "…"}
+            {gs.phase === "battle" ? `Mossa ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} di ${TACT.MOVE_CAP}` : gs.phase === "setup" ? (step === "roster" ? "Compagnia" : "Schieramento") : "…"}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
