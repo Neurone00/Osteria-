@@ -2329,37 +2329,50 @@ const suitName = (s, french) => (french ? FR_SUIT_NAME[s] : SUIT[s].name.toLower
 function describe(ev, french) {
   if (!ev) return "";
   const r = (v) => faceLbl(v, french);
-  // a card {s,v} → "il 5 di coppe" (falls back to bare rank for older value-only events)
-  const named = (c) => (c && typeof c === "object" ? `il ${r(c.v)} di ${suitName(c.s, french)}` : `il ${r(c)}`);
+  // a card {s,v} → "3♠" (rank + the suit glyph the reader sees on the cards:
+  // ♦♥♠♣ on Francesi, the little pip on Napoletane). Bare ranks fall through.
+  const tag = (c, key) => {
+    if (!c || typeof c !== "object") return <span key={key}>{r(c)}</span>;
+    return (
+      <span key={key} style={{ display: "inline-flex", alignItems: "center", gap: 0, verticalAlign: "-0.28em", whiteSpace: "nowrap", fontWeight: 700 }}>
+        {r(c.v)}
+        {c.s ? <Pip suit={c.s} size={16} /> : null}
+      </span>
+    );
+  };
+  const list = (cards) => (cards || []).flatMap((c, i) => (i ? [<span key={`p${i}`}> + </span>, tag(c, `c${i}`)] : [tag(c, `c${i}`)]));
+  const self = { s: ev.s, v: ev.v };
   switch (ev.t) {
     case "lay":
-      return `cala il ${r(ev.v)} di ${suitName(ev.s, french)}`;
+      return <>cala {tag(self)}</>;
     case "take":
-      return `prende ${(ev.got || []).map(named).join(" + ")} con ${named({ s: ev.s, v: ev.v })}`;
+      return <>prende {list(ev.got)} con {tag(self)}</>;
     case "scopa":
-      return ev.card
-        ? `scopa! prende ${(ev.got || []).map(named).join(" + ")} con ${named(ev.card)}`
-        : "svuota il tavolo — scopa";
+      return ev.card ? <>scopa! prende {list(ev.got)} con {tag(ev.card)}</> : "svuota il tavolo — scopa";
     case "bank":
       return "incassa l’asso";
     case "steal":
-      return `ruba un mazzo di ${ev.n} con il ${r(ev.v)}`;
+      return <>ruba un mazzo di {ev.n} con {tag(self)}</>;
     case "rtake":
-      return `prende ${ev.n} con il ${r(ev.v)}`;
+      return <>prende {ev.n} con {tag(self)}</>;
     case "turn":
-      return `gira il ${r(ev.v)}`;
+      return <>gira {tag(self)}</>;
     case "attack":
-      return `gira il ${r(ev.v)} — ${ev.d} da pagare`;
+      return (
+        <>
+          gira {tag(self)} — {ev.d} da pagare
+        </>
+      );
     case "pay":
       return `paga l’ultima — ${ev.n} carte cambiano mano`;
     case "blead":
-      return `apre con il ${r(ev.v)} di ${suitName(ev.s, french)}`;
+      return <>apre con {tag(self)}</>;
     case "btake":
-      return `risponde con il ${r(ev.v)} di ${suitName(ev.s, french)}`;
+      return <>risponde con {tag(self)}</>;
     case "pdraw":
-      return `pesca una carta — tiene il ${r(ev.v)} di ${suitName(ev.s, french)}`;
+      return <>pesca — tiene {tag(self)}</>;
     case "ppair":
-      return `pesca il ${r(ev.v)} e scarta la coppia`;
+      return <>pesca {tag(self)} e scarta la coppia</>;
     case "pshuffle":
       return "rimescola la mano";
     case "parrange":
@@ -3093,7 +3106,6 @@ function ScanQR({ onCode, onClose }) {
 // it took, then the card from hand (ringed) — held centre-screen for a beat so
 // you can read exactly what was played, then flown off toward the taker's pile.
 // On a sweep it also flashes "Scopa!". Both screens show it from the shared anim.
-const CAP_HOLD = 1000; // ms the cards sit still before they fly
 const CAP_FLY = 640; // ms of the fly-to-pile animation (matches flypR/flypL)
 function CaptureReveal({ room, seat }) {
   const [shot, setShot] = useState(null);
@@ -3111,8 +3123,10 @@ function CaptureReveal({ room, seat }) {
   useEffect(() => {
     if (!shot) return;
     setPhase("hold");
-    const t1 = setTimeout(() => setPhase("fly"), CAP_HOLD);
-    const t2 = setTimeout(() => setShot(null), CAP_HOLD + CAP_FLY);
+    // hold the presa long enough to read — longer when more cards are swept
+    const hold = 1300 + (shot.got.length + 1) * 260;
+    const t1 = setTimeout(() => setPhase("fly"), hold);
+    const t2 = setTimeout(() => setShot(null), hold + CAP_FLY);
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
@@ -3130,6 +3144,9 @@ function CaptureReveal({ room, seat }) {
         >
           Scopa<span style={{ color: T.ink }}>!</span>
         </div>
+      )}
+      {!shot.scopa && phase === "hold" && (
+        <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, letterSpacing: "0.3em", textTransform: "uppercase", color: T.ink60, fontWeight: 700 }}>Presa</div>
       )}
       <div
         key={`c${shot.id}-${phase}`}
