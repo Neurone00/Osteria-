@@ -1561,8 +1561,13 @@ function tacticsSimpleLegal(company) {
 // submits stay serialized by turn (dealer first) so they never race under the
 // one-writer transport, but neither player waits to set up.
 // `placements` is [{ type, q, r }] — the drafted company, each on a legal hex.
+// Each seat locks in its own hidden company independently — no turn hand-off, so
+// nothing hangs on a turn-flip message arriving. Whoever's write makes both
+// companies present opens the battle; if two writes race and one is dropped, the
+// losing seat simply re-submits (its slot is still empty) and converges.
 function tacticsSetup(gs, seat, placements) {
-  if (gs.done || gs.phase !== "setup" || gs.turn !== seat || gs.setup[seat] != null) return null;
+  if (gs.done || gs.phase !== "setup") return null;
+  if (gs.setup[seat] != null) return gs.setup[other(seat)] != null ? tacticsResolveSetup(gs) : null; // already in — open the battle if the other is in too
   if (!Array.isArray(placements)) return null;
   const types = placements.map((p) => p.type);
   const legal = gs.simple ? tacticsSimpleLegal(types) : tacticsCompanyLegal(types);
@@ -1576,24 +1581,34 @@ function tacticsSetup(gs, seat, placements) {
     used.add(k);
   }
   g.setup[seat] = placements.map((p) => ({ type: p.type, q: p.q, r: p.r }));
-  if (g.setup[other(seat)] == null) {
-    g.turn = other(seat); // hand the lock-in to the other side (still hidden)
-  } else {
-    // both companies are in — build every unit and open the battle
-    for (const s of ["A", "B"]) {
-      for (const p of g.setup[s]) {
-        const id = `${s}${p.type[0]}${g.order.length}`;
-        g.units[id] = { id, owner: s, type: p.type, hp: TACT.units[p.type].max, max: TACT.units[p.type].max, q: p.q, r: p.r };
-        g.order.push(id);
-      }
+  if (g.setup[other(seat)] != null) tacticsOpenBattle(g); // both companies are in — reveal and fight
+  return { g, quiet: true, ev: { t: "setup" } };
+}
+// Build every unit from the two hidden companies and open the battle. Shared by
+// the second lock-in and the self-heal below.
+function tacticsOpenBattle(g) {
+  for (const s of ["A", "B"]) {
+    for (const p of g.setup[s]) {
+      const id = `${s}${p.type[0]}${g.order.length}`;
+      g.units[id] = { id, owner: s, type: p.type, hp: TACT.units[p.type].max, max: TACT.units[p.type].max, q: p.q, r: p.r };
+      g.order.push(id);
     }
-    g.phase = "battle";
-    g.turn = g.dealer;
-    g.moves = 0;
-    g.spent = {};
-    g.rest = {};
-    g.turns = { A: 0, B: 0 };
   }
+  g.phase = "battle";
+  g.turn = g.dealer;
+  g.moves = 0;
+  g.spent = {};
+  g.rest = {};
+  g.turns = { A: 0, B: 0 };
+  return g;
+}
+// Safety net: if both companies are somehow locked in but the battle never
+// opened (a lost/duplicated setup write under the live transport), any seat can
+// resolve it deterministically — the build is identical on both devices.
+function tacticsResolveSetup(gs) {
+  if (gs.done || gs.phase !== "setup" || !gs.setup || gs.setup.A == null || gs.setup.B == null) return null;
+  const g = clone(gs);
+  tacticsOpenBattle(g);
   return { g, quiet: true, ev: { t: "setup" } };
 }
 
@@ -6195,7 +6210,8 @@ function Tactics({ room, gs, seat, commit }) {
   const [draft, setDraft] = useState([]); // company being recruited
   const [step, setStep] = useState("roster"); // setup sub-step: "roster" → "deploy"
   const [layout, setLayout] = useState([]); // this seat's placements
-  const [pending, setPending] = useState(false); // arranged & waiting for our turn to lock in
+  const [submitted, setSubmitted] = useState(false); // I've locked in and I'm waiting for the reveal
+  const lockedLayout = useRef(null); // survives a re-render so a lost setup write can be re-sent
   const [banner, setBanner] = useState(null); // big phase title card: { title, sub }
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -6229,21 +6245,29 @@ function Tactics({ room, gs, seat, commit }) {
   // phase changes, when this seat has locked in, or when the viewpoint flips
   // seats in solo — but never merely because the other side locked in first.
   const mySetup = gs.phase === "setup" && gs.setup && gs.setup[seat] == null && !gs.done; // still setting up
-  const queueN = draft.length;
   useEffect(() => {
     setStep("roster");
     setDraft([]);
     setLayout([]);
-    setPending(false);
-  }, [seat, gs.phase, mySetup]);
+    setSubmitted(false);
+    lockedLayout.current = null;
+  }, [seat, gs.phase]);
 
-  // a finished arrangement locks in the moment our turn comes (dealer first)
+  // if my locked-in company never made it into the shared state (a setup write
+  // dropped or overwritten under the live transport), re-send it — no turn to
+  // wait on, so this can't hang.
   useEffect(() => {
-    if (pending && gs.phase === "setup" && !gs.done && gs.turn === seat && gs.setup[seat] == null && draft.length > 0 && layout.length === draft.length) {
-      commit(tacticsSetup(gs, seat, layout));
-      setPending(false);
+    if (gs.phase === "setup" && !gs.done && gs.setup && gs.setup[seat] == null && lockedLayout.current) {
+      commit(tacticsSetup(gs, seat, lockedLayout.current));
     }
-  }, [pending, gs.turn, gs.phase]);
+  }, [gs.phase, gs.setup && gs.setup[seat]]); // eslint-disable-line
+
+  // self-heal: if both companies are locked in but the battle never opened, open it
+  useEffect(() => {
+    if (gs.phase === "setup" && !gs.done && gs.setup && gs.setup.A != null && gs.setup.B != null) {
+      commit(tacticsResolveSetup(gs));
+    }
+  }, [gs.phase, gs.setup && gs.setup.A, gs.setup && gs.setup.B, gs.turn, seat]);
 
   // big phase title cards: ROSTER / DEPLOYMENT while setting up, ALLE ARMI when
   // the battle opens and both companies are revealed at once
@@ -6455,11 +6479,13 @@ function Tactics({ room, gs, seat, commit }) {
     setInspect(null);
   };
   // lock in the whole setup (company + placements); if it isn't our turn to
-  // commit yet, mark it pending and the effect above submits when the turn comes.
+  // Lock in my own company at once — no turn to wait for. Remember it so a lost
+  // write can be re-sent (see the resubmit effect).
   const submitSetup = () => {
     if (draft.length === 0 || layout.length !== draft.length) return;
-    if (gs.turn === seat) commit(tacticsSetup(gs, seat, layout));
-    else setPending(true);
+    lockedLayout.current = layout;
+    setSubmitted(true);
+    commit(tacticsSetup(gs, seat, layout));
   };
 
   // pan (drag / one finger) and pinch-zoom (two fingers), with tap-vs-gesture
@@ -6541,7 +6567,7 @@ function Tactics({ room, gs, seat, commit }) {
       ? "Recluta la tua compagnia — di nascosto"
       : nextType
       ? `Piazza vicino al tuo castello — ${TACT.units[nextType]?.name} (${draft.length - layout.length} da piazzare)`
-      : pending
+      : submitted
       ? `Pronto — aspetto ${who(room, other(seat))}`
       : "Compagnia schierata — conferma"
     : sel
@@ -6834,11 +6860,11 @@ function Tactics({ room, gs, seat, commit }) {
 
       {mySetup && step === "deploy" && (
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <Button kind="outline" full disabled={pending} onClick={() => (layout.length ? setLayout(layout.slice(0, -1)) : setStep("roster"))}>
+          <Button kind="outline" full disabled={submitted} onClick={() => (layout.length ? setLayout(layout.slice(0, -1)) : setStep("roster"))}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> {layout.length ? "Annulla" : "Compagnia"}</span>
           </Button>
-          <Button kind="solid" full tone={me} disabled={layout.length !== draft.length || pending} onClick={submitSetup}>
-            {pending ? "In attesa…" : layout.length === draft.length ? "Schiera" : `Piazza ${draft.length - layout.length}`}
+          <Button kind="solid" full tone={me} disabled={layout.length !== draft.length || submitted} onClick={submitSetup}>
+            {submitted ? "In attesa…" : layout.length === draft.length ? "Schiera" : `Piazza ${draft.length - layout.length}`}
           </Button>
         </div>
       )}

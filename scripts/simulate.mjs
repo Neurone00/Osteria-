@@ -328,7 +328,7 @@ function playTactics() {
     guard = 0;
   while (g.phase === "setup") {
     if (++guard > 4) return fail("tactics", "setup never finished");
-    const seat = g.turn;
+    const seat = g.setup.A == null ? "A" : "B"; // each seat locks in independently now
     const comp = draftCompany(g.simple);
     const used = new Set();
     const placements = [];
