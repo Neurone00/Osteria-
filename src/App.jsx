@@ -215,6 +215,16 @@ const GAMES = {
     ],
     def: { simple: false, flagAtk: true, flagWin: true, flagHeal: false, random: true, passAllies: false },
   },
+  bestiario: {
+    name: "Bestiario",
+    tag: "cinque carte, due maestri",
+    line: "Su una scacchiera 5×5, muovi le pedine con carte-animale che passano di mano a ogni mossa. Vinci catturando il Maestro avversario o portando il tuo sul suo tempio.",
+    en: { tag: "five cards, two masters", line: "On a 5×5 board, move your pieces with animal cards that pass hands each turn. Win by capturing the enemy Master or walking yours onto their temple." },
+    instant: true, // its own board — no card deck or shuffle ritual
+    board: true,
+    opts: [],
+    def: {},
+  },
 };
 // game meta + option labels/hints in the current language
 const gtag = (g) => L(g.tag, g.en && g.en.tag);
@@ -1160,6 +1170,133 @@ function farkleBank(gs, seat, sel) {
   if (g.trigger == null && g.scores[seat] >= g.target) g.trigger = seat; // opens the last round
   farkleEndTurn(g, seat);
   return { g, kind: "scopa", ev: { t: "bank", pts: gained } };
+}
+
+/* ── bestiario (onitama) ───────────────────────────────────────
+   A 5×5 board duel. Each side has a Maestro and four Allievi on its back row,
+   the Maestro on the central temple. Five animal cards are dealt from sixteen —
+   two to each player, one left aside as the "spare". A card is a set of relative
+   steps; on your turn you spend one of your two cards to move a piece by its
+   pattern, then that card goes to the spare and you take the spare into hand, so
+   the moves keep rotating between the players. Win by capturing the enemy Maestro
+   (Via della Spada) or by walking your own Maestro onto the enemy's temple (Via
+   del Fiume). Perfect information — nothing hidden — so it sits cleanly on the
+   shared-state wire. Moves are stored as {f,s}: f steps forward (toward the
+   enemy), s steps to the mover's right; seat B applies them rotated 180°. */
+const BEST_CARDS = [
+  { id: "tigre", name: "Tigre", en: "Tiger", moves: [{ f: 2, s: 0 }, { f: -1, s: 0 }] },
+  { id: "drago", name: "Drago", en: "Dragon", moves: [{ f: 1, s: -2 }, { f: 1, s: 2 }, { f: -1, s: -1 }, { f: -1, s: 1 }] },
+  { id: "rana", name: "Rana", en: "Frog", moves: [{ f: 1, s: -1 }, { f: 0, s: -2 }, { f: -1, s: 1 }] },
+  { id: "coniglio", name: "Coniglio", en: "Rabbit", moves: [{ f: 1, s: 1 }, { f: 0, s: 2 }, { f: -1, s: -1 }] },
+  { id: "granchio", name: "Granchio", en: "Crab", moves: [{ f: 1, s: 0 }, { f: 0, s: -2 }, { f: 0, s: 2 }] },
+  { id: "elefante", name: "Elefante", en: "Elephant", moves: [{ f: 1, s: -1 }, { f: 1, s: 1 }, { f: 0, s: -1 }, { f: 0, s: 1 }] },
+  { id: "oca", name: "Oca", en: "Goose", moves: [{ f: 1, s: -1 }, { f: 0, s: -1 }, { f: 0, s: 1 }, { f: -1, s: 1 }] },
+  { id: "gallo", name: "Gallo", en: "Rooster", moves: [{ f: 1, s: 1 }, { f: 0, s: 1 }, { f: 0, s: -1 }, { f: -1, s: -1 }] },
+  { id: "scimmia", name: "Scimmia", en: "Monkey", moves: [{ f: 1, s: -1 }, { f: 1, s: 1 }, { f: -1, s: -1 }, { f: -1, s: 1 }] },
+  { id: "mantide", name: "Mantide", en: "Mantis", moves: [{ f: 1, s: -1 }, { f: 1, s: 1 }, { f: -1, s: 0 }] },
+  { id: "cavallo", name: "Cavallo", en: "Horse", moves: [{ f: 1, s: 0 }, { f: 0, s: -1 }, { f: -1, s: 0 }] },
+  { id: "bue", name: "Bue", en: "Ox", moves: [{ f: 1, s: 0 }, { f: 0, s: 1 }, { f: -1, s: 0 }] },
+  { id: "gru", name: "Gru", en: "Crane", moves: [{ f: 1, s: 0 }, { f: -1, s: -1 }, { f: -1, s: 1 }] },
+  { id: "cinghiale", name: "Cinghiale", en: "Boar", moves: [{ f: 1, s: 0 }, { f: 0, s: -1 }, { f: 0, s: 1 }] },
+  { id: "anguilla", name: "Anguilla", en: "Eel", moves: [{ f: 1, s: -1 }, { f: 0, s: 1 }, { f: -1, s: -1 }] },
+  { id: "cobra", name: "Cobra", en: "Cobra", moves: [{ f: 1, s: 1 }, { f: 0, s: -1 }, { f: -1, s: 1 }] },
+];
+const BEST_CARD = Object.fromEntries(BEST_CARDS.map((c) => [c.id, c]));
+const BEST_TEMPLE = { A: 2, B: 22 }; // each seat's home temple = centre of its back row
+const bestCardName = (c) => L(c.name, c.en);
+// Absolute target of applying move `m` to a piece at `idx` for `seat`.
+function bestTarget(seat, idx, m) {
+  const r = (idx / 5) | 0,
+    c = idx % 5;
+  const tr = seat === "A" ? r + m.f : r - m.f;
+  const tc = seat === "A" ? c + m.s : c - m.s;
+  if (tr < 0 || tr > 4 || tc < 0 || tc > 4) return -1;
+  return tr * 5 + tc;
+}
+// Legal destinations for the piece at `from` using one specific card.
+function bestDests(g, seat, from, cardId) {
+  const p = g.board[from];
+  if (!p || p.seat !== seat || !g.cards[seat].includes(cardId)) return [];
+  const out = [];
+  for (const m of BEST_CARD[cardId].moves) {
+    const to = bestTarget(seat, from, m);
+    if (to < 0) continue;
+    const occ = g.board[to];
+    if (occ && occ.seat === seat) continue; // never land on your own
+    out.push(to);
+  }
+  return out;
+}
+// Does `seat` have any legal move at all (across both cards, every piece)?
+function bestAnyMove(g, seat) {
+  for (let i = 0; i < 25; i++) {
+    const p = g.board[i];
+    if (!p || p.seat !== seat) continue;
+    for (const cid of g.cards[seat]) if (bestDests(g, seat, i, cid).length) return true;
+  }
+  return false;
+}
+function dealBestiario(dealer, tally) {
+  const ids = shuffle(BEST_CARDS.map((c) => c.id)).slice(0, 5);
+  const board = Array(25).fill(null);
+  for (const c of [0, 1, 3, 4]) board[c] = { seat: "A", master: false };
+  board[2] = { seat: "A", master: true };
+  for (const c of [0, 1, 3, 4]) board[20 + c] = { seat: "B", master: false };
+  board[22] = { seat: "B", master: true };
+  const start = Math.random() < 0.5 ? "A" : "B"; // the spare card's colour decides who leads
+  return {
+    board,
+    cards: { A: [ids[0], ids[1]], B: [ids[2], ids[3]], spare: ids[4] },
+    spareSide: start,
+    turn: start,
+    last: null,
+    dealer,
+    tally: tally || { A: 0, B: 0 },
+    done: false,
+    matchDone: false,
+    win: null,
+    how: null,
+  };
+}
+// Spend `cardId` to move the piece at `from` to `to`, then rotate that card out
+// to the spare. Wins on capturing the enemy Maestro or reaching its temple.
+function bestiarioPlay(gs, seat, from, to, cardId) {
+  const g = clone(gs);
+  if (g.turn !== seat || g.done || !g.cards[seat].includes(cardId)) return null;
+  const p = g.board[from];
+  if (!p || p.seat !== seat) return null;
+  if (!bestDests(g, seat, from, cardId).includes(to)) return null;
+  const occ = g.board[to];
+  const capture = occ ? { seat: occ.seat, master: occ.master } : null;
+  g.board[to] = p;
+  g.board[from] = null;
+  g.cards[seat] = g.cards[seat].map((x) => (x === cardId ? g.cards.spare : x));
+  g.cards.spare = cardId;
+  g.last = { from, to, cardId, seat, capture };
+  if (capture && capture.master) {
+    g.win = seat;
+    g.how = "capture";
+  } else if (p.master && to === BEST_TEMPLE[other(seat)]) {
+    g.win = seat;
+    g.how = "temple";
+  }
+  if (g.win) {
+    g.done = true;
+    g.matchDone = true;
+    g.tally[g.win] += 1;
+  } else g.turn = other(seat);
+  return { g, kind: capture ? "scopa" : "take", ev: { t: "move", capture: !!capture, how: g.how } };
+}
+// Stuck: no legal move anywhere, so you forfeit the move and just swap a card.
+function bestiarioPass(gs, seat, cardId) {
+  const g = clone(gs);
+  if (g.turn !== seat || g.done || !g.cards[seat].includes(cardId)) return null;
+  if (bestAnyMove(g, seat)) return null; // only legal when truly stuck
+  g.cards[seat] = g.cards[seat].map((x) => (x === cardId ? g.cards.spare : x));
+  g.cards.spare = cardId;
+  g.last = { pass: true, cardId, seat };
+  g.turn = other(seat);
+  return { g, kind: "lay", nojolt: true, ev: { t: "pass" } };
 }
 
 /* ── scala 40 ──────────────────────────────────────────────────
@@ -4383,6 +4520,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealPeppa(dealer, cont?.tally || null)
       : game === "condottieri"
       ? dealTactics(dealer, o, cont?.tally || null)
+      : game === "bestiario"
+      ? dealBestiario(dealer, cont?.tally || null)
       : dealCamicia(cont?.tally || null, deck);
 
   const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });
@@ -4573,14 +4712,14 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     const frontFace = (key, isMid) => {
       const gm = GAMES[key];
       return (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center", padding: "22px 20px", gap: 12 }}>
-          <GameArt game={key} size={92} />
-          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(24px, 7vw, 38px)", letterSpacing: "-0.02em", lineHeight: 1.02 }}>{gm.name}</div>
-            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.22em", textTransform: "uppercase", color: T.ink30 }}>{gtag(gm)}</div>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center", padding: "14px 18px", gap: 8 }}>
+          <GameArt game={key} size={72} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(22px, 6vw, 30px)", letterSpacing: "-0.02em", lineHeight: 1.02 }}>{gm.name}</div>
+            <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.2em", textTransform: "uppercase", color: T.ink30 }}>{gtag(gm)}</div>
           </div>
-          <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.5, margin: 0, maxWidth: 270 }}>{gline(gm)}</p>
-          {isMid && <div style={{ marginTop: 2, fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.16em", textTransform: "uppercase", color: T.ink30 }}>{L("Tocca per le regole", "Tap for the rules")} ↻</div>}
+          <p style={{ color: T.ink60, fontSize: 12, lineHeight: 1.45, margin: 0, maxWidth: 260, overflow: "hidden" }}>{gline(gm)}</p>
+          {isMid && <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: T.ink30 }}>{L("Tocca per le regole", "Tap for the rules")} ↻</div>}
         </div>
       );
     };
@@ -4739,6 +4878,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Peppa room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} />
       ) : room.game === "condottieri" ? (
         <Tactics room={room} gs={gs} seat={seat} commit={commit} />
+      ) : room.game === "bestiario" ? (
+        <Bestiario room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : (
         <Board
           room={room}
@@ -5147,7 +5288,7 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
       onMouseMove={onMove}
       onMouseUp={onUp}
       onMouseLeave={onUp}
-      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(66vh, 560px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "visible" }}
+      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(52vh, 460px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "visible" }}
     >
       {gkeys.map((key, i) => {
         const isMid = i === midIdx;
@@ -5234,6 +5375,15 @@ function GameArt({ game, size = 88 }) {
       art = (<g>{card(38, 52, -10)}{card(62, 52, 10)}<circle cx="62" cy="48" r="5.5" fill="none" stroke={red} strokeWidth="3" /><path d="M58.5 51.5l7-7" stroke={red} strokeWidth="3" strokeLinecap="round" /></g>); break;
     case "condottieri":
       art = (<g><polygon points="50,18 74,32 74,62 50,76 26,62 26,32" fill="rgba(46,120,90,0.12)" stroke={ink} strokeWidth="3" strokeLinejoin="round" />{die(50, 47, 3, 26)}</g>); break;
+    case "bestiario":
+      art = (
+        <g stroke={ink} strokeWidth="2" fill="none">
+          <rect x="30" y="30" width="40" height="40" rx="3" />
+          <path d="M30 43.3h40M30 56.7h40M43.3 30v40M56.7 30v40" strokeWidth="1.4" />
+          <circle cx="36.7" cy="63.3" r="4" fill={red} stroke="none" />
+          <circle cx="63.3" cy="36.7" r="4" fill={ink} stroke="none" />
+        </g>
+      ); break;
     default:
       art = card(50, 50, 0);
   }
@@ -7502,6 +7652,159 @@ function Farkle({ room, gs, seat, mine, commit }) {
   );
 }
 
+/* ── bestiario (onitama) ── */
+// A move card as a little 5×5 diagram: the centre is the piece, the tinted cells
+// are where it may step. Enemy cards are drawn rotated 180° so their reach points
+// down the board, the way it will actually fall.
+function BestCard({ card, enemy, tint, selected, dim, onClick, size = 82 }) {
+  const filled = new Set();
+  for (const m of card.moves) {
+    const rr = enemy ? 2 + m.f : 2 - m.f;
+    const cc = enemy ? 2 - m.s : 2 + m.s;
+    filled.add(rr * 5 + cc);
+  }
+  return (
+    <button
+      onClick={onClick}
+      disabled={!onClick}
+      style={{ ...plain, cursor: onClick ? "pointer" : "default", opacity: dim ? 0.5 : 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: 6, borderRadius: 10, border: `1.5px solid ${selected ? "#B8862B" : "transparent"}`, background: selected ? "rgba(184,134,43,0.08)" : "transparent", WebkitTapHighlightColor: "transparent" }}
+    >
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 1.5, width: size, height: size }}>
+        {Array.from({ length: 25 }, (_, i) => (
+          <div key={i} style={{ borderRadius: 2, background: i === 12 ? T.ink : filled.has(i) ? tint : "rgba(18,18,18,0.07)" }} />
+        ))}
+      </div>
+      <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 12, color: T.ink }}>{bestCardName(card)}</span>
+    </button>
+  );
+}
+function Bestiario({ room, gs, seat, mine, commit }) {
+  const opp = other(seat);
+  const [selCard, setSelCard] = useState(null);
+  const [selFrom, setSelFrom] = useState(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const me = TSIDE[seat],
+    foe = TSIDE[opp];
+
+  // the pick resets whenever the position moves on (a move landed, or handover)
+  const turnKey = gs.turn + "|" + gs.cards.spare + "|" + (gs.last ? `${gs.last.from}-${gs.last.to}` : "x");
+  useEffect(() => {
+    setSelCard(null);
+    setSelFrom(null);
+  }, [turnKey]);
+
+  const stuck = mine && !bestAnyMove(gs, seat);
+  const dests = selCard != null && selFrom != null ? bestDests(gs, seat, selFrom, selCard) : [];
+  const destSet = new Set(dests);
+  const absOf = (sr, sc) => (seat === "A" ? (4 - sr) * 5 + sc : sr * 5 + (4 - sc)); // own side at the bottom
+
+  const tapCell = (abs) => {
+    if (!mine) return;
+    if (selCard != null && selFrom != null && destSet.has(abs)) {
+      commit(bestiarioPlay(gs, seat, selFrom, abs, selCard));
+      setSelFrom(null);
+      return;
+    }
+    const p = gs.board[abs];
+    setSelFrom(p && p.seat === seat ? (abs === selFrom ? null : abs) : null);
+  };
+  const tapCard = (cid) => {
+    if (!mine) return;
+    if (stuck) return commit(bestiarioPass(gs, seat, cid));
+    setSelCard(cid === selCard ? null : cid);
+  };
+
+  const status = gs.done
+    ? ""
+    : !mine
+    ? `${L("tocca a", "over to")} ${who(room, opp)}`
+    : stuck
+    ? L("Nessuna mossa — scarta una carta", "No move — discard a card")
+    : selCard == null
+    ? L("Scegli una carta", "Pick a card")
+    : selFrom == null
+    ? L("Scegli una pedina", "Pick a piece")
+    : L("Tocca dove muovere", "Tap where to move");
+
+  return (
+    <div style={{ paddingBottom: 40 }}>
+      {/* opponent + their cards */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14, color: foe }}>{who(room, opp)}</div>
+        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <Ico n="help" s={15} /> {L("come si gioca", "how to play")}
+        </button>
+      </div>
+      <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 4 }}>
+        {gs.cards[opp].map((cid) => (
+          <BestCard key={cid} card={BEST_CARD[cid]} enemy tint={foe} dim={gs.turn === seat} size={62} />
+        ))}
+      </div>
+
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
+            <p style={{ margin: "0 0 10px" }}>{L("Ogni giocatore ha un Maestro (con il puntino) e quattro Allievi. Hai due carte-mossa; l’altro ne ha due, e una resta da parte.", "Each player has a Master (the one with the dot) and four Students. You hold two move cards; the other holds two, and one waits aside.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Scegli una carta, poi una pedina, poi tocca dove muoverla secondo lo schema. Atterri su un nemico per catturarlo.", "Pick a card, then a piece, then tap where its pattern lets it go. Land on an enemy to capture it.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("La carta usata passa da parte e tu prendi quella in attesa: le mosse girano di continuo tra i due giocatori.", "The card you use passes aside and you take the waiting one — the moves keep rotating between both players.")}</p>
+            <p style={{ margin: 0 }}>{L("Vinci in due modi: catturi il Maestro avversario, oppure porti il tuo Maestro sul tempio nemico (la casella centrale del suo fondo).", "Win two ways: capture the enemy Master, or walk your own Master onto the enemy temple — the centre square of their back row.")}</p>
+          </div>
+        </Sheet>
+      )}
+
+      {/* the board — your side at the bottom */}
+      <div style={{ width: "min(92vw, 400px)", margin: "12px auto", aspectRatio: "1", display: "grid", gridTemplateColumns: "repeat(5,1fr)", gridTemplateRows: "repeat(5,1fr)", border: `1px solid ${T.ink}`, borderRadius: 8, overflow: "hidden", background: T.paper }}>
+        {Array.from({ length: 25 }, (_, k) => {
+          const sr = (k / 5) | 0,
+            sc = k % 5;
+          const abs = absOf(sr, sc);
+          const p = gs.board[abs];
+          const isDest = destSet.has(abs);
+          const isSel = selFrom === abs;
+          const isTemple = abs === BEST_TEMPLE.A || abs === BEST_TEMPLE.B;
+          const templeTint = abs === BEST_TEMPLE[seat] ? me : foe;
+          const lastHit = gs.last && !gs.last.pass && (gs.last.from === abs || gs.last.to === abs);
+          const checker = (sr + sc) % 2 === 0 ? "transparent" : "rgba(18,18,18,0.035)";
+          return (
+            <div
+              key={k}
+              onClick={() => tapCell(abs)}
+              style={{ position: "relative", borderRight: sc < 4 ? `1px solid ${T.line}` : "none", borderBottom: sr < 4 ? `1px solid ${T.line}` : "none", background: lastHit ? "rgba(184,134,43,0.12)" : checker, cursor: mine ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}
+            >
+              {isTemple && <div style={{ position: "absolute", inset: "28%", border: `1.5px solid ${templeTint}`, opacity: 0.4, transform: "rotate(45deg)", borderRadius: 2 }} />}
+              {p && (
+                <div style={{ position: "absolute", inset: "16%", borderRadius: "50%", background: TSIDE[p.seat], boxShadow: isDest ? "0 0 0 3px #B8862B" : "0 1px 3px rgba(18,18,18,0.3)", border: isSel ? "2.5px solid #B8862B" : "none", display: "grid", placeItems: "center", transition: "box-shadow 120ms ease" }}>
+                  {p.master && <span style={{ width: "36%", height: "36%", borderRadius: "50%", background: "#fff" }} />}
+                </div>
+              )}
+              {isDest && !p && <div style={{ position: "absolute", inset: "40%", borderRadius: "50%", background: "rgba(184,134,43,0.8)" }} />}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* status */}
+      <div style={{ textAlign: "center", minHeight: 20 }}>
+        <div key={status} className="swap" style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: mine ? T.ink : T.ink60 }}>{status}</div>
+      </div>
+
+      {/* your cards + the spare */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "center", gap: 8, marginTop: 8 }}>
+        {gs.cards[seat].map((cid) => (
+          <BestCard key={cid} card={BEST_CARD[cid]} tint={me} selected={selCard === cid} dim={!mine} onClick={mine ? () => tapCard(cid) : undefined} size={84} />
+        ))}
+        <div style={{ width: 1, alignSelf: "stretch", background: T.line, margin: "6px 2px" }} />
+        <BestCard card={BEST_CARD[gs.cards.spare]} tint="rgba(18,18,18,0.35)" dim size={58} />
+      </div>
+      <Micro style={{ textAlign: "center", display: "block", marginTop: 2 }}>{L("in attesa", "waiting")}</Micro>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 10 }}>
+        <span style={{ width: 10, height: 10, borderRadius: "50%", background: me }} />
+        <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14, color: me }}>{who(room, seat)}</span>
+      </div>
+    </div>
+  );
+}
+
 /* ── scala 40 ── */
 const S40_SUIT = { H: { g: "♥", c: "#B23A2E" }, D: { g: "♦", c: "#B23A2E" }, C: { g: "♣", c: "#1A1A1A" }, S: { g: "♠", c: "#1A1A1A" } };
 const s40lbl = (v) => ({ 1: "A", 11: "J", 12: "Q", 13: "K" }[v] || String(v));
@@ -8322,6 +8625,15 @@ function Summary({ room, gs }) {
           )}
         </div>
         <Micro style={{ marginTop: 4 }}>{L("battaglie", "battles")} {gs.tally.A}–{gs.tally.B}</Micro>
+      </div>
+    );
+  if (room.game === "bestiario")
+    return (
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18 }}>
+          {gs.how === "temple" ? L("Tempio raggiunto", "Temple reached") : L("Maestro catturato", "Master captured")}
+        </div>
+        <Micro style={{ marginTop: 4 }}>{L("partite", "games")} {gs.tally.A}–{gs.tally.B}</Micro>
       </div>
     );
   return (

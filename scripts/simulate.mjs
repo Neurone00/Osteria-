@@ -42,6 +42,7 @@ const EXPORTS = [
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
+  "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
@@ -583,6 +584,105 @@ function farkleScoreTests() {
   for (const d of scoring) if (!H(d)) fail("diecimila scoring", `${d.join("")} wrongly reads as a farkle`);
 }
 
+/* ── bestiario (onitama) ────────────────────────────────────── */
+function bestMoveList(g, seat) {
+  const moves = [];
+  for (let i = 0; i < 25; i++) {
+    const p = g.board[i];
+    if (!p || p.seat !== seat) continue;
+    for (const cid of g.cards[seat]) for (const to of R.bestDests(g, seat, i, cid)) moves.push({ from: i, to, cid });
+  }
+  return moves;
+}
+function playBestiario() {
+  let g = R.dealBestiario("A", { A: 0, B: 0 });
+  let steps = 0;
+  const MAX = 1500;
+  while (!g.done) {
+    if (++steps > MAX) return fail("bestiario", `no end after ${MAX} steps`);
+    const seat = g.turn;
+    const moves = bestMoveList(g, seat);
+    if (!moves.length) {
+      if (R.bestAnyMove(g, seat)) return fail("bestiario", "move list empty but bestAnyMove says otherwise");
+      const res = R.bestiarioPass(g, seat, g.cards[seat][0]);
+      if (!res) return fail("bestiario", "pass refused while stuck");
+      g = res.g;
+      continue;
+    }
+    // Win-seeking policy so games actually end: take the enemy master, else any
+    // capture, else march the master toward the enemy temple, else wander.
+    const temple = R.BEST_TEMPLE[seat === "A" ? "B" : "A"];
+    const tr = (temple / 5) | 0,
+      tc = temple % 5;
+    let best = null,
+      bestScore = -Infinity;
+    for (const mv of moves) {
+      const occ = g.board[mv.to];
+      const mover = g.board[mv.from];
+      let sc = Math.random();
+      if (occ && occ.master) sc = 1e9;
+      else if (occ) sc = 1000 + Math.random();
+      else if (mover.master) sc = 50 - (Math.abs(((mv.to / 5) | 0) - tr) + Math.abs((mv.to % 5) - tc));
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = mv;
+      }
+    }
+    const res = R.bestiarioPlay(g, seat, best.from, best.to, best.cid);
+    if (!res) return fail("bestiario", "play refused a move it listed as legal");
+    g = res.g;
+  }
+  if (g.win == null) return fail("bestiario", "ended without a winner");
+  if (!g.how) fail("bestiario", "win with no recorded reason");
+  // the pieces are always accounted for: never more than five a side, one master each
+  for (const s of ["A", "B"]) {
+    const mine = g.board.filter((p) => p && p.seat === s);
+    if (mine.length > 5) fail("bestiario", `${s} somehow has ${mine.length} pieces`);
+  }
+  return steps;
+}
+function bestBlank(turn, cardsA, cardsB, spare) {
+  return { board: Array(25).fill(null), cards: { A: cardsA, B: cardsB, spare }, turn, last: null, tally: { A: 0, B: 0 }, done: false, matchDone: false, win: null, how: null };
+}
+function bestiarioRuleTests() {
+  // deal shape
+  const d = R.dealBestiario("A", { A: 0, B: 0 });
+  const aPieces = d.board.filter((p) => p && p.seat === "A");
+  const bPieces = d.board.filter((p) => p && p.seat === "B");
+  if (aPieces.length !== 5 || bPieces.length !== 5) fail("bestiario rules", "each side should start with five pieces");
+  if (aPieces.filter((p) => p.master).length !== 1 || bPieces.filter((p) => p.master).length !== 1) fail("bestiario rules", "each side needs exactly one master");
+  const dealt = [...d.cards.A, ...d.cards.B, d.cards.spare];
+  if (new Set(dealt).size !== 5) fail("bestiario rules", "five distinct cards should be dealt");
+
+  // seat B applies moves rotated 180°: cavallo's forward step from the B temple
+  // (index 22, r4c2) lands one row toward A, at r3c2 = 17
+  const g1 = bestBlank("B", ["gru", "tigre"], ["cavallo", "bue"], "rana");
+  g1.board[22] = { seat: "B", master: true };
+  if (!R.bestDests(g1, "B", 22, "cavallo").includes(17)) fail("bestiario rules", "B's forward move should point down the board");
+
+  // capturing the enemy master wins outright
+  const g2 = bestBlank("A", ["cavallo", "gru"], ["tigre", "bue"], "rana");
+  g2.board[12] = { seat: "A", master: true };
+  g2.board[17] = { seat: "B", master: true };
+  const cap = R.bestiarioPlay(g2, "A", 12, 17, "cavallo");
+  if (!cap || cap.g.win !== "A" || cap.g.how !== "capture") fail("bestiario rules", "taking the enemy master should win by capture");
+
+  // reaching the enemy temple wins
+  const g3 = bestBlank("A", ["cavallo", "gru"], ["tigre", "bue"], "rana");
+  g3.board[17] = { seat: "A", master: true };
+  const tmp = R.bestiarioPlay(g3, "A", 17, 22, "cavallo");
+  if (!tmp || tmp.g.win !== "A" || tmp.g.how !== "temple") fail("bestiario rules", "master onto the enemy temple should win");
+
+  // never land on your own piece
+  const g4 = bestBlank("A", ["cavallo", "gru"], ["tigre", "bue"], "rana");
+  g4.board[12] = { seat: "A", master: true };
+  g4.board[17] = { seat: "A", master: false };
+  if (R.bestiarioPlay(g4, "A", 12, 17, "cavallo") != null) fail("bestiario rules", "a piece must not land on a friendly one");
+
+  // pass is only legal when genuinely stuck
+  if (R.bestiarioPass(g2, "A", "cavallo") != null) fail("bestiario rules", "pass should be refused while a move exists");
+}
+
 /* ── scala 40 ───────────────────────────────────────────────── */
 function scalaCensus(g, label) {
   const ids = [];
@@ -781,6 +881,7 @@ const runs = [
   ["yahtzee", () => playYahtzee()],
   ["diecimila (farkle)", () => playFarkle({ target: 2000 })],
   ["diecimila, no last round + entry 500", () => playFarkle({ target: 2000, entry: true, lastRound: false })],
+  ["bestiario (onitama)", () => playBestiario()],
   ["scala 40", () => playScala()],
 ];
 
@@ -821,6 +922,11 @@ for (const [label, run] of runs) {
   const before = failures;
   farkleScoreTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"diecimila scoring table".padEnd(44)} singles, triples, doubling, straight, pairs`);
+}
+{
+  const before = failures;
+  bestiarioRuleTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"bestiario rules".padEnd(44)} deal, mirroring, capture/temple wins, pass`);
 }
 
 console.log(failures ? `\n${failures} failure(s)` : "\nAll invariants held: 40 cards accounted for throughout, no stuck seats, every hand terminated.");

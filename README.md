@@ -10,6 +10,7 @@ opening a shared link. One player opens a table, the other joins. No accounts, n
 - **Perudo** (dice) — five hidden dice each, bid on a face across all dice or call Dudo; shake to roll
 - **Yahtzee** (dice) — three rolls a turn, thirteen scoring boxes, the +35 upper bonus; shake to roll
 - **Diecimila** (dice) — six-dice press-your-luck; roll on to pile up points, but a scoreless roll (a *Farkle*) burns the turn
+- **Bestiario** (board) — a 5×5 duel of two Masters and eight Students, moved by animal cards that rotate between the players
 
 Card games begin with a shuffle-and-cut ritual: one player taps the deck to shuffle (the randomness is seeded by
 the rhythm of their taps), the other drags to cut. Dice games throw on a phone shake (or a tap).
@@ -218,6 +219,26 @@ your first bank) and turning the last round off (first past the target wins outr
 
 Only 1s and 5s score on their own; a lone 2, 3, 4 or 6 is dead, so the app won't let you set one aside — you keep
 only dice that actually earn.
+
+### Bestiario
+
+A small abstract duel on a 5×5 board — the mechanics of *Onitama*, reskinned with Italian animal cards. Each side
+starts with a **Maestro** (marked with a dot) on its central temple and four **Allievi** either side of it.
+
+Five cards are dealt from sixteen: two to each player, one left aside as the **spare**. A card is a little pattern
+of steps. On your turn you **pick a card, pick a piece, and move it** by that pattern — landing on an enemy piece
+captures it. Then the card you used slides to the spare and you take the old spare into your hand, so the four live
+cards keep rotating between the two players and nobody's options stay fixed. The opponent's cards are always face
+up, drawn rotated toward you, so the whole game is open information — which is why it sits cleanly on the shared
+wire with nothing to hide.
+
+Two paths to victory:
+
+- **Via della Spada** — capture the enemy Maestro.
+- **Via del Fiume** — walk your own Maestro onto the enemy's temple (the centre square of their back row).
+
+If you're ever completely blocked — no legal move with either card — you still swap one card with the spare and pass
+the turn. The spare card's colour decides who moves first, so there's no coin-flip advantage.
 
 ## Layout
 
