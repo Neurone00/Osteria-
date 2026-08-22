@@ -14,6 +14,7 @@ const T = {
 // Fonts by the host page, with a rounded system fallback if it can't (e.g. the
 // offline artifact). Body copy stays on the neutral system stack.
 const BRAND = "'Fredoka', 'Baloo 2', ui-rounded, 'Segoe UI Rounded', system-ui, -apple-system, sans-serif";
+const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace"; // one mono stack everywhere
 // One dim behind every modal dialog, so they all sit on the same scrim.
 const SCRIM = "rgba(18,18,18,0.85)";
 const SUIT = {
@@ -2140,22 +2141,6 @@ function bumpUrl(coords) {
   const q = coords ? `?lat=${coords.lat.toFixed(5)}&lng=${coords.lng.toFixed(5)}` : "";
   return `${proto}//${location.host}/bump${q}`;
 }
-// In-app QR scanning needs both a camera and the BarcodeDetector API (Chrome /
-// Android — including the S23; Safari lacks it and uses the native camera).
-const hasScanner = () =>
-  typeof window !== "undefined" && "BarcodeDetector" in window && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
-// Pull a four-letter table code out of a scanned QR — a join URL (?t=CODE) or a
-// bare code.
-function codeFromScan(raw) {
-  if (!raw) return null;
-  try {
-    const u = new URL(raw, typeof location !== "undefined" ? location.origin : "https://osteria");
-    const t = (u.searchParams.get("t") || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
-    if (t.length === 4) return t;
-  } catch {}
-  const m = String(raw).toUpperCase().replace(/[^A-Z]/g, "");
-  return m.length === 4 ? m : null;
-}
 
 function loadPeerJs() {
   if (window.Peer) return Promise.resolve(window.Peer);
@@ -2178,330 +2163,6 @@ const ICE_SERVERS = [
   { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
   { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
 ];
-
-/* ═══════════════════════════ qr ═══════════════════════════
-   Self-contained QR encoder (byte mode, ECC M, versions 1–6) for the join link.
-   Verified bit-for-bit against node-qrcode. No external requests, no imports. */
-const qrEncode = (() => {
-  // Minimal QR encoder: byte mode, ECC level M, versions 1–6, single alignment
-  // pattern, no version-info block. Enough for a short URL. Returns a size×size
-  // array of 0/1. Validated bit-for-bit against node-qrcode.
-  
-  // GF(256) tables (primitive polynomial 0x11d)
-  const EXP = new Array(512);
-  const LOG = new Array(256);
-  (() => {
-    let x = 1;
-    for (let i = 0; i < 255; i++) {
-      EXP[i] = x;
-      LOG[x] = i;
-      x <<= 1;
-      if (x & 0x100) x ^= 0x11d;
-    }
-    for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255];
-  })();
-  const gmul = (a, b) => (a === 0 || b === 0 ? 0 : EXP[LOG[a] + LOG[b]]);
-  
-  function rsGenPoly(n) {
-    let poly = [1];
-    for (let i = 0; i < n; i++) {
-      const next = new Array(poly.length + 1).fill(0);
-      for (let j = 0; j < poly.length; j++) {
-        next[j] ^= gmul(poly[j], 1);
-        next[j + 1] ^= gmul(poly[j], EXP[i]);
-      }
-      poly = next;
-    }
-    return poly;
-  }
-  function rsEncode(data, n) {
-    const gen = rsGenPoly(n);
-    const res = new Array(n).fill(0);
-    for (const d of data) {
-      const factor = d ^ res[0];
-      res.shift();
-      res.push(0);
-      for (let j = 0; j < n; j++) res[j] ^= gmul(gen[j + 1], factor);
-    }
-    return res;
-  }
-  
-  // version: {blocks, ec, data, align:[centers]}
-  const VER = {
-    1: { blocks: 1, ec: 10, data: 16, align: [] },
-    2: { blocks: 1, ec: 16, data: 28, align: [18] },
-    3: { blocks: 1, ec: 26, data: 44, align: [22] },
-    4: { blocks: 2, ec: 18, data: 32, align: [26] },
-    5: { blocks: 2, ec: 24, data: 43, align: [30] },
-    6: { blocks: 4, ec: 16, data: 27, align: [34] },
-  };
-  const sizeOf = (v) => 17 + 4 * v;
-  const capacityBytes = (v) => VER[v].blocks * VER[v].data - 2; // minus mode+count overhead (~2 bytes)
-  
-  function pickVersion(len) {
-    for (let v = 1; v <= 6; v++) if (capacityBytes(v) >= len) return v;
-    throw new Error("data too long for v1–6");
-  }
-  
-  function encodeBits(text, v) {
-    const bytes = [];
-    for (let i = 0; i < text.length; i++) bytes.push(text.charCodeAt(i) & 0xff);
-    const bits = [];
-    const push = (val, n) => {
-      for (let i = n - 1; i >= 0; i--) bits.push((val >> i) & 1);
-    };
-    push(0b0100, 4); // byte mode
-    push(bytes.length, 8); // count (8 bits for v1–9)
-    for (const b of bytes) push(b, 8);
-    const totalData = VER[v].blocks * VER[v].data;
-    const cap = totalData * 8;
-    // terminator
-    for (let i = 0; i < 4 && bits.length < cap; i++) bits.push(0);
-    // pad to byte
-    while (bits.length % 8 !== 0) bits.push(0);
-    // to bytes
-    const cw = [];
-    for (let i = 0; i < bits.length; i += 8) {
-      let b = 0;
-      for (let j = 0; j < 8; j++) b = (b << 1) | bits[i + j];
-      cw.push(b);
-    }
-    // pad bytes
-    const pads = [0xec, 0x11];
-    let pi = 0;
-    while (cw.length < totalData) cw.push(pads[pi++ % 2]);
-    return cw;
-  }
-  
-  function buildCodewords(text, v) {
-    const dataCw = encodeBits(text, v);
-    const { blocks, ec, data } = VER[v];
-    const dataBlocks = [];
-    const ecBlocks = [];
-    for (let b = 0; b < blocks; b++) {
-      const blk = dataCw.slice(b * data, (b + 1) * data);
-      dataBlocks.push(blk);
-      ecBlocks.push(rsEncode(blk, ec));
-    }
-    // interleave data then ecc
-    const out = [];
-    for (let i = 0; i < data; i++) for (let b = 0; b < blocks; b++) out.push(dataBlocks[b][i]);
-    for (let i = 0; i < ec; i++) for (let b = 0; b < blocks; b++) out.push(ecBlocks[b][i]);
-    return out;
-  }
-  
-  function newMatrix(size) {
-    return Array.from({ length: size }, () => new Array(size).fill(null));
-  }
-  function placeFinder(m, r, c) {
-    for (let dr = -1; dr <= 7; dr++)
-      for (let dc = -1; dc <= 7; dc++) {
-        const rr = r + dr,
-          cc = c + dc;
-        if (rr < 0 || cc < 0 || rr >= m.length || cc >= m.length) continue;
-        const inner = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6;
-        const on = inner && (dr === 0 || dr === 6 || dc === 0 || dc === 6 || (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4));
-        m[rr][cc] = on ? 1 : 0;
-      }
-  }
-  function placeAlign(m, r, c) {
-    for (let dr = -2; dr <= 2; dr++)
-      for (let dc = -2; dc <= 2; dc++) {
-        const on = Math.max(Math.abs(dr), Math.abs(dc)) !== 1;
-        m[r + dr][c + dc] = on ? 1 : 0;
-      }
-  }
-  function reserveFormat(m) {
-    const size = m.length;
-    for (let i = 0; i < 9; i++) {
-      if (m[8][i] === null) m[8][i] = 2; // reserved
-      if (m[i][8] === null) m[i][8] = 2;
-    }
-    for (let i = 0; i < 8; i++) {
-      if (m[8][size - 1 - i] === null) m[8][size - 1 - i] = 2;
-      if (m[size - 1 - i][8] === null) m[size - 1 - i][8] = 2;
-    }
-  }
-  function functionPatterns(m, v) {
-    const size = m.length;
-    placeFinder(m, 0, 0);
-    placeFinder(m, 0, size - 7);
-    placeFinder(m, size - 7, 0);
-    // timing
-    for (let i = 8; i < size - 8; i++) {
-      if (m[6][i] === null) m[6][i] = i % 2 === 0 ? 1 : 0;
-      if (m[i][6] === null) m[i][6] = i % 2 === 0 ? 1 : 0;
-    }
-    // alignment
-    for (const c of VER[v].align) placeAlign(m, c, c);
-    // dark module
-    m[size - 8][8] = 1;
-    reserveFormat(m);
-  }
-  
-  function placeData(m, cw) {
-    const size = m.length;
-    const bits = [];
-    for (const b of cw) for (let i = 7; i >= 0; i--) bits.push((b >> i) & 1);
-    let idx = 0;
-    let upward = true;
-    for (let col = size - 1; col > 0; col -= 2) {
-      if (col === 6) col--; // skip timing column
-      for (let i = 0; i < size; i++) {
-        const row = upward ? size - 1 - i : i;
-        for (let k = 0; k < 2; k++) {
-          const c = col - k;
-          if (m[row][c] === null) {
-            m[row][c] = idx < bits.length ? bits[idx] : 0;
-            idx++;
-          }
-        }
-      }
-      upward = !upward;
-    }
-  }
-  
-  const maskFn = [
-    (r, c) => (r + c) % 2 === 0,
-    (r, c) => r % 2 === 0,
-    (r, c) => c % 3 === 0,
-    (r, c) => (r + c) % 3 === 0,
-    (r, c) => (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0,
-    (r, c) => ((r * c) % 2) + ((r * c) % 3) === 0,
-    (r, c) => (((r * c) % 2) + ((r * c) % 3)) % 2 === 0,
-    (r, c) => (((r + c) % 2) + ((r * c) % 3)) % 2 === 0,
-  ];
-  
-  function isFunction(reserved, r, c) {
-    return reserved[r][c] !== 0;
-  }
-  
-  function applyMask(m, reserved, maskIdx) {
-    const size = m.length;
-    const out = m.map((row) => row.slice());
-    for (let r = 0; r < size; r++)
-      for (let c = 0; c < size; c++) {
-        if (isFunction(reserved, r, c)) continue;
-        if (maskFn[maskIdx](r, c)) out[r][c] ^= 1;
-      }
-    return out;
-  }
-  
-  function penalty(m) {
-    const size = m.length;
-    let p = 0;
-    // rule 1: runs
-    for (let r = 0; r < size; r++) {
-      let run = 1;
-      for (let c = 1; c < size; c++) {
-        if (m[r][c] === m[r][c - 1]) run++;
-        else {
-          if (run >= 5) p += 3 + (run - 5);
-          run = 1;
-        }
-      }
-      if (run >= 5) p += 3 + (run - 5);
-    }
-    for (let c = 0; c < size; c++) {
-      let run = 1;
-      for (let r = 1; r < size; r++) {
-        if (m[r][c] === m[r - 1][c]) run++;
-        else {
-          if (run >= 5) p += 3 + (run - 5);
-          run = 1;
-        }
-      }
-      if (run >= 5) p += 3 + (run - 5);
-    }
-    // rule 2: 2x2 blocks
-    for (let r = 0; r < size - 1; r++)
-      for (let c = 0; c < size - 1; c++) {
-        const v = m[r][c];
-        if (v === m[r][c + 1] && v === m[r + 1][c] && v === m[r + 1][c + 1]) p += 3;
-      }
-    // rule 3: finder-like patterns 1011101 with 4 light
-    const pat1 = [1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0];
-    const pat2 = [0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1];
-    const check = (arr, i) => {
-      for (let k = 0; k < 11; k++) if (arr[i + k] !== pat1[k]) return false;
-      return true;
-    };
-    const check2 = (arr, i) => {
-      for (let k = 0; k < 11; k++) if (arr[i + k] !== pat2[k]) return false;
-      return true;
-    };
-    for (let r = 0; r < size; r++)
-      for (let c = 0; c < size - 10; c++) {
-        const row = m[r];
-        if (check(row, c) || check2(row, c)) p += 40;
-      }
-    for (let c = 0; c < size; c++) {
-      const col = m.map((row) => row[c]);
-      for (let r = 0; r < size - 10; r++) if (check(col, r) || check2(col, r)) p += 40;
-    }
-    // rule 4: dark ratio
-    let dark = 0;
-    for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) dark += m[r][c];
-    const ratio = (dark * 100) / (size * size);
-    const k = Math.floor(Math.abs(ratio - 50) / 5);
-    p += k * 10;
-    return p;
-  }
-  
-  // format info: ECC level M = 0b00, mask 3 bits; BCH(15,5) with mask 0x5412
-  function formatBits(maskIdx) {
-    const ecBits = 0b00; // M
-    let data = (ecBits << 3) | maskIdx;
-    let d = data << 10;
-    const g = 0b10100110111;
-    for (let i = 4; i >= 0; i--) if ((d >> (i + 10)) & 1) d ^= g << i;
-    let bits = ((data << 10) | d) ^ 0b101010000010010;
-    return bits & 0x7fff;
-  }
-  function placeFormat(m, maskIdx) {
-    const size = m.length;
-    const bits = formatBits(maskIdx);
-    for (let i = 0; i < 15; i++) {
-      const mod = (bits >> i) & 1;
-      // vertical strip on column 8
-      if (i < 6) m[i][8] = mod;
-      else if (i < 8) m[i + 1][8] = mod;
-      else m[size - 15 + i][8] = mod;
-      // horizontal strip on row 8
-      if (i < 8) m[8][size - 1 - i] = mod;
-      else if (i < 9) m[8][7] = mod;
-      else m[8][15 - i - 1] = mod;
-    }
-    m[size - 8][8] = 1; // fixed dark module
-  }
-  
-  function qr(text) {
-    const v = pickVersion(text.length);
-    const size = sizeOf(v);
-    const m = newMatrix(size);
-    functionPatterns(m, v);
-    // reserved map (function/reserved cells)
-    const reserved = m.map((row) => row.map((x) => (x === null ? 0 : 1)));
-    const cw = buildCodewords(text, v);
-    placeData(m, cw);
-    // normalize reserved 2 -> those are format cells, already function
-    // choose mask
-    let best = null;
-    let bestP = Infinity;
-    for (let mk = 0; mk < 8; mk++) {
-      const cand = applyMask(m, reserved, mk);
-      placeFormat(cand, mk);
-      const p = penalty(cand);
-      if (p < bestP) {
-        bestP = p;
-        best = cand;
-        best._mask = mk;
-      }
-    }
-    return { size, version: v, matrix: best };
-  }
-  return qr;
-})();
 
 /* ═══════════════════════════ marks ═══════════════════════════ */
 /* Card face is a per-device choice, not a table rule: each player sees the deck
@@ -2864,7 +2525,7 @@ function DeckBox({ n, size = "md", live, lift = 0, faceUp, top, slamId }) {
 const Micro = ({ children, style }) => (
   <div
     style={{
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      fontFamily: MONO,
       fontSize: 10,
       letterSpacing: "0.14em",
       textTransform: "uppercase",
@@ -3242,64 +2903,6 @@ function InstallPrompt() {
 
 // Full-screen camera QR scanner (BarcodeDetector). Reads the host's join QR and
 // hands back the four-letter code. Falls back to a hint if the camera is denied.
-function ScanQR({ onCode, onClose }) {
-  const videoRef = useRef(null);
-  const [err, setErr] = useState("");
-  useEffect(() => {
-    let stream,
-      raf,
-      stop = false;
-    (async () => {
-      try {
-        const det = new window.BarcodeDetector({ formats: ["qr_code"] });
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
-        const v = videoRef.current;
-        if (!v || stop) return;
-        v.srcObject = stream;
-        await v.play().catch(() => {});
-        const tick = async () => {
-          if (stop) return;
-          try {
-            const found = await det.detect(v);
-            for (const b of found) {
-              const t = codeFromScan(b.rawValue);
-              if (t) {
-                onCode(t);
-                return;
-              }
-            }
-          } catch {}
-          raf = requestAnimationFrame(tick);
-        };
-        raf = requestAnimationFrame(tick);
-      } catch {
-        setErr("Consenti l’accesso alla fotocamera, poi riprova.");
-      }
-    })();
-    return () => {
-      stop = true;
-      if (raf) cancelAnimationFrame(raf);
-      if (stream) stream.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-  return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 80, background: "#000", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-      <video ref={videoRef} muted playsInline style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
-      <div style={{ position: "absolute", inset: 0, background: "radial-gradient(circle at center, transparent 120px, rgba(0,0,0,0.55) 190px)" }} />
-      <div style={{ position: "relative", width: 220, height: 220, borderRadius: 22, boxShadow: "0 0 0 3px rgba(255,255,255,0.9)", maxWidth: "70vw" }} />
-      <div style={{ position: "absolute", top: "calc(50% + 140px)", left: 0, right: 0, textAlign: "center", color: "#fff", fontFamily: BRAND, fontWeight: 600, fontSize: 16, padding: "0 24px" }}>
-        {err || "Inquadra il QR dell’altro telefono"}
-      </div>
-      <button
-        onClick={onClose}
-        style={{ position: "absolute", bottom: "calc(28px + env(safe-area-inset-bottom))", background: "#fff", color: "#111", border: "none", borderRadius: 12, padding: "13px 26px", fontFamily: BRAND, fontWeight: 700, fontSize: 16, cursor: "pointer" }}
-      >
-        Chiudi
-      </button>
-    </div>
-  );
-}
-
 // A big shaking "Scopa!" across the middle of the table when someone clears it.
 // A capture reveal on the scopa board: the cards a play swept — the table cards
 // it took, then the card from hand (ringed) — held centre-screen for a beat so
@@ -3822,7 +3425,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [reconnecting, setReconnecting] = useState(false);
   const [askLeave, setAskLeave] = useState(false);
   const [bumping, setBumping] = useState(false); // waiting in the bump lobby
-  const [scanning, setScanning] = useState(false); // camera QR scanner open
   const [board, setBoard] = useState({}); // local head-to-head record between name pairs
   const bumpRef = useRef(null);
   const boardRef = useRef({});
@@ -4510,8 +4112,16 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     };
     const move = (e) => {
       if (!e.touches.length || !e.cancelable) return;
+      if (e.touches[0].clientY - y <= 0) return; // only a DOWNWARD drag can pull-to-refresh
+      // let an inner scroller (a card back's rules list) consume the upward scroll first
+      for (let n = e.target; n && n !== document.body; n = n.parentElement) {
+        if (n.scrollTop > 0 && n.scrollHeight > n.clientHeight) {
+          const oy = getComputedStyle(n).overflowY;
+          if (oy === "auto" || oy === "scroll") return;
+        }
+      }
       const el = document.scrollingElement || document.documentElement;
-      if (el.scrollTop <= 0 && e.touches[0].clientY - y > 0) e.preventDefault();
+      if (el.scrollTop <= 0) e.preventDefault();
     };
     document.addEventListener("touchstart", start, { passive: true });
     document.addEventListener("touchmove", move, { passive: false });
@@ -4656,20 +4266,20 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           <h1
             style={{
               fontFamily: BRAND,
-              fontSize: "clamp(56px, 19vw, 104px)",
+              fontSize: "clamp(44px, 15vw, 82px)",
               fontWeight: 700,
               lineHeight: 0.9,
               letterSpacing: "-0.01em",
               textAlign: "center",
-              margin: "10px 0 0",
+              margin: "6px 0 0",
               whiteSpace: "nowrap",
             }}
           >
             Osteria<span style={{ color: "#A5342F", display: "inline-block", transform: "rotate(7deg)" }}>!</span>
           </h1>
-          <Micro style={{ textAlign: "center", marginTop: 8 }}>Due giocatori · due telefoni · un codice</Micro>
+          <Micro style={{ textAlign: "center", marginTop: 6 }}>Due giocatori · due telefoni · un codice</Micro>
 
-          <div style={{ marginTop: 26 }}>
+          <div style={{ marginTop: 18 }}>
             <input
               value={name}
               onChange={(e) => {
@@ -4686,7 +4296,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               </Button>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 2px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
               <div style={{ flex: 1, height: 1, background: T.line }} />
               <Micro>oppure</Micro>
               <div style={{ flex: 1, height: 1, background: T.line }} />
@@ -4697,7 +4307,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 value={codeIn}
                 onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
                 placeholder="CODICE"
-                style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: "ui-monospace, monospace", fontSize: 18, minWidth: 0 }}
+                style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: MONO, fontSize: 18, minWidth: 0 }}
               />
               <Button kind="line" onClick={() => joinTable()}>
                 Entra
@@ -4709,11 +4319,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               {!hasStore() && (
                 <button onClick={bump} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <Ico n="bump" s={16} /> Bump
-                </button>
-              )}
-              {hasScanner() && (
-                <button onClick={() => setScanning(true)} style={{ ...plain, color: T.ink, fontWeight: 600 }}>
-                  ▣ Inquadra un QR
                 </button>
               )}
               {hasNfc() && (
@@ -4739,16 +4344,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           </div>
         </div>
         <BumpVeil show={bumping} onCancel={cancelBump} />
-        {scanning && (
-          <ScanQR
-            onClose={() => setScanning(false)}
-            onCode={(t) => {
-              setScanning(false);
-              setCodeIn(t);
-              joinTable(t);
-            }}
-          />
-        )}
       </Frame>
     );
 
@@ -4785,9 +4380,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           <GameArt game={key} size={92} />
           <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
             <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(24px, 7vw, 38px)", letterSpacing: "-0.02em", lineHeight: 1.02 }}>{gm.name}</div>
-            <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, letterSpacing: "0.22em", textTransform: "uppercase", color: T.ink30 }}>{gm.tag}</div>
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.22em", textTransform: "uppercase", color: T.ink30 }}>{gm.tag}</div>
           </div>
-          {isMid && <div style={{ marginTop: 4, fontFamily: "ui-monospace, monospace", fontSize: 9.5, letterSpacing: "0.16em", textTransform: "uppercase", color: T.ink30 }}>Tocca per le regole ↻</div>}
+          <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.5, margin: 0, maxWidth: 270 }}>{gm.line}</p>
+          {isMid && <div style={{ marginTop: 2, fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.16em", textTransform: "uppercase", color: T.ink30 }}>Tocca per le regole ↻</div>}
         </div>
       );
     };
@@ -4797,7 +4393,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, padding: "18px 18px 16px" }}>
           <div style={{ paddingRight: 40 }}>
             <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 19 }}>{gm.name}</div>
-            <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.45, margin: "5px 0 0" }}>{gm.line}</p>
+            <Micro style={{ marginTop: 3 }}>Regole della casa</Micro>
           </div>
           <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y", marginTop: 12, paddingRight: 2 }}>
             {gm.opts.length > 0 ? (
@@ -4858,27 +4454,18 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           </div>
 
           {!seated && (
-            <div
-              className="fade"
-              style={{ display: "flex", gap: 14, alignItems: "center", marginTop: 14, padding: 12, border: `1px solid ${T.line}`, borderRadius: 12 }}
-            >
-              <QRCode text={joinUrl(room.code)} size={116} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: BRAND, fontSize: 15, fontWeight: 600 }}>Inquadra per entrare</div>
-                <Micro style={{ marginTop: 4, textTransform: "none", letterSpacing: 0, fontSize: 12, lineHeight: 1.5 }}>
-                  L’altro scansiona il codice — niente da digitare.
-                </Micro>
-                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-                  <button onClick={() => share(room.code)} style={sharePill}>
-                    Condividi link
-                  </button>
-                  {hasNfc() && (
-                    <button onClick={() => writeNfc(room.code)} style={sharePill}>
-                      Tag NFC
-                    </button>
-                  )}
-                </div>
-              </div>
+            <div className="fade" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, padding: 12, border: `1px solid ${T.line}`, borderRadius: 12, flexWrap: "wrap" }}>
+              <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 12.5, lineHeight: 1.5, flex: 1, minWidth: 140 }}>
+                Dai il codice all’altro giocatore, oppure avvicinate i telefoni (Bump).
+              </Micro>
+              <button onClick={() => share(room.code)} style={sharePill}>
+                Condividi link
+              </button>
+              {hasNfc() && (
+                <button onClick={() => writeNfc(room.code)} style={sharePill}>
+                  Tag NFC
+                </button>
+              )}
             </div>
           )}
           {!seated && msg && <Micro style={{ marginTop: 8, textTransform: "none", letterSpacing: 0, fontSize: 12 }}>{msg}</Micro>}
@@ -5002,7 +4589,7 @@ const codeTile = {
   borderRadius: 4,
   display: "grid",
   placeItems: "center",
-  fontFamily: "ui-monospace, monospace",
+  fontFamily: MONO,
   fontSize: 22,
   fontWeight: 600,
 };
@@ -5059,7 +4646,7 @@ const plain = {
   color: T.ink60,
   fontSize: 12,
   cursor: "pointer",
-  fontFamily: "ui-monospace, monospace",
+  fontFamily: MONO,
 };
 const sharePill = {
   border: `1px solid ${T.ink}`,
@@ -5145,7 +4732,7 @@ function RuleChips({ conf, opts, setOpt }) {
                 title={o.hint}
                 style={{ border: `1.5px solid ${T.ink}`, background: "transparent", borderRadius: 12, padding: "8px 14px", cursor: setOpt ? "pointer" : "default", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, minWidth: 84, WebkitTapHighlightColor: "transparent" }}
               >
-                <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: T.ink60 }}>{o.label}</span>
+                <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: T.ink60 }}>{o.label}</span>
                 <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, color: T.ink, lineHeight: 1 }}>{String(cur)}</span>
               </button>
             );
@@ -5466,30 +5053,6 @@ const joinUrl = (code) => (typeof location !== "undefined" ? location.origin : "
 const hasNfc = () => typeof window !== "undefined" && "NDEFReader" in window;
 
 /* The join link as a scannable QR, rendered as inline SVG (no external service). */
-function QRCode({ text, size = 138 }) {
-  let q;
-  try {
-    q = qrEncode(text);
-  } catch {
-    return null;
-  }
-  const n = q.size;
-  const quiet = 4;
-  const total = n + quiet * 2;
-  const cell = size / total;
-  const rects = [];
-  for (let r = 0; r < n; r++)
-    for (let c = 0; c < n; c++)
-      if (q.matrix[r][c])
-        rects.push(<rect key={r * n + c} x={(c + quiet) * cell} y={(r + quiet) * cell} width={cell + 0.6} height={cell + 0.6} />);
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} shapeRendering="crispEdges" style={{ borderRadius: 10, display: "block" }}>
-      <rect width={size} height={size} fill="#fff" />
-      <g fill="#121212">{rects}</g>
-    </svg>
-  );
-}
-
 const rnd = (n) => Math.floor(Math.random() * n);
 const randCard = () => {
   const s = ["D", "C", "S", "B"][rnd(4)];
@@ -6108,7 +5671,7 @@ function RollReveal({ shot, onDone }) {
   return (
     <div onClick={onDone} style={{ position: "fixed", inset: 0, zIndex: 84, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
-        <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(255,255,255,0.7)" }}>
+        <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(255,255,255,0.7)" }}>
           {uIco(shot.atkType, 13, "rgba(255,255,255,0.75)")} attacca {uIco(shot.tgtType, 13, "rgba(255,255,255,0.75)")}
         </div>
         {crit && done >= 1 && (
@@ -6662,7 +6225,7 @@ function Tactics({ room, gs, seat, commit }) {
         <div style={{ position: "fixed", inset: 0, zIndex: 62, display: "grid", placeItems: "center", pointerEvents: "none", padding: 20 }}>
           <div key={banner.title} className="pop" style={{ textAlign: "center", lineHeight: 1 }}>
             <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(42px, 13vw, 96px)", color: me, letterSpacing: "-0.02em", textShadow: "0 4px 0 rgba(18,18,18,0.07)" }}>{banner.title}</div>
-            {banner.sub && <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, letterSpacing: "0.32em", textTransform: "uppercase", color: T.ink60, marginTop: 12, fontWeight: 600 }}>{banner.sub}</div>}
+            {banner.sub && <div style={{ fontFamily: MONO, fontSize: 13, letterSpacing: "0.32em", textTransform: "uppercase", color: T.ink60, marginTop: 12, fontWeight: 600 }}>{banner.sub}</div>}
           </div>
         </div>
       )}
