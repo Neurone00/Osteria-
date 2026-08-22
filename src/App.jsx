@@ -2223,43 +2223,43 @@ function describe(ev, french) {
   const self = { s: ev.s, v: ev.v };
   switch (ev.t) {
     case "lay":
-      return <>cala {tag(self)}</>;
+      return <>{L("cala","lays")} {tag(self)}</>;
     case "take":
-      return <>prende {list(ev.got)} con {tag(self)}</>;
+      return <>{L("prende","takes")} {list(ev.got)} {L("con","with")} {tag(self)}</>;
     case "scopa":
-      return ev.card ? <>scopa! prende {list(ev.got)} con {tag(ev.card)}</> : "svuota il tavolo — scopa";
+      return ev.card ? <>{L("scopa! prende","scopa! takes")} {list(ev.got)} {L("con","with")} {tag(ev.card)}</> : L("svuota il tavolo — scopa","clears the table — scopa");
     case "bank":
-      return "incassa l’asso";
+      return L("incassa l’asso","banks the ace");
     case "steal":
-      return <>ruba un mazzo di {ev.n} con {tag(self)}</>;
+      return <>{L("ruba un mazzo di","steals a pile of")} {ev.n} {L("con","with")} {tag(self)}</>;
     case "rtake":
-      return <>prende {ev.n} con {tag(self)}</>;
+      return <>{L("prende","takes")} {ev.n} {L("con","with")} {tag(self)}</>;
     case "turn":
-      return <>gira {tag(self)}</>;
+      return <>{L("gira","flips")} {tag(self)}</>;
     case "attack":
       return (
         <>
-          gira {tag(self)} — {ev.d} da pagare
+          {L("gira","flips")} {tag(self)} — {ev.d} {L("da pagare","to pay")}
         </>
       );
     case "pay":
-      return `paga l’ultima — ${ev.n} carte cambiano mano`;
+      return `${L("paga l’ultima —","pays the last —")} ${ev.n} ${L("carte cambiano mano","cards change hands")}`;
     case "blead":
-      return <>apre con {tag(self)}</>;
+      return <>{L("apre con","leads")} {tag(self)}</>;
     case "btake":
-      return <>risponde con {tag(self)}</>;
+      return <>{L("risponde con","responds")} {tag(self)}</>;
     case "pdraw":
-      return <>pesca — tiene {tag(self)}</>;
+      return <>{L("pesca — tiene","draws — keeps")} {tag(self)}</>;
     case "ppair":
-      return <>pesca {tag(self)} e scarta la coppia</>;
+      return <>{L("pesca","draws")} {tag(self)} {L("e scarta la coppia","and discards the pair")}</>;
     case "pshuffle":
-      return "rimescola la mano";
+      return L("rimescola la mano","reshuffles the hand");
     case "parrange":
-      return "sistema le carte";
+      return L("sistema le carte","arranges the cards");
     case "poffer":
-      return "offre una carta";
+      return L("offre una carta","offers a card");
     case "pready":
-      return "presenta la mano";
+      return L("presenta la mano","presents the hand");
     default:
       return "";
   }
@@ -5554,10 +5554,10 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
       : "Pareggio"
     : arranging
     ? iAmHolder
-      ? "Trascina per sistemare, su per offrire — poi presenta"
+      ? L("Trascina per sistemare, su per offrire — poi presenta","Drag to arrange, up to offer — then present")
       : `${who(room, holder)} sta sistemando la sua mano`
     : iAmDrawer
-    ? "Pesca una carta coperta"
+    ? L("Pesca una carta coperta","Draw a face-down card")
     : `${who(room, gs.turn)} sta pescando dalla tua mano`;
 
   const topMode = canDraw ? "draw" : "watch";
@@ -5587,7 +5587,7 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
         {lastCard ? (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
             <Card card={lastCard} size="lg" rot={0} slam={slamId === lastCard.id} enter />
-            <Micro>{last.paired ? "coppia scartata" : `${who(room, last.seat)} la tiene`}</Micro>
+            <Micro>{last.paired ? L("coppia scartata","pair discarded") : `${who(room, last.seat)} ${L("la tiene","keeps it")}`}</Micro>
           </div>
         ) : (
           <Micro>nessuna pescata</Micro>
@@ -6926,7 +6926,7 @@ function Perudo({ room, gs, seat, mine, commit }) {
             <Micro style={{ marginTop: 8 }}>{total} dadi in gioco · gli 1 sono jolly</Micro>
           </div>
         ) : (
-          <Micro>{gs.phase === "roll" ? "lanciate i dadi" : `${who(room, gs.turn)} apre le puntate`}</Micro>
+          <Micro>{gs.phase === "roll" ? L("lanciate i dadi","roll the dice") : `${who(room, gs.turn)} ${L("apre le puntate","opens the bidding")}`}</Micro>
         )}
       </div>
 
@@ -7477,7 +7477,7 @@ function Scala({ room, gs, seat, mine, commit }) {
 
   // Actions never dead-end: the buttons stay live during your meld turn and,
   // when a move isn't legal yet, say what's missing instead of greying out.
-  const notAMeld = () => setHint(sel.length < 3 ? "Seleziona almeno 3 carte per un tris o una scala." : "Quelle carte non formano un tris né una scala.");
+  const notAMeld = () => setHint(sel.length < 3 ? L("Seleziona almeno 3 carte per un tris o una scala.","Select at least 3 cards for a set or run.") : L("Quelle carte non formano un tris né una scala.","Those cards don't form a set or a run."));
   const jokerId = () => (selCards.find((c) => c.joker && !c.rep) || {}).id;
   const doCala = () => {
     if (!selMeld.ok) return notAMeld();
@@ -7498,9 +7498,9 @@ function Scala({ room, gs, seat, mine, commit }) {
     if (opts.length >= 2) return setJokerAsk({ options: opts, done: (rep) => stageMeld({ [jid]: rep }) });
     stageMeld(opts.length === 1 ? { [jid]: { s: opts[0].suit, v: opts[0].rank } } : undefined);
   };
-  const doApri = () => (stagedTotal >= 40 ? commit(s40Open(gs, seat, staged)) : setHint(`Ti servono 40 punti per aprire — sei a ${stagedTotal}.`));
+  const doApri = () => (stagedTotal >= 40 ? commit(s40Open(gs, seat, staged)) : setHint(`${L("Ti servono 40 punti per aprire — sei a","You need 40 points to open — you're at")} ${stagedTotal}.`));
   const doScarta = () =>
-    sel.length === 1 ? commit(s40Discard(gs, seat, sel[0])) : setHint(sel.length === 0 ? "Tocca una carta, poi Scarta per finire il turno." : "Per scartare seleziona una sola carta.");
+    sel.length === 1 ? commit(s40Discard(gs, seat, sel[0])) : setHint(sel.length === 0 ? L("Tocca una carta, poi Scarta per finire il turno.","Tap a card, then Discard to end your turn.") : L("Per scartare seleziona una sola carta.","Select just one card to discard."));
 
   const target = opened && sel.length === 1 && gs.phase === "meld";
   const acting = mine && !gs.done;
@@ -7620,13 +7620,13 @@ function Scala({ room, gs, seat, mine, commit }) {
       {/* pinned action strip */}
       {!gs.done && (
         <FloatBar>
-          {!mine && <Micro style={{ textAlign: "center" }}>tocca a {who(room, opp)}</Micro>}
+          {!mine && <Micro style={{ textAlign: "center" }}>{who(room, opp)} {L("gioca","to play")}</Micro>}
           {mine && gs.phase === "draw" && (
-            <Micro style={{ textAlign: "center", color: hint ? T.ink : undefined }}>{hint || (canTakeDiscard ? "pesca dal mazzo, o prendi lo scarto per usarlo subito" : "pesca dal mazzo")}</Micro>
+            <Micro style={{ textAlign: "center", color: hint ? T.ink : undefined }}>{hint || (canTakeDiscard ? L("pesca dal mazzo, o prendi lo scarto per usarlo subito","draw from stock, or take the discard to use it now") : L("pesca dal mazzo","draw from stock"))}</Micro>
           )}
           {mine && gs.phase === "meld" && jokerAsk && (
             <div>
-              <Micro style={{ textAlign: "center" }}>Il jolly rappresenta:</Micro>
+              <Micro style={{ textAlign: "center" }}>{L("Il jolly rappresenta:","The joker stands for:")}</Micro>
               <div style={{ display: "flex", gap: 8, marginTop: 10, justifyContent: "center", flexWrap: "wrap" }}>
                 {jokerAsk.options.map((o) => (
                   <button
@@ -7644,7 +7644,7 @@ function Scala({ room, gs, seat, mine, commit }) {
               </div>
               <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
                 <button onClick={() => setJokerAsk(null)} style={{ ...plain }}>
-                  annulla
+                  {L("annulla","cancel")}
                 </button>
               </div>
             </div>
@@ -7656,14 +7656,14 @@ function Scala({ room, gs, seat, mine, commit }) {
                   {hint
                     ? hint
                     : selMeld.ok
-                    ? `${selMeld.kind === "set" ? "tris" : "scala"} valida · ${selMeld.value} punti`
+                    ? `${selMeld.kind === "set" ? L("tris","set") : L("scala","run")} ${L("valida ·","valid ·")} ${selMeld.value} ${L("punti","pts")}`
                     : !opened && staged.length > 0
-                    ? `apertura ${stagedTotal}/40${stagedTotal < 40 ? " — aggiungi combinazioni" : " — puoi aprire"}`
+                    ? `${L("apertura","opening")} ${stagedTotal}/40${stagedTotal < 40 ? L(" — aggiungi combinazioni"," — add more melds") : L(" — puoi aprire"," — you can open")}`
                     : opened && sel.length === 1
                     ? L("scarta, o tocca una combinazione per attaccare","discard, or tap a meld to lay off")
                     : opened
-                    ? "cala una combinazione, o scarta una carta"
-                    : "componi almeno 40 punti per aprire"}
+                    ? L("cala una combinazione, o scarta una carta","lay a meld, or discard a card")
+                    : L("componi almeno 40 punti per aprire","build at least 40 points to open")}
                 </Micro>
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
