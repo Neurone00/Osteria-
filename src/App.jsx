@@ -1596,7 +1596,7 @@ function dealParoliere(dealer, tally, opts) {
     board: parolBoard(),
     secs: opts?.secs || PAROL_SECS,
     ready: { A: false, B: false },
-    deadline: null, // epoch ms; set when both are ready
+    startedAt: null, // wall-clock epoch when play began — a fallback for a mid-game reload only
     words: { A: null, B: null }, // each seat's submitted list (null until in)
     submitTurn: "A", // sequences the two submissions so they never race
     turn: dealer, // unused by play, but the wrapper reads it
@@ -1615,7 +1615,7 @@ function parolReady(gs, seat) {
   g.ready[seat] = true;
   if (g.ready.A && g.ready.B) {
     g.phase = "play";
-    g.deadline = Date.now() + g.secs * 1000;
+    g.startedAt = Date.now(); // each device counts its own `secs` from when it sees this
   }
   return { g, quiet: true, ev: { t: "ready" } };
 }
@@ -4993,37 +4993,62 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               maxLength={14}
               style={{ ...field, fontFamily: BRAND, fontSize: 18, textAlign: "center", padding: "14px 13px" }}
             />
-            <div style={{ marginTop: 10 }}>
-              <Button full onClick={() => openTable()}>
-                {L("Apri un tavolo", "Open a table")}
-              </Button>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
-              <div style={{ flex: 1, height: 1, background: T.line }} />
-              <Micro>{L("oppure", "or")}</Micro>
-              <div style={{ flex: 1, height: 1, background: T.line }} />
-            </div>
-
-            <div style={{ display: "flex", gap: 8 }}>
-              <input
-                value={codeIn}
-                onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
-                placeholder={L("CODICE", "CODE")}
-                style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: MONO, fontSize: 18, minWidth: 0 }}
-              />
-              <Button kind="line" onClick={() => joinTable()}>
-                {L("Entra", "Join")}
-              </Button>
-            </div>
-
-            {/* quick-pair: both phones tap Bump together and the lobby pairs them */}
-            {!hasStore() && (
-              <div style={{ marginTop: 14 }}>
-                <button onClick={() => bump()} style={{ ...plain, cursor: "pointer", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "12px 14px", fontFamily: BRAND, fontWeight: 700, fontSize: 16, color: T.ink, WebkitTapHighlightColor: "transparent" }}>
-                  <Ico n="bump" s={20} /> {L("Bump — avvicina i telefoni", "Bump — tap phones together")}
-                </button>
-              </div>
+            {/* Bump is the headline way in when we're online; the code and a fresh
+                table are the quieter fallbacks. In the artifact (single device,
+                no server) there's no Bump, so opening a table leads. */}
+            {!hasStore() ? (
+              <>
+                <div style={{ marginTop: 10 }}>
+                  <Button full onClick={() => bump()}>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      <Ico n="bump" s={20} /> {L("Bump — avvicina i telefoni", "Bump — tap phones together")}
+                    </span>
+                  </Button>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
+                  <div style={{ flex: 1, height: 1, background: T.line }} />
+                  <Micro>{L("oppure", "or")}</Micro>
+                  <div style={{ flex: 1, height: 1, background: T.line }} />
+                </div>
+                <Button kind="line" full onClick={() => openTable()}>
+                  {L("Apri un tavolo", "Open a table")}
+                </Button>
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <input
+                    value={codeIn}
+                    onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
+                    placeholder={L("CODICE", "CODE")}
+                    style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: MONO, fontSize: 18, minWidth: 0 }}
+                  />
+                  <Button kind="line" onClick={() => joinTable()}>
+                    {L("Entra", "Join")}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ marginTop: 10 }}>
+                  <Button full onClick={() => openTable()}>
+                    {L("Apri un tavolo", "Open a table")}
+                  </Button>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
+                  <div style={{ flex: 1, height: 1, background: T.line }} />
+                  <Micro>{L("oppure", "or")}</Micro>
+                  <div style={{ flex: 1, height: 1, background: T.line }} />
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    value={codeIn}
+                    onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
+                    placeholder={L("CODICE", "CODE")}
+                    style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: MONO, fontSize: 18, minWidth: 0 }}
+                  />
+                  <Button kind="line" onClick={() => joinTable()}>
+                    {L("Entra", "Join")}
+                  </Button>
+                </div>
+              </>
             )}
 
             {/* Testing only: hidden behind the ?solo (or ?test) link, so ordinary
@@ -5154,21 +5179,17 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 ))}
               </div>
             </div>
-            <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6 }}>
-              {seated ? `${room.names.B} ${L("è al tavolo", "is at the table")}` : L("In attesa del secondo giocatore…", "Waiting for the second player…")}
-            </Micro>
-          </div>
-
-          {!seated && (
-            <div className="fade" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, padding: 12, border: `1px solid ${T.line}`, borderRadius: 12, flexWrap: "wrap" }}>
-              <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 12.5, lineHeight: 1.5, flex: 1, minWidth: 140 }}>
-                {L("Dai il codice all’altro giocatore, oppure avvicinate i telefoni (Bump).", "Give the code to the other player, or tap phones together (Bump).")}
+            {seated ? (
+              <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6 }}>
+                {room.names.B} {L("è al tavolo", "is at the table")}
               </Micro>
-              <button onClick={() => share(room.code)} style={sharePill}>
+            ) : (
+              <button onClick={() => share(room.code)} style={{ ...sharePill, alignSelf: "center" }}>
                 {L("Condividi link", "Share link")}
               </button>
-            </div>
-          )}
+            )}
+          </div>
+
           {!seated && msg && <Micro style={{ marginTop: 8, textTransform: "none", letterSpacing: 0, fontSize: 12 }}>{msg}</Micro>}
 
           {seated && (
@@ -8498,9 +8519,10 @@ function Paroliere({ room, gs, seat, commit }) {
   const [buf, setBuf] = useState("");
   const [words, setWords] = useState([]); // my finds — LOCAL until time's up
   const [flash, setFlash] = useState(null); // { kind, id }
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => nowMs()); // this device's monotonic clock
   const [showHelp, setShowHelp] = useState(false);
   const submitted = useRef(false);
+  const startRef = useRef(null); // monotonic mark for when THIS device started the round
 
   // fresh round → clear my local state
   useEffect(() => {
@@ -8510,11 +8532,23 @@ function Paroliere({ room, gs, seat, commit }) {
       submitted.current = false;
     }
   }, [gs.phase]);
+  // Mark the local start the instant this device enters play. Both devices see the
+  // "play" broadcast within milliseconds and each then counts its own `secs` off
+  // its own monotonic clock — so the two get equal time regardless of any
+  // wall-clock skew between the phones. On a mid-game reload we didn't witness the
+  // start, so reconstruct elapsed from the shared startedAt (own clock, this once).
+  useEffect(() => {
+    if (gs.phase === "play" && startRef.current == null) {
+      const elapsed = gs.startedAt ? Math.max(0, Date.now() - gs.startedAt) : 0;
+      startRef.current = nowMs() - elapsed;
+    }
+    if (gs.phase !== "play") startRef.current = null;
+  }, [gs.phase]);
   // countdown ticker
   useEffect(() => {
     if (gs.phase !== "play") return;
-    setNow(Date.now());
-    const t = setInterval(() => setNow(Date.now()), 250);
+    setNow(nowMs());
+    const t = setInterval(() => setNow(nowMs()), 250);
     return () => clearInterval(t);
   }, [gs.phase]);
   // brief feedback flashes
@@ -8524,8 +8558,8 @@ function Paroliere({ room, gs, seat, commit }) {
     return () => clearTimeout(t);
   }, [flash]);
 
-  const remainMs = gs.phase === "play" && gs.deadline ? Math.max(0, gs.deadline - now) : gs.secs * 1000;
-  const timeUp = gs.phase === "play" && gs.deadline != null && remainMs <= 0;
+  const remainMs = gs.phase === "play" && startRef.current != null ? Math.max(0, gs.secs * 1000 - (now - startRef.current)) : gs.secs * 1000;
+  const timeUp = gs.phase === "play" && startRef.current != null && remainMs <= 0;
 
   // auto-submit at time's up, sequenced by submitTurn so the two writes never race
   useEffect(() => {
