@@ -317,7 +317,8 @@ function draftCompany(simple) {
 }
 function playTactics() {
   const simple = Math.random() < 0.5; // exercise both the essential and full rules
-  let g = R.dealTactics("A", { simple }, { A: 0, B: 0 });
+  const passAllies = Math.random() < 0.5; // and both the move-through-allies settings
+  let g = R.dealTactics("A", { simple, passAllies }, { A: 0, B: 0 });
   const openKeys = g.board.cells.map((c) => R.hkey(c.q, c.r)).filter((k) => !g.board.blocked[k]);
   if (!tacticsConnectedKeys(openKeys)) return fail("tactics", "generated board is not fully connected");
   for (const k of g.board.banners) if (!openKeys.includes(k)) return fail("tactics", "a banner sits on a blocked or off-board hex");

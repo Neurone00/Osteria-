@@ -181,8 +181,9 @@ const GAMES = {
       { k: "flagWin", label: "Re della collina", cycle: [false, true], hint: "Chi tiene tutti gli stendardi nello stesso momento vince" },
       { k: "flagHeal", label: "Stendardi curano", cycle: [false, true], hint: "Sostare su uno stendardo cura +2" },
       { k: "random", label: "Posizioni casuali", cycle: [false, true], hint: "Castelli, fontane e stendardi in punti casuali a ogni partita" },
+      { k: "passAllies", label: "Attraversa gli alleati", cycle: [false, true], hint: "Le pedine passano attraverso quelle amiche, ma non possono fermarcisi" },
     ],
-    def: { simple: false, flagAtk: true, flagWin: true, flagHeal: false, random: true },
+    def: { simple: false, flagAtk: true, flagWin: true, flagHeal: false, random: true, passAllies: false },
   },
 };
 const isCard = (game) => !GAMES[game].dice;
@@ -1511,7 +1512,7 @@ function dealTactics(dealer, opts, tally) {
   const o = opts || {};
   const simple = !!o.simple;
   // house rules, baked onto the state so the engine reads them without threading opts
-  const rules = { flagAtk: o.flagAtk !== false, flagWin: o.flagWin !== false, flagHeal: !!o.flagHeal, random: o.random !== false };
+  const rules = { flagAtk: o.flagAtk !== false, flagWin: o.flagWin !== false, flagHeal: !!o.flagHeal, random: o.random !== false, passAllies: !!o.passAllies };
   return {
     simple, // essential rules: two classes, fixed company of 4, small board, no banners
     rules,
@@ -1620,7 +1621,16 @@ function tacticsReach(g, unit) {
   const onBoard = new Set(g.board.cells.map((c) => hkey(c.q, c.r)));
   // a flyer crosses obstacles and can land on them; everyone else needs open ground
   const passable = (k) => (spec.fly ? onBoard.has(k) : tacticsOpen(g, k));
-  const occ = new Set(g.order.filter((id) => id !== unit.id).map((id) => hkey(g.units[id].q, g.units[id].r)));
+  // allied pieces can be stepped THROUGH when the house rule is on (never landed
+  // on); enemy pieces always block. Everyone stops on empty ground only.
+  const passAllies = g.rules && g.rules.passAllies;
+  const allies = new Set(),
+    enemies = new Set();
+  for (const id of g.order) {
+    if (id === unit.id) continue;
+    const u = g.units[id];
+    (u.owner === unit.owner ? allies : enemies).add(hkey(u.q, u.r));
+  }
   const dist = { [start]: 0 };
   const q = [start];
   while (q.length) {
@@ -1629,12 +1639,15 @@ function tacticsReach(g, unit) {
     const { q: cq, r: cr } = unhkey(k);
     for (const [dq, dr] of HEX_DIRS) {
       const nk = hkey(cq + dq, cr + dr);
-      if (dist[nk] !== undefined || !passable(nk) || occ.has(nk)) continue;
+      if (dist[nk] !== undefined || !passable(nk)) continue;
+      if (enemies.has(nk)) continue; // never through an enemy
+      if (allies.has(nk) && !passAllies) continue; // allies block unless the rule lets you pass
       dist[nk] = dist[k] + 1;
       q.push(nk);
     }
   }
   delete dist[start];
+  for (const k of allies) delete dist[k]; // a stepping-stone ally is not a landing spot
   return dist;
 }
 
