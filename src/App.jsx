@@ -175,8 +175,14 @@ const GAMES = {
     line: "Ogni pedina è un dado: la faccia è la vita, e ferito colpisce meno. Schiera vicino al castello, poi muovi e tira. Vinci sterminando l’altro o prendendone il castello.",
     instant: true, // its own hex board — no card deck or shuffle ritual
     board: true, // a tactics board, not cards or dice-cups
-    opts: [{ k: "simple", label: "Regole essenziali", cycle: [false, true], hint: "Due classi, compagnia fissa di 4, mappa piccola, senza stendardi — la versione ridotta" }],
-    def: { simple: false },
+    opts: [
+      { k: "simple", label: "Regole essenziali", cycle: [false, true], hint: "Due classi, compagnia fissa di 4, mappa piccola, senza stendardi" },
+      { k: "flagAtk", label: "Stendardi: +1 attacco", cycle: [false, true], hint: "Attaccare stando su uno stendardo fa +1 danno" },
+      { k: "flagWin", label: "Re della collina", cycle: [false, true], hint: "Chi tiene tutti gli stendardi nello stesso momento vince" },
+      { k: "flagHeal", label: "Stendardi curano", cycle: [false, true], hint: "Sostare su uno stendardo cura +2" },
+      { k: "random", label: "Posizioni casuali", cycle: [false, true], hint: "Castelli, fontane e stendardi in punti casuali a ogni partita" },
+    ],
+    def: { simple: false, flagAtk: true, flagWin: true, flagHeal: false, random: true },
   },
 };
 const isCard = (game) => !GAMES[game].dice;
@@ -1287,10 +1293,10 @@ function tacticsLargest(set) {
 // Board shape by mode: the essential (simple) game is a small board and no
 // banners; the full game is bigger, with a roomier deploy zone and contested
 // banners out in the field.
-const tacticsShape = (simple) =>
+const tacticsShape = (simple, random) =>
   simple
-    ? { R: TACT.SIMPLE_R, deployR: TACT.SIMPLE_DEPLOY_R, room: TACT.SIMPLE_UNITS, banners: 0 }
-    : { R: TACT.R, deployR: TACT.DEPLOY_R, room: TACT.MAX_UNITS, banners: 3 };
+    ? { R: TACT.SIMPLE_R, deployR: TACT.SIMPLE_DEPLOY_R, room: TACT.SIMPLE_UNITS, banners: 0, random: !!random }
+    : { R: TACT.R, deployR: TACT.DEPLOY_R, room: TACT.MAX_UNITS, banners: 3, random: !!random };
 
 // One attempt at an irregular island. Returns null if the shape can't seat both
 // squads or can't stay connected once rubble is added, so the caller can retry.
@@ -1308,26 +1314,51 @@ function tacticsBoardTry(R, erode, shp) {
   const cells = [...set].map(unhkey);
   const rMin = Math.min(...cells.map((c) => c.r)),
     rMax = Math.max(...cells.map((c) => c.r));
-  const midOf = (rr) => {
-    const row = cells.filter((c) => c.r === rr).sort((a, b) => a.q - b.q);
-    return row[Math.floor(row.length / 2)];
-  };
-  const cB = midOf(rMin),
-    cA = midOf(rMax); // castles at the far vertical ends
-  // enough room to deploy a full company next to each castle, or the shape is no good
+  // enough open room to deploy a full company next to a keep
   const deployRoom = (c) => cells.filter((x) => hdist(x, c) <= shp.deployR).length;
-  if (deployRoom(cA) < shp.room || deployRoom(cB) < shp.room) return null;
-  // fountains sit on the flanks — the axis across from the castles (castles N/S
-  // → fountains E/W), well clear of both keeps, so healing means leaving your
-  // line for the side of the map.
-  const sx = (c) => c.q + c.r / 2; // a hex's screen-x, for true left/right
-  const rMid = (rMin + rMax) / 2;
-  const flankBand = cells.filter((c) => Math.abs(c.r - rMid) <= Math.max(2, (rMax - rMin) * 0.22));
-  const band = flankBand.length ? flankBand : cells;
-  const west = band.reduce((a, b) => (sx(b) < sx(a) ? b : a));
-  const east = band.reduce((a, b) => (sx(b) > sx(a) ? b : a));
+  // castles: the classic layout puts them at the far vertical ends; random mode
+  // drops them anywhere, so long as they're far enough apart for two full,
+  // separate deploy zones (never less than 3 hexes — here a clear gap).
+  let cA, cB;
+  if (shp.random) {
+    const minSep = 2 * shp.deployR;
+    for (let t = 0; t < 400 && !cA; t++) {
+      const a = cells[(Math.random() * cells.length) | 0];
+      const b = cells[(Math.random() * cells.length) | 0];
+      if (hdist(a, b) < minSep || deployRoom(a) < shp.room || deployRoom(b) < shp.room) continue;
+      cA = a;
+      cB = b;
+    }
+    if (!cA) return null;
+  } else {
+    const midOf = (rr) => {
+      const row = cells.filter((c) => c.r === rr).sort((a, b) => a.q - b.q);
+      return row[Math.floor(row.length / 2)];
+    };
+    cA = midOf(rMax);
+    cB = midOf(rMin);
+    if (deployRoom(cA) < shp.room || deployRoom(cB) < shp.room) return null;
+  }
   const castle = { A: hkey(cA.q, cA.r), B: hkey(cB.q, cB.r) };
-  const fount = { A: hkey(east.q, east.r), B: hkey(west.q, west.r) };
+  // fountains: classic layout sets them on the flanks (castles N/S → fountains
+  // E/W), clear of both keeps; random mode scatters them off the deploy zones.
+  let fA, fB;
+  const outOfZones = (c) => hdist(c, cA) > shp.deployR && hdist(c, cB) > shp.deployR;
+  if (shp.random) {
+    const cand = cells.filter(outOfZones);
+    fA = cand[(Math.random() * cand.length) | 0] || cA;
+    const far = cand.filter((c) => hdist(c, fA) >= 3);
+    const pool = far.length ? far : cand;
+    fB = pool[(Math.random() * pool.length) | 0] || cB;
+  } else {
+    const sx = (c) => c.q + c.r / 2; // a hex's screen-x, for true left/right
+    const rMid = (rMin + rMax) / 2;
+    const flankBand = cells.filter((c) => Math.abs(c.r - rMid) <= Math.max(2, (rMax - rMin) * 0.22));
+    const bandc = flankBand.length ? flankBand : cells;
+    fA = bandc.reduce((a, b) => (sx(b) > sx(a) ? b : a));
+    fB = bandc.reduce((a, b) => (sx(b) < sx(a) ? b : a));
+  }
+  const fount = { A: hkey(fA.q, fA.r), B: hkey(fB.q, fB.r) };
   const reserved = new Set([castle.A, castle.B, fount.A, fount.B]);
   const nearCastle = (c) => hdist(c, cA) <= shp.deployR || hdist(c, cB) <= shp.deployR;
   for (let attempt = 0; attempt < 60; attempt++) {
@@ -1343,10 +1374,9 @@ function tacticsBoardTry(R, erode, shp) {
     // spread apart, so neither side owns them and the middle is worth taking.
     const banners = [];
     if (shp.banners > 0) {
-      const cand = [...openSet]
-        .map(unhkey)
-        .filter((c) => !reserved.has(hkey(c.q, c.r)) && hdist(c, cA) >= 3 && hdist(c, cB) >= 3)
-        .sort((a, b) => Math.abs(a.r) - Math.abs(b.r) || hdist(a, { q: 0, r: 0 }) - hdist(b, { q: 0, r: 0 }));
+      const cand = [...openSet].map(unhkey).filter((c) => !reserved.has(hkey(c.q, c.r)) && hdist(c, cA) > shp.deployR && hdist(c, cB) > shp.deployR);
+      if (shp.random) cand.sort(() => Math.random() - 0.5);
+      else cand.sort((a, b) => Math.abs(a.r) - Math.abs(b.r) || hdist(a, { q: 0, r: 0 }) - hdist(b, { q: 0, r: 0 }));
       for (const c of cand) {
         if (banners.every((bk) => hdist(unhkey(bk), c) >= 3)) banners.push(hkey(c.q, c.r));
         if (banners.length >= shp.banners) break;
@@ -1359,9 +1389,9 @@ function tacticsBoardTry(R, erode, shp) {
 // A big, irregular island: chew a hexagon's edges into a jagged coast, keep the
 // largest piece, scatter rubble. Retries until it's playable; a plain hexagon
 // (no erosion) is the always-works fallback.
-function tacticsBoard(simple) {
-  const shp = tacticsShape(simple);
-  for (let tries = 0; tries < 40; tries++) {
+function tacticsBoard(simple, random) {
+  const shp = tacticsShape(simple, random);
+  for (let tries = 0; tries < 60; tries++) {
     const b = tacticsBoardTry(shp.R, true, shp);
     if (b) return b;
   }
@@ -1369,10 +1399,14 @@ function tacticsBoard(simple) {
 }
 
 function dealTactics(dealer, opts, tally) {
-  const simple = !!(opts && opts.simple);
+  const o = opts || {};
+  const simple = !!o.simple;
+  // house rules, baked onto the state so the engine reads them without threading opts
+  const rules = { flagAtk: o.flagAtk !== false, flagWin: o.flagWin !== false, flagHeal: !!o.flagHeal, random: o.random !== false };
   return {
     simple, // essential rules: two classes, fixed company of 4, small board, no banners
-    board: tacticsBoard(simple),
+    rules,
+    board: tacticsBoard(simple, rules.random),
     phase: "roster", // roster → deploy → battle
     roster: { A: null, B: null }, // drafted company (array of type keys), or null until chosen
     units: {}, // id → { id, owner, type, hp, max, q, r }
@@ -1615,9 +1649,11 @@ function tacticsAfterMove(g, mover) {
       }
     }
   }
-  // holding every flag at once wins the game outright
-  if (tacticsHoldsAll(g, "A")) return tacticsWin(g, "A", "flags");
-  if (tacticsHoldsAll(g, "B")) return tacticsWin(g, "B", "flags");
+  // king of the hill: holding every flag at once wins the game outright
+  if (g.rules.flagWin) {
+    if (tacticsHoldsAll(g, "A")) return tacticsWin(g, "A", "flags");
+    if (tacticsHoldsAll(g, "B")) return tacticsWin(g, "B", "flags");
+  }
   // the battle ends after the move cap — decide on flags held, then total HP
   if (g.moves >= TACT.MOVE_CAP) {
     const flags = (x) => g.board.banners.filter((k) => g.order.some((id) => g.units[id].owner === x && hkey(g.units[id].q, g.units[id].r) === k)).length;
@@ -1667,7 +1703,7 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     const d = hdist(unit, target);
     if (d < u.min || d > u.rng || (u.rng > 1 && !tacticsLoS(g, unit, target))) return null;
     const res = tacticsRoll(unit.hp);
-    const dmg = res.total + (g.board.banners.includes(uk) ? TACT.FLAG_DMG : 0); // +1 attacking from a flag
+    const dmg = res.total + (g.rules.flagAtk && g.board.banners.includes(uk) ? TACT.FLAG_DMG : 0); // +1 attacking from a flag
     const tpos = { q: target.q, r: target.r }; // remember the impact hex before anything dies
     target.hp -= dmg;
     const killed = target.hp <= 0;
@@ -1710,6 +1746,7 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   if (alive) {
     if (uk === g.board.castle[seat]) unit.hp = unit.max; // rally to full at your keep
     else if (uk === g.board.fount[seat]) unit.hp = Math.min(unit.max, unit.hp + 3);
+    else if (g.rules.flagHeal && g.board.banners.includes(uk)) unit.hp = Math.min(unit.max, unit.hp + 2); // flags mend (house rule)
   }
   g.last = { ...(roll || {}), unitId, to: uk };
   // holding the enemy castle doesn't win on contact: plant the siege and let it
