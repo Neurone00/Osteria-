@@ -235,11 +235,29 @@ const GAMES = {
     opts: [],
     def: {},
   },
+  paroliere: {
+    name: "Il Paroliere",
+    tag: "parole in tre minuti",
+    line: "Sedici lettere, tre minuti. Trova più parole che puoi unendo lettere vicine. Le parole trovate da entrambi si annullano: vince chi ne pesca di sue.",
+    en: { tag: "words in three minutes", line: "Sixteen letters, three minutes. Find as many words as you can by linking neighbouring letters. Words you both find cancel out — the rarest finds win." },
+    instant: true, // letter-dice grid — no card deck or shuffle ritual
+    cat: "dadi",
+    opts: [{ k: "secs", label: "Durata", cycle: [120, 180, 240], hint: "Secondi per ogni partita", le: "Round length", he: "Seconds per round" }],
+    def: { secs: 180 },
+  },
 };
 // game meta + option labels/hints in the current language
 const gtag = (g) => L(g.tag, g.en && g.en.tag);
 const gline = (g) => L(g.line, g.en && g.en.line);
 const isCard = (game) => !GAMES[game].dice;
+// Which shelf a game sits on, for the lobby filter pills. Explicit `cat` wins
+// (Paroliere is letter dice); otherwise derive from how it plays.
+const gameCat = (game) => GAMES[game].cat || (GAMES[game].dice ? "dadi" : GAMES[game].board ? "tavolo" : "carte");
+const GAME_CATS = [
+  ["carte", "Carte", "Cards"],
+  ["dadi", "Dadi", "Dice"],
+  ["tavolo", "Tavolo", "Board"],
+];
 // The shuffle-and-cut "mischia" ritual runs for every card game except the ones
 // dealt instantly (Peppa's trimmed deck). Scala uses it too, on its own 106-card
 // deck. `usesRitual` additionally gates the lobby's points/face toggles, which the
@@ -1504,6 +1522,138 @@ function flottaRepair(gs, seat, shipIndex, seg) {
   g.turn = other(seat);
   g.last = { t: "repair", seat };
   return { g, kind: "take", nojolt: true, ev: { t: "repair" } };
+}
+
+/* ── il paroliere (boggle) ─────────────────────────────────────
+   The Italian Boggle: a 4×4 tray of letter dice, three minutes, both players
+   hunt words at once. A word must be ≥3 letters and trace a path through
+   orthogonally/diagonally adjacent dice, never reusing a die. The app enforces
+   the tracing and cancels duplicates; whether a word is *real* is left to the
+   players, exactly as at the table. When time's up, words found by both are
+   struck out and the rest score by length. Q always rides with u as a "QU" die,
+   and there are no accents. Boards live in shared state; each player's list stays
+   local until time's up, then submits in sequence (A then B) so the two writes
+   never race. */
+const PAROL_N = 4;
+const PAROL_SECS = 180;
+const PAROL_KEYS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "L", "M", "N", "O", "P", "QU", "R", "S", "T", "U", "V", "Z"];
+// Weighted Italian letter bag (no accents, no J/K/W/X/Y). Q is drawn then shown
+// as the "QU" die.
+const PAROL_BAG = (() => {
+  const w = { A: 12, E: 12, I: 11, O: 10, U: 4, N: 7, L: 7, R: 7, T: 6, S: 6, C: 5, D: 4, M: 4, P: 3, B: 2, G: 2, V: 2, F: 2, H: 2, Z: 2, Q: 2 };
+  const bag = [];
+  for (const k in w) for (let i = 0; i < w[k]; i++) bag.push(k);
+  return bag;
+})();
+function parolBoard() {
+  for (let tries = 0; tries < 60; tries++) {
+    const cells = [];
+    for (let i = 0; i < PAROL_N * PAROL_N; i++) {
+      const c = PAROL_BAG[Math.floor(Math.random() * PAROL_BAG.length)];
+      cells.push(c === "Q" ? "QU" : c);
+    }
+    const vowels = cells.filter((c) => /[AEIOU]/.test(c)).length; // QU counts (has U)
+    if (vowels >= 5 && vowels <= 10) return cells;
+  }
+  return PAROL_BAG.slice(0, 16).map((c) => (c === "Q" ? "QU" : c));
+}
+const parolNeighbors = (cell) => {
+  const x = cell % PAROL_N,
+    y = (cell / PAROL_N) | 0,
+    out = [];
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nx = x + dx,
+        ny = y + dy;
+      if (nx >= 0 && nx < PAROL_N && ny >= 0 && ny < PAROL_N) out.push(ny * PAROL_N + nx);
+    }
+  return out;
+};
+// Can `word` (uppercase, no spaces) be traced on this board? A die may serve one
+// letter or two (a "QU" die), never reused within the word.
+function parolTrace(board, word) {
+  const rec = (pos, cell, used) => {
+    const ch = board[cell];
+    if (word.substr(pos, ch.length) !== ch) return false;
+    const np = pos + ch.length;
+    if (np === word.length) return true;
+    for (const nb of parolNeighbors(cell)) {
+      if (used.has(nb)) continue;
+      used.add(nb);
+      if (rec(np, nb, used)) return true;
+      used.delete(nb);
+    }
+    return false;
+  };
+  for (let c = 0; c < board.length; c++) if (rec(0, c, new Set([c]))) return true;
+  return false;
+}
+const parolPoints = (w) => (w.length <= 4 ? 1 : w.length === 5 ? 2 : w.length === 6 ? 3 : w.length === 7 ? 5 : 11);
+function dealParoliere(dealer, tally, opts) {
+  return {
+    phase: "ready", // ready → play → done
+    board: parolBoard(),
+    secs: opts?.secs || PAROL_SECS,
+    ready: { A: false, B: false },
+    deadline: null, // epoch ms; set when both are ready
+    words: { A: null, B: null }, // each seat's submitted list (null until in)
+    submitTurn: "A", // sequences the two submissions so they never race
+    turn: dealer, // unused by play, but the wrapper reads it
+    scores: { A: 0, B: 0 },
+    detail: null, // { A:[{w,pts,dup}], B:[...] } for the review
+    dealer,
+    tally: tally || { A: 0, B: 0 },
+    done: false,
+    matchDone: false,
+    win: null,
+  };
+}
+function parolReady(gs, seat) {
+  const g = clone(gs);
+  if (g.phase !== "ready" || g.ready[seat]) return null;
+  g.ready[seat] = true;
+  if (g.ready.A && g.ready.B) {
+    g.phase = "play";
+    g.deadline = Date.now() + g.secs * 1000;
+  }
+  return { g, quiet: true, ev: { t: "ready" } };
+}
+function parolScore(g) {
+  const A = g.words.A || [],
+    B = g.words.B || [];
+  const setA = new Set(A),
+    setB = new Set(B);
+  g.detail = {
+    A: A.map((w) => ({ w, dup: setB.has(w), pts: setB.has(w) ? 0 : parolPoints(w) })),
+    B: B.map((w) => ({ w, dup: setA.has(w), pts: setA.has(w) ? 0 : parolPoints(w) })),
+  };
+  g.scores.A = g.detail.A.reduce((s, x) => s + x.pts, 0);
+  g.scores.B = g.detail.B.reduce((s, x) => s + x.pts, 0);
+  g.phase = "done";
+  g.done = true;
+  g.matchDone = true;
+  g.win = g.scores.A === g.scores.B ? null : g.scores.A > g.scores.B ? "A" : "B";
+  if (g.win) g.tally[g.win] += 1;
+}
+// Submit a seat's word list. Only the seat whose turn it is may submit; the
+// second submission closes the round. Words are validated and de-duplicated
+// against the board here, so a tampered client can't score off-board words.
+function parolSubmit(gs, seat, words) {
+  const g = clone(gs);
+  if (g.phase !== "play" || g.words[seat] != null || g.submitTurn !== seat) return null;
+  const clean = [],
+    seen = new Set();
+  for (const raw of words || []) {
+    const w = String(raw).toUpperCase().replace(/[^A-Z]/g, "");
+    if (w.length < 3 || seen.has(w) || !parolTrace(g.board, w)) continue;
+    seen.add(w);
+    clean.push(w);
+  }
+  g.words[seat] = clean;
+  if (g.words[other(seat)] != null) parolScore(g);
+  else g.submitTurn = other(seat);
+  return { g, quiet: true, ev: { t: "submit" } };
 }
 
 /* ── scala 40 ──────────────────────────────────────────────────
@@ -3992,6 +4142,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [msg, setMsg] = useState("");
   const [link, setLink] = useState("waiting");
   const [pick, setPick] = useState(null);
+  const [cat, setCat] = useState(null); // lobby carousel filter: null=all | "carte" | "dadi" | "tavolo"
   const [sound, setSound] = useState(true);
   const [jolt, setJolt] = useState(false);
   const [slamId, setSlamId] = useState(null);
@@ -4731,6 +4882,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealBestiario(dealer, cont?.tally || null)
       : game === "flotta"
       ? dealFlotta(dealer, cont?.tally || null)
+      : game === "paroliere"
+      ? dealParoliere(dealer, cont?.tally || null, o)
       : dealCamicia(cont?.tally || null, deck);
 
   const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });
@@ -4916,8 +5069,16 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   if (room.status === "lobby") {
     const host = seat === "A";
     const g = GAMES[room.game];
-    const gkeys = Object.keys(GAMES);
+    const allKeys = Object.keys(GAMES);
+    // Only the host browses/filters; the guest always follows the host's pick.
+    const gkeys = host && cat ? allKeys.filter((k) => gameCat(k) === cat) : allKeys;
     const gIndex = Math.max(0, gkeys.indexOf(room.game));
+    const pickCat = (c) => {
+      const next = c === cat ? null : c;
+      setCat(next);
+      const list = next ? allKeys.filter((k) => gameCat(k) === next) : allKeys;
+      if (!list.includes(room.game)) pickGame(list[0]);
+    };
     const frontFace = (key, isMid) => {
       const gm = GAMES[key];
       return (
@@ -5024,8 +5185,25 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               {host ? L("Scorri · tocca per le regole", "Swipe · tap for rules") : L("Sceglie l’host", "Host picks")}
             </Micro>
           </div>
+          {host && (
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              {[["", L("Tutti", "All")], ...GAME_CATS.map(([k, it, en]) => [k, L(it, en)])].map(([k, label]) => {
+                const on = (k || null) === cat;
+                return (
+                  <button
+                    key={k || "all"}
+                    onClick={() => pickCat(k || null)}
+                    style={{ ...plain, flex: "1 1 0", padding: "6px 4px", borderRadius: 999, fontFamily: BRAND, fontWeight: 600, fontSize: 12, border: `1px solid ${on ? T.ink : T.line}`, background: on ? T.ink : "transparent", color: on ? T.bg : T.ink60, cursor: "pointer", WebkitTapHighlightColor: "transparent", transition: "background 160ms ease, color 160ms ease" }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div style={{ marginTop: 10 }}>
             <GameCarousel
+              key={cat || "all"}
               gkeys={gkeys}
               index={gIndex}
               host={host}
@@ -5091,6 +5269,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Bestiario room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "flotta" ? (
         <Flotta room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+      ) : room.game === "paroliere" ? (
+        <Paroliere room={room} gs={gs} seat={seat} commit={commit} />
       ) : (
         <Board
           room={room}
@@ -5499,7 +5679,7 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
       onMouseMove={onMove}
       onMouseUp={onUp}
       onMouseLeave={onUp}
-      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(52vh, 460px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "visible" }}
+      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(46vh, 430px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "visible" }}
     >
       {gkeys.map((key, i) => {
         const isMid = i === midIdx;
@@ -5593,6 +5773,16 @@ function GameArt({ game, size = 88 }) {
           <path d="M30 43.3h40M30 56.7h40M43.3 30v40M56.7 30v40" strokeWidth="1.4" />
           <circle cx="36.7" cy="63.3" r="4" fill={red} stroke="none" />
           <circle cx="63.3" cy="36.7" r="4" fill={ink} stroke="none" />
+        </g>
+      ); break;
+    case "paroliere":
+      art = (
+        <g>
+          <rect x="30" y="30" width="40" height="40" rx="4" fill="none" stroke={ink} strokeWidth="2" />
+          <path d="M30 43.3h40M30 56.7h40M43.3 30v40M56.7 30v40" stroke={ink} strokeWidth="1" opacity="0.5" fill="none" />
+          <text x="36.5" y="41.5" fontFamily={BRAND} fontSize="9" fontWeight="700" fill={ink} textAnchor="middle">P</text>
+          <text x="49.8" y="54.5" fontFamily={BRAND} fontSize="9" fontWeight="700" fill={red} textAnchor="middle">A</text>
+          <text x="63.2" y="67.5" fontFamily={BRAND} fontSize="9" fontWeight="700" fill={ink} textAnchor="middle">R</text>
         </g>
       ); break;
     case "flotta":
@@ -8296,6 +8486,204 @@ function Flotta({ room, gs, seat, mine, commit }) {
   );
 }
 
+/* ── il paroliere (boggle) ── */
+const PAROL_KB = [
+  ["A", "B", "C", "D", "E", "F", "G"],
+  ["H", "I", "L", "M", "N", "O", "P"],
+  ["QU", "R", "S", "T", "U", "V", "Z"],
+];
+function Paroliere({ room, gs, seat, commit }) {
+  const opp = other(seat);
+  const me = TSIDE[seat];
+  const [buf, setBuf] = useState("");
+  const [words, setWords] = useState([]); // my finds — LOCAL until time's up
+  const [flash, setFlash] = useState(null); // { kind, id }
+  const [now, setNow] = useState(() => Date.now());
+  const [showHelp, setShowHelp] = useState(false);
+  const submitted = useRef(false);
+
+  // fresh round → clear my local state
+  useEffect(() => {
+    if (gs.phase === "ready") {
+      setBuf("");
+      setWords([]);
+      submitted.current = false;
+    }
+  }, [gs.phase]);
+  // countdown ticker
+  useEffect(() => {
+    if (gs.phase !== "play") return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, [gs.phase]);
+  // brief feedback flashes
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 900);
+    return () => clearTimeout(t);
+  }, [flash]);
+
+  const remainMs = gs.phase === "play" && gs.deadline ? Math.max(0, gs.deadline - now) : gs.secs * 1000;
+  const timeUp = gs.phase === "play" && gs.deadline != null && remainMs <= 0;
+
+  // auto-submit at time's up, sequenced by submitTurn so the two writes never race
+  useEffect(() => {
+    if (gs.phase === "play" && timeUp && gs.words[seat] == null && gs.submitTurn === seat && !submitted.current) {
+      submitted.current = true;
+      commit(parolSubmit(gs, seat, words));
+    }
+  }, [timeUp, gs.submitTurn, gs.phase]);
+
+  const boardLetters = new Set(gs.board.join("").split(""));
+  const keyOk = (k) => (k === "QU" ? gs.board.includes("QU") : boardLetters.has(k));
+
+  const append = (ch) => {
+    if (timeUp) return;
+    setBuf((b) => b + ch);
+  };
+  const backspace = () => setBuf((b) => (b.endsWith("QU") ? b.slice(0, -2) : b.slice(0, -1)));
+  const enter = () => {
+    const w = buf.toUpperCase();
+    if (w.length < 3) return setFlash({ kind: "short", id: uid() });
+    if (words.includes(w)) return setFlash({ kind: "dup", id: uid() });
+    if (!parolTrace(gs.board, w)) return setFlash({ kind: "no", id: uid() });
+    setWords((ws) => [w, ...ws]);
+    setBuf("");
+    setFlash({ kind: "ok", id: uid() });
+  };
+
+  const mm = Math.floor(remainMs / 1000 / 60);
+  const ss = Math.floor((remainMs / 1000) % 60);
+  const clock = `${mm}:${String(ss).padStart(2, "0")}`;
+  const low = remainMs <= 30000;
+
+  const HelpSheet = showHelp && (
+    <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+      <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
+        <p style={{ margin: "0 0 10px" }}>{L("In tre minuti trova più parole che puoi. Ogni lettera si unisce a una vicina — anche in diagonale — senza riusare lo stesso dado.", "In three minutes find as many words as you can. Each letter links to a neighbour — diagonals too — without reusing the same die.")}</p>
+        <p style={{ margin: "0 0 10px" }}>{L("Parole di almeno 3 lettere. L’app controlla solo che la parola sia sul tabellone: se è una parola vera lo decidete voi.", "Words of at least 3 letters. The app only checks the word is on the board — whether it's a real word is up to you.")}</p>
+        <p style={{ margin: "0 0 10px" }}>{L("Punti per lunghezza: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Le parole trovate da entrambi si annullano.", "Points by length: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Words you both find cancel out.")}</p>
+        <p style={{ margin: 0 }}>{L("«Qu» è un dado solo e vale due lettere.", "“Qu” is a single die and counts as two letters.")}</p>
+      </div>
+    </Sheet>
+  );
+
+  const Board = ({ tappable, hidden }) => (
+    <div style={{ width: "min(78vw, 300px)", margin: "10px auto", aspectRatio: "1", display: "grid", gridTemplateColumns: `repeat(${PAROL_N},1fr)`, gridTemplateRows: `repeat(${PAROL_N},1fr)`, gap: 6 }}>
+      {gs.board.map((ch, i) => (
+        <div
+          key={i}
+          onClick={tappable ? () => append(ch) : undefined}
+          style={{ display: "grid", placeItems: "center", borderRadius: 8, background: T.paper, border: `1px solid ${T.line}`, boxShadow: "0 1px 3px rgba(18,18,18,0.12)", fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(18px, 6vw, 30px)", color: T.ink, cursor: tappable ? "pointer" : "default", userSelect: "none", WebkitTapHighlightColor: "transparent" }}
+        >
+          {hidden ? "·" : ch === "QU" ? "Qu" : ch}
+        </div>
+      ))}
+    </div>
+  );
+
+  // —— ready ——
+  if (gs.phase === "ready") {
+    const iReady = gs.ready[seat];
+    return (
+      <div style={{ paddingBottom: 30, textAlign: "center" }}>
+        {HelpSheet}
+        <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}>
+          <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Ico n="help" s={15} /> {L("come si gioca", "how to play")}
+          </button>
+        </div>
+        <div style={{ marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: me }}>{L("Pronti a cercare parole?", "Ready to hunt words?")}</div>
+        <Micro style={{ marginTop: 6 }}>{L("Il tabellone si scopre quando siete pronti entrambi.", "The board is revealed once you're both ready.")}</Micro>
+        <Board hidden />
+        <div style={{ marginTop: 6 }}>
+          {iReady ? (
+            <Micro>{gs.ready[opp] ? L("Si comincia…", "Starting…") : `${L("Pronto — aspetti", "Ready — waiting for")} ${who(room, opp)}`}</Micro>
+          ) : (
+            <Button full onClick={() => commit(parolReady(gs, seat))}>
+              {L("Via!", "Go!")}
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // —— time's up (submitting) / done ——
+  if (timeUp || gs.phase === "done") {
+    return (
+      <div style={{ paddingBottom: 30, textAlign: "center" }}>
+        <div style={{ marginTop: 10, fontFamily: BRAND, fontWeight: 700, fontSize: 22 }}>{L("Tempo scaduto", "Time's up")}</div>
+        <Micro style={{ marginTop: 6 }}>{gs.phase === "done" ? L("Ecco le parole.", "Here are the words.") : L("Conteggio…", "Counting…")}</Micro>
+        <Board />
+        <Micro style={{ marginTop: 6 }}>{L("parole trovate", "words found")}: {words.length}</Micro>
+      </div>
+    );
+  }
+
+  // —— play ——
+  return (
+    <div style={{ paddingBottom: 12 }}>
+      {HelpSheet}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 26, letterSpacing: "0.02em", color: low ? "#B23A2E" : T.ink }}>{clock}</div>
+        <Micro>{L("parole", "words")}: {words.length}</Micro>
+      </div>
+
+      <Board tappable />
+
+      {/* current word */}
+      <div style={{ minHeight: 40, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, letterSpacing: "0.04em", color: flash && flash.kind !== "ok" ? "#B23A2E" : T.ink, minHeight: 30 }}>
+          {buf ? (buf === buf.toUpperCase() ? buf.replace(/QU/g, "Qu") : buf) : <span style={{ color: T.ink30 }}>·</span>}
+        </div>
+      </div>
+      <div style={{ textAlign: "center", minHeight: 16 }}>
+        <Micro style={{ color: flash && flash.kind === "ok" ? "#2C7A4B" : "#B23A2E" }}>
+          {flash ? (flash.kind === "ok" ? L("presa!", "got it!") : flash.kind === "dup" ? L("già trovata", "already found") : flash.kind === "short" ? L("almeno 3 lettere", "at least 3 letters") : L("non è sul tabellone", "not on the board")) : ""}
+        </Micro>
+      </div>
+
+      {/* found words, most recent first */}
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "2px 2px 8px", minHeight: 26 }}>
+        {words.map((w, i) => (
+          <span key={i} style={{ flex: "0 0 auto", fontSize: 12, color: T.ink60, background: "rgba(18,18,18,0.05)", borderRadius: 6, padding: "3px 8px" }}>{w.toLowerCase()}</span>
+        ))}
+      </div>
+
+      {/* the simplified keyboard */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {PAROL_KB.map((row, r) => (
+          <div key={r} style={{ display: "flex", gap: 5, justifyContent: "center" }}>
+            {row.map((k) => {
+              const ok = keyOk(k);
+              return (
+                <button
+                  key={k}
+                  onClick={() => ok && append(k)}
+                  disabled={!ok}
+                  style={{ ...plain, flex: "1 1 0", maxWidth: 52, padding: "12px 0", borderRadius: 8, fontFamily: BRAND, fontWeight: 700, fontSize: 16, background: ok ? T.paper : "transparent", color: ok ? T.ink : T.ink30, border: `1px solid ${ok ? T.line : "transparent"}`, cursor: ok ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}
+                >
+                  {k === "QU" ? "Qu" : k}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 5, justifyContent: "center" }}>
+          <button onClick={backspace} disabled={!buf} style={{ ...plain, flex: "1 1 0", maxWidth: 90, padding: "12px 0", borderRadius: 8, fontSize: 18, border: `1px solid ${T.line}`, background: T.paper, color: buf ? T.ink : T.ink30, cursor: buf ? "pointer" : "default" }}>
+            ⌫
+          </button>
+          <button onClick={enter} disabled={buf.length < 3} style={{ ...plain, flex: "2 1 0", padding: "12px 0", borderRadius: 8, fontFamily: BRAND, fontWeight: 700, fontSize: 16, background: buf.length >= 3 ? T.ink : "rgba(18,18,18,0.12)", color: buf.length >= 3 ? T.bg : T.ink30, cursor: buf.length >= 3 ? "pointer" : "default" }}>
+            {L("Invia", "Enter")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── scala 40 ── */
 const S40_SUIT = { H: { g: "♥", c: "#B23A2E" }, D: { g: "♦", c: "#B23A2E" }, C: { g: "♣", c: "#1A1A1A" }, S: { g: "♠", c: "#1A1A1A" } };
 const s40lbl = (v) => ({ 1: "A", 11: "J", 12: "Q", 13: "K" }[v] || String(v));
@@ -9023,6 +9411,35 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
 
 /* ── summaries — the detail under the finale, no repeated headline ── */
 function Summary({ room, gs }) {
+  if (room.game === "paroliere" && gs.detail) {
+    const col = (s) => (
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontFamily: BRAND, fontWeight: 700, fontSize: 15, color: TSIDE[s] }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{who(room, s)}</span>
+          <span>{gs.scores[s]}</span>
+        </div>
+        <div style={{ marginTop: 6, maxHeight: 190, overflowY: "auto" }}>
+          {gs.detail[s].length === 0 && <Micro style={{ textTransform: "none", letterSpacing: 0 }}>{L("nessuna parola", "no words")}</Micro>}
+          {gs.detail[s].map((x, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "2px 0", color: x.dup ? T.ink30 : T.ink }}>
+              <span style={{ textDecoration: x.dup ? "line-through" : "none" }}>{x.w.toLowerCase()}</span>
+              <span style={{ color: x.dup ? T.ink30 : T.ink60 }}>{x.dup ? "—" : `+${x.pts}`}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+    return (
+      <div>
+        <Micro style={{ textAlign: "center", display: "block", marginBottom: 8 }}>{L("le parole in comune si annullano", "words in common cancel out")}</Micro>
+        <div style={{ display: "flex", gap: 16 }}>
+          {col("A")}
+          <div style={{ width: 1, background: T.line }} />
+          {col("B")}
+        </div>
+      </div>
+    );
+  }
   if (scopaLike(room.game) && gs.summary)
     return (
       <div>

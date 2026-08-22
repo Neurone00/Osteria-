@@ -12,6 +12,7 @@ opening a shared link. One player opens a table, the other joins. No accounts, n
 - **Diecimila** (dice) — six-dice press-your-luck; roll on to pile up points, but a scoreless roll (a *Farkle*) burns the turn
 - **Bestiario** (board) — a 5×5 duel of two Masters and eight Students, moved by animal cards that rotate between the players
 - **Flotta** (board) — battaglia navale on an 8×8 grid, but ships can maneuver and each side has three one-shot powers
+- **Il Paroliere** (dice) — the Italian Boggle: a 4×4 tray of letter dice, three minutes, find more words than your opponent
 
 Card games begin with a shuffle-and-cut ritual: one player taps the deck to shuffle (the randomness is seeded by
 the rhythm of their taps), the other drags to cut. Dice games throw on a phone shake (or a tap).
@@ -264,6 +265,25 @@ Plus three **powers, one use each**:
 Sink the entire enemy fleet to win. Like the card games, the fleets live in the shared state and are hidden only in
 the interface — fine among friends, readable by a determined snoop off the wire (see *Known gaps* in `CLAUDE.md`);
 enforcing real secrecy would need the Durable Object to hand each player a redacted view.
+
+### Il Paroliere
+
+The Italian **Boggle**. A **4×4** tray of letter dice, a **three-minute** timer (2 / 3 / 4 min are selectable), and
+both players hunt words at once. A word must be **≥3 letters** and trace a path through **adjacent dice** — diagonals
+included — never reusing a die.
+
+Input is a **simplified on-screen keyboard**: just the Italian letters, no accents, no autocorrect, so nothing leaks
+and nothing gets "helpfully" changed. Tapping a die on the board also appends its letter. **Q always rides with u** as
+a single **"Qu"** die that counts as two letters. Keys for letters not on the current board are dimmed.
+
+The app enforces the two things a phone does better than paper — it checks each word actually **traces on the board**
+and **cancels duplicates** — but whether a word is a *real* word is left to the players, exactly like the tabletop
+challenge. When time runs out the lists are compared: words found by **both players are struck out**, and the rest
+score by length (**3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11**). Highest total wins.
+
+Each player's list stays on their own device during play and submits only when the clock hits zero — the two
+submissions are sequenced (host first) so the writes never race. The board itself is shared, revealed to both only
+once both tap **Via!**.
 
 ## Layout
 

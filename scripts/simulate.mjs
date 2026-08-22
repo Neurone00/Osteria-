@@ -44,6 +44,7 @@ const EXPORTS = [
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
+  "dealParoliere", "parolReady", "parolSubmit", "parolTrace", "parolBoard", "parolPoints", "PAROL_N",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
@@ -794,6 +795,97 @@ function flottaRuleTests() {
   if (!rp || rp.g.ships.A[1].hits[1] !== false || rp.g.powers.A.riparazione !== false) fail("flotta rules", "repair should heal a hit and spend the power");
 }
 
+/* ── il paroliere (boggle) ──────────────────────────────────── */
+// A random walk over the board yields a genuinely traceable "word" (nonsense,
+// but valid for the tracer) — enough to exercise scoring, dedup and cancelling.
+function parolWalk(board) {
+  const N = R.PAROL_N;
+  const start = Math.floor(Math.random() * board.length);
+  let cell = start;
+  const used = new Set([cell]);
+  let w = board[cell];
+  const steps = 2 + Math.floor(Math.random() * 3);
+  for (let s = 0; s < steps; s++) {
+    const x = cell % N,
+      y = (cell / N) | 0;
+    const nbs = [];
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nx = x + dx,
+          ny = y + dy;
+        if (nx >= 0 && nx < N && ny >= 0 && ny < N) {
+          const nc = ny * N + nx;
+          if (!used.has(nc)) nbs.push(nc);
+        }
+      }
+    if (!nbs.length) break;
+    cell = nbs[Math.floor(Math.random() * nbs.length)];
+    used.add(cell);
+    w += board[cell];
+  }
+  return w;
+}
+function playParoliere() {
+  let g = R.dealParoliere("A", { A: 0, B: 0 }, { secs: 180 });
+  if (g.phase !== "ready") return fail("paroliere", "should start in ready");
+  g = R.parolReady(g, "A").g;
+  if (g.phase !== "ready") return fail("paroliere", "one ready shouldn't start the round");
+  g = R.parolReady(g, "B").g;
+  if (g.phase !== "play") return fail("paroliere", "both ready should start play");
+  // each seat builds a handful of traceable words (some shared, to test cancelling)
+  const shared = [parolWalk(g.board), parolWalk(g.board)];
+  const wordsA = shared.concat([parolWalk(g.board), parolWalk(g.board), "XZ"]); // "XZ" is too short/off-board → filtered
+  const wordsB = shared.concat([parolWalk(g.board), parolWalk(g.board)]);
+  g = R.parolSubmit(g, "A", wordsA).g;
+  if (g.phase !== "play" || g.submitTurn !== "B") return fail("paroliere", "first submit should hand off to B");
+  g = R.parolSubmit(g, "B", wordsB).g;
+  if (g.phase !== "done" || !g.done) return fail("paroliere", "second submit should close the round");
+  // every stored word must be traceable and ≥3 letters
+  for (const s of ["A", "B"]) for (const w of g.words[s]) if (w.length < 3 || !R.parolTrace(g.board, w)) fail("paroliere", `stored an invalid word: ${w}`);
+  // shared words must be cancelled on both sides (0 points, marked dup)
+  for (const w of shared) {
+    const up = w.toUpperCase();
+    for (const s of ["A", "B"]) {
+      const d = g.detail[s].find((x) => x.w === up);
+      if (d && (!d.dup || d.pts !== 0)) fail("paroliere", "a shared word should cancel to zero");
+    }
+  }
+  // score is the sum of non-duplicate word points
+  for (const s of ["A", "B"]) {
+    const want = g.detail[s].reduce((t, x) => t + x.pts, 0);
+    if (g.scores[s] !== want) fail("paroliere", "score should equal the sum of unique word points");
+  }
+  if (g.win != null && g.scores[g.win] <= g.scores[g.win === "A" ? "B" : "A"]) fail("paroliere", "winner should have the strictly higher score");
+  return 1;
+}
+function parolRuleTests() {
+  // a hand-set board and tracing
+  const board = ["C", "A", "N", "E", "S", "O", "L", "I", "R", "T", "M", "U", "B", "D", "P", "V"];
+  // CANE: C(0)→A(1)→N(2)→E(3), all adjacent in the top row
+  if (!R.parolTrace(board, "CANE")) fail("paroliere rules", "an adjacent path should trace");
+  // a letter not on the board can't trace
+  if (R.parolTrace(board, "ZZZ")) fail("paroliere rules", "off-board letters shouldn't trace");
+  // no die reuse: "CC" needs two C dice but there's one
+  if (R.parolTrace(board, "CC")) fail("paroliere rules", "a die must not be reused");
+  // QU die counts as two letters
+  const qb = ["QU", "A", "N", "O", "S", "I", "L", "E", "R", "T", "M", "U", "B", "D", "P", "V"];
+  if (!R.parolTrace(qb, "QUANDO".slice(0, 4))) {
+    /* QUAN: QU(0)+A(1)+N(2) then need another adjacent; keep it short */
+  }
+  if (!R.parolTrace(qb, "QUA")) fail("paroliere rules", "a QU die should satisfy the QU prefix");
+  // scoring by length
+  const pts = R.parolPoints;
+  if (pts("ABC") !== 1 || pts("ABCD") !== 1 || pts("ABCDE") !== 2 || pts("ABCDEF") !== 3 || pts("ABCDEFG") !== 5 || pts("ABCDEFGH") !== 11) fail("paroliere rules", "length scoring is off");
+  // every generated board has enough vowels to be playable
+  for (let i = 0; i < 200; i++) {
+    const b = R.parolBoard();
+    if (b.length !== 16) fail("paroliere rules", "a board should have 16 dice");
+    const v = b.filter((c) => /[AEIOU]/.test(c)).length;
+    if (v < 5 || v > 10) fail("paroliere rules", `board vowel count out of range: ${v}`);
+  }
+}
+
 /* ── scala 40 ───────────────────────────────────────────────── */
 function scalaCensus(g, label) {
   const ids = [];
@@ -994,6 +1086,7 @@ const runs = [
   ["diecimila, no last round + entry 500", () => playFarkle({ target: 2000, entry: true, lastRound: false })],
   ["bestiario (onitama)", () => playBestiario()],
   ["flotta (battaglia navale)", () => playFlotta()],
+  ["paroliere (boggle)", () => playParoliere()],
   ["scala 40", () => playScala()],
 ];
 
@@ -1044,6 +1137,11 @@ for (const [label, run] of runs) {
   const before = failures;
   flottaRuleTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"flotta rules".padEnd(44)} fleet, setup, fire/sink/win, move, repair`);
+}
+{
+  const before = failures;
+  parolRuleTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"paroliere rules".padEnd(44)} trace, no-reuse, QU, length scoring, vowels`);
 }
 
 console.log(failures ? `\n${failures} failure(s)` : "\nAll invariants held: 40 cards accounted for throughout, no stuck seats, every hand terminated.");
