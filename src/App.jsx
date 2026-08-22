@@ -8569,7 +8569,7 @@ function Paroliere({ room, gs, seat, commit }) {
     </Sheet>
   );
 
-  const Board = ({ tappable, hidden }) => (
+  const boardEl = (tappable, hidden) => (
     <div style={{ width: "min(78vw, 300px)", margin: "10px auto", aspectRatio: "1", display: "grid", gridTemplateColumns: `repeat(${PAROL_N},1fr)`, gridTemplateRows: `repeat(${PAROL_N},1fr)`, gap: 6 }}>
       {gs.board.map((ch, i) => (
         <div
@@ -8596,7 +8596,7 @@ function Paroliere({ room, gs, seat, commit }) {
         </div>
         <div style={{ marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: me }}>{L("Pronti a cercare parole?", "Ready to hunt words?")}</div>
         <Micro style={{ marginTop: 6 }}>{L("Il tabellone si scopre quando siete pronti entrambi.", "The board is revealed once you're both ready.")}</Micro>
-        <Board hidden />
+        {boardEl(false, true)}
         <div style={{ marginTop: 6 }}>
           {iReady ? (
             <Micro>{gs.ready[opp] ? L("Si comincia…", "Starting…") : `${L("Pronto — aspetti", "Ready — waiting for")} ${who(room, opp)}`}</Micro>
@@ -8616,7 +8616,7 @@ function Paroliere({ room, gs, seat, commit }) {
       <div style={{ paddingBottom: 30, textAlign: "center" }}>
         <div style={{ marginTop: 10, fontFamily: BRAND, fontWeight: 700, fontSize: 22 }}>{L("Tempo scaduto", "Time's up")}</div>
         <Micro style={{ marginTop: 6 }}>{gs.phase === "done" ? L("Ecco le parole.", "Here are the words.") : L("Conteggio…", "Counting…")}</Micro>
-        <Board />
+        {boardEl(false, false)}
         <Micro style={{ marginTop: 6 }}>{L("parole trovate", "words found")}: {words.length}</Micro>
       </div>
     );
@@ -8631,7 +8631,7 @@ function Paroliere({ room, gs, seat, commit }) {
         <Micro>{L("parole", "words")}: {words.length}</Micro>
       </div>
 
-      <Board tappable />
+      {boardEl(true, false)}
 
       {/* current word */}
       <div style={{ minHeight: 40, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
