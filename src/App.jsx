@@ -4264,7 +4264,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             <Back size="sm" />
             <Back size="sm" />
           </div>
-          <Micro style={{ marginTop: 16 }}>Distribuzione…</Micro>
+          <Micro style={{ marginTop: 16 }}>{L("Distribuzione…", "Dealing…")}</Micro>
         </div>
       </Frame>
     );
@@ -7767,19 +7767,19 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
     </div>
   );
 
-  if (step === "shuffle" && !amDealer) return wait(`${dealerName} mescola`, `${prep.shuffles} mescolate`);
+  if (step === "shuffle" && !amDealer) return wait(`${dealerName} ${L("mescola", "is shuffling")}`, `${prep.shuffles} ${L("mescolate", "shuffles")}`);
   if (step === "cut" && amDealer) {
     const at = prep.cutAt ?? 20;
     return (
       <div className="fade" style={{ textAlign: "center", paddingTop: 8 }}>
-        <Micro>{cutterName} taglia</Micro>
-        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>Guarda dove sta tagliando il mazzo…</p>
+        <Micro>{cutterName} {L("taglia", "cuts")}</Micro>
+        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>{L("Guarda dove sta tagliando il mazzo…", "Watch where they cut the deck…")}</p>
         {cutSpread(at, true)}
         <Micro>
-          {at} sopra · {prep.deck.length - at} sotto
+          {at} {L("sopra", "above")} · {prep.deck.length - at} {L("sotto", "below")}
         </Micro>
         <div style={{ marginTop: 22 }}>
-          <Micro>un attimo…</Micro>
+          <Micro>{L("un attimo…", "one moment…")}</Micro>
         </div>
       </div>
     );
@@ -7788,9 +7788,9 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
   if (step === "shuffle")
     return (
       <div className="fade" style={{ textAlign: "center", paddingTop: 8 }}>
-        <Micro>Mescola</Micro>
+        <Micro>{L("Mescola", "Shuffle")}</Micro>
         <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>
-          Tocca il mazzo per mescolare — o tienilo premuto per mescolare veloce. Il ritmo delle tue dita decide le carte.
+          {L("Tocca il mazzo per mescolare — o tienilo premuto per mescolare veloce. Il ritmo delle tue dita decide le carte.", "Tap the deck to shuffle — or hold to shuffle fast. Your fingers' rhythm decides the cards.")}
         </p>
         <button
           onPointerDown={startHold}
@@ -7815,10 +7815,10 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
           </span>
         </button>
         <div style={{ fontFamily: BRAND, fontSize: 30, fontWeight: 700, lineHeight: 1 }}>{prep.shuffles}</div>
-        <Micro style={{ marginTop: 2 }}>mescolate</Micro>
+        <Micro style={{ marginTop: 2 }}>{L("mescolate", "shuffles")}</Micro>
         <div style={{ marginTop: 22 }}>
           <Button full disabled={prep.shuffles < 1} onClick={shuffleDone}>
-            {prep.shuffles < 1 ? "Tocca per mescolare" : `Passa il taglio a ${cutterName}`}
+            {prep.shuffles < 1 ? L("Tocca per mescolare", "Tap to shuffle") : `${L("Passa il taglio a", "Pass the cut to")} ${cutterName}`}
           </Button>
         </div>
       </div>
@@ -7827,17 +7827,17 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
   // cut, shown to the non-dealer
   return (
     <div className="fade" style={{ textAlign: "center", paddingTop: 8 }}>
-      <Micro>Taglia</Micro>
+      <Micro>{L("Taglia", "Cut")}</Micro>
       <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>
-        Trascina lungo il mazzo per scegliere dove tagliare, poi conferma.
+        {L("Trascina lungo il mazzo per scegliere dove tagliare, poi conferma.", "Drag along the deck to choose where to cut, then confirm.")}
       </p>
       {cutSpread(cutAt, false)}
       <Micro>
-        {cutAt} sopra · {prep.deck.length - cutAt} sotto
+        {cutAt} {L("sopra", "above")} · {prep.deck.length - cutAt} {L("sotto", "below")}
       </Micro>
       <div style={{ marginTop: 22 }}>
         <Button full onClick={() => cutAndDeal(cutAt)}>
-          Taglia e distribuisci
+          {L("Taglia e distribuisci", "Cut and deal")}
         </Button>
       </div>
     </div>
