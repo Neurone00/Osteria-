@@ -3898,6 +3898,28 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     seenAnim.current = room.anim?.id ?? null;
   }, [room]);
 
+  /* ── swallow the browser Back button while at a table ── a stray back would
+     drop the game with no way back in. Trap it and offer the explicit leave. ── */
+  useEffect(() => {
+    if (screen !== "table") return;
+    let armed = true;
+    try {
+      history.pushState({ osteria: true }, "");
+    } catch {}
+    const onPop = () => {
+      if (!armed) return;
+      try {
+        history.pushState({ osteria: true }, "");
+      } catch {}
+      setAskLeave(true);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      armed = false;
+      window.removeEventListener("popstate", onPop);
+    };
+  }, [screen]);
+
   /* ── animation trigger, local and remote ── */
   useEffect(() => {
     const a = room?.anim;
@@ -4830,8 +4852,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 ))}
               </div>
             </div>
-            <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6 }}>
-              {seated ? `${room.names.B} è al tavolo` : "In attesa del secondo giocatore…"}
+            <Micro style={{ textAlign: "right", maxWidth: 140, lineHeight: 1.6 }}>
+              {host
+                ? seated
+                  ? `${room.names.B} è al tavolo`
+                  : "In attesa del secondo giocatore…"
+                : `Sei il 2º giocatore${room.names.A ? ` · sfidi ${room.names.A}` : ""}`}
             </Micro>
           </div>
 
