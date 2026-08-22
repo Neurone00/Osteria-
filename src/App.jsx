@@ -5215,7 +5215,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
           )}
         </div>
         <div style={{ display: "flex", gap: gs.hands[seat].length > 3 ? 5 : 8, justifyContent: "center", minHeight: 96, flexWrap: "wrap" }}>
-          {gs.hands[seat].map((c) => (
+          {[...gs.hands[seat]].sort((a, b) => a.v - b.v || (a.s < b.s ? -1 : 1)).map((c) => (
             <Card
               key={c.id}
               card={c}
