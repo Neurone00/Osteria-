@@ -1178,8 +1178,8 @@ function s40Discard(gs, seat, cardId) {
    current HP, and because a wounded die hits weaker, an attack rolls 1..HP —
    the die literally shrinks as it takes damage. Rolling the top face (≥2)
    explodes for a crit. Six classes (Fante, Arciere, Esploratore, Balestriere,
-   Fromboliere, Mago — the Mago's attack blasts everything within 2 of the
-   target), each a die with its own move, range and point cost; draft a company
+   Fromboliere, Mago — the Mago aims two adjacent hexes and hits every unit in
+   them, friend or foe), each a die with its own move, range and point cost; draft a company
    under a budget. Deploy near your castle, then fight in strict alternation —
    one move each, back and forth. A unit may move twice, then it rests for a turn
    (a side's lone survivor never rests, so it's never stuck). Heal at your castle
@@ -1220,7 +1220,7 @@ const TACT = {
     esploratore: { name: "Esploratore", max: 2, move: 4, min: 1, rng: 1, cost: 3, icon: "compass" }, // d2 scout: races across the map, but soft (two hits and it's gone)
     balestriere: { name: "Balestriere", max: 8, move: 1, min: 2, rng: 4, cost: 5, icon: "crossbow" }, // d8 slow sniper, 2–4
     fromboliere: { name: "Fromboliere", max: 4, move: 3, min: 1, rng: 2, cost: 2, icon: "sling" }, // d4 cheap skirmisher
-    mago: { name: "Mago", max: 6, move: 2, min: 2, rng: 3, cost: 5, icon: "spark", aoe: 2 }, // d6 blast: hits everything within 2 of the target
+    mago: { name: "Mago", max: 6, move: 2, min: 2, rng: 3, cost: 5, icon: "spark", aoe: true }, // d6 area caster: aims two adjacent hexes, hits friend and foe in both
   },
 };
 const TYPE_ORDER = ["fante", "arciere", "esploratore", "balestriere", "fromboliere", "mago"];
@@ -1666,40 +1666,62 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   let roll = null;
   if (action && action.kind === "attack") {
     if (tacticsHeals(g, seat, uk)) return null; // healing on your keep/fountain — can't also attack
+    const u = TACT.units[unit.type];
+    if (u.aoe) return null; // area casters aim two hexes — see the blast branch below
     const target = g.units[action.targetId];
     if (!target || target.owner === seat) return null;
-    const u = TACT.units[unit.type];
     const d = hdist(unit, target);
     if (d < u.min || d > u.rng || (u.rng > 1 && !tacticsLoS(g, unit, target))) return null;
     const res = tacticsRoll(unit.hp);
     const bonus = g.rules.flagAtk && g.board.banners.includes(uk) ? TACT.FLAG_DMG : 0; // +1 attacking from a flag
     const dmg = res.total + bonus;
-    const tpos = { q: target.q, r: target.r }; // remember the impact hex before anything dies
     target.hp -= dmg;
     const killed = target.hp <= 0;
     if (killed) {
       delete g.units[action.targetId];
       g.order = g.order.filter((id) => id !== action.targetId);
     }
-    // a Mago's blast splashes the same damage onto every other enemy within its aoe
-    let splash = 0;
-    if (u.aoe) {
-      for (const id of [...g.order]) {
-        const o = g.units[id];
-        if (!o || o.owner === seat || id === action.targetId) continue;
-        if (hdist(tpos, o) <= u.aoe) {
-          o.hp -= dmg;
-          splash += 1;
-          if (o.hp <= 0) {
-            delete g.units[id];
-            g.order = g.order.filter((x) => x !== id);
-          }
-        }
+    roll = { attacker: unitId, target: action.targetId, atkType: unit.type, tgtType: target.type, dmg, crit: res.crit, killed, rolls: res.rolls, bonus, die: unit.hp };
+    ev = { t: "attack", unit: unit.type, target: target.type, dmg, crit: res.crit, killed, splash: 0 };
+    kind = res.crit ? "scopa" : "take"; // a crit gets the big slam + shake
+  } else if (action && action.kind === "blast") {
+    // area caster: it aims a first hex (in range, in sight, not an obstacle) plus
+    // one adjacent second hex, and the same roll lands on every unit standing in
+    // those two hexes — friend or foe. The caster is out at range, so it's never
+    // caught in its own blast.
+    if (tacticsHeals(g, seat, uk)) return null;
+    const u = TACT.units[unit.type];
+    if (!u.aoe) return null;
+    const [k1, k2] = action.cells || [];
+    if (!k1 || !k2 || k1 === k2) return null;
+    if (g.board.blocked[k1] || g.board.blocked[k2]) return null; // neither hex can be an obstacle
+    const c1 = unhkey(k1),
+      c2 = unhkey(k2);
+    const d1 = hdist(unit, c1);
+    if (d1 < u.min || d1 > u.rng) return null; // the aimed hex is within range
+    if (u.rng > 1 && !tacticsLoS(g, unit, c1)) return null; // and in line of sight
+    if (hdist(c1, c2) !== 1) return null; // the second hex borders the first
+    const area = new Set([k1, k2]);
+    const hits = g.order.filter((id) => id !== unitId && area.has(hkey(g.units[id].q, g.units[id].r)));
+    if (!hits.length) return null; // the blast has to catch at least one unit
+    const res = tacticsRoll(unit.hp);
+    const bonus = g.rules.flagAtk && g.board.banners.includes(uk) ? TACT.FLAG_DMG : 0;
+    const dmg = res.total + bonus;
+    let killed = 0,
+      tgtType = null;
+    for (const id of hits) {
+      const o = g.units[id];
+      if (!tgtType || o.owner !== seat) tgtType = o.type; // prefer an enemy as the reveal label
+      o.hp -= dmg;
+      if (o.hp <= 0) {
+        delete g.units[id];
+        g.order = g.order.filter((x) => x !== id);
+        killed += 1;
       }
     }
-    roll = { attacker: unitId, target: action.targetId, atkType: unit.type, tgtType: target.type, dmg, crit: res.crit, killed, rolls: res.rolls, bonus, die: unit.hp };
-    ev = { t: "attack", unit: unit.type, target: target.type, dmg, crit: res.crit, killed, splash };
-    kind = res.crit ? "scopa" : "take"; // a crit gets the big slam + shake
+    roll = { attacker: unitId, atkType: unit.type, tgtType, dmg, crit: res.crit, killed: killed > 0, rolls: res.rolls, bonus, die: unit.hp, blast: true };
+    ev = { t: "attack", unit: unit.type, target: tgtType, dmg, crit: res.crit, killed: killed > 0, splash: Math.max(0, hits.length - 1) };
+    kind = res.crit ? "scopa" : "take";
   }
   // castle bombardment: a unit that ends its turn adjacent to the ENEMY castle
   // (but not standing in it — that's a siege, resolved below) is shelled for 2.
@@ -5628,7 +5650,7 @@ const TACT_SLIDES = [
   { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6, Esploratore d2." },
   { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
   { icon: "burst", title: "Il colpo pieno esplode", body: "Se tiri la faccia più alta è un Critico: rilanci il dado e sommi. Può incatenarsi — un colpo può valere doppio o più." },
-  { icon: "spark", title: "Il Mago colpisce in area", body: "Tira da lontano (2–3 caselle) e lo stesso danno investe ogni nemico entro 2 dal bersaglio. Non colpisce chi ha addosso." },
+  { icon: "spark", title: "Il Mago colpisce due caselle", body: "Miri una casella a tiro (2–3, non un ostacolo) e una vicina: lo stesso danno investe chiunque stia lì — anche le tue pedine. Attento al fuoco amico." },
   { icon: "bow", title: "Uno per uno", body: "A turno, una mossa a testa: attivi una pedina (la sposti e attacchi), fino a due volte prima che riposi." },
   { icon: "flag", title: "Come si vince", body: "Stermina l’altro, espugna il suo castello (tienilo un turno sotto tiro), o conquista tutti gli stendardi. Uno stendardo dà +1 danno a chi ci combatte." },
 ];
@@ -5725,6 +5747,7 @@ function Tactics({ room, gs, seat, commit }) {
   const canPlay = myTurn && gs.phase === "battle"; // battle: act on your own units when it's your move
   const [sel, setSel] = useState(null); // selected own unit id (battle)
   const [dest, setDest] = useState(null); // staged move hex key
+  const [blast, setBlast] = useState(null); // area caster's aim: { a: hexKey, b: hexKey|null }
   const [inspect, setInspect] = useState(null); // enemy unit id being previewed (move + range)
   const [info, setInfo] = useState(null); // tapped element info: { k:"unit", id } | { k, side } for terrain
   // setup (roster + deployment) is done locally and privately, then locked in
@@ -5831,6 +5854,27 @@ function Tactics({ room, gs, seat, commit }) {
   const staged = { ...unit, ...stagePos };
   const targetIds = active && !healing ? tacticsTargets({ ...gs, units: { ...gs.units, [sel]: staged } }, staged) : [];
   const targetSet = new Set(targetIds.map((id) => hkey(gs.units[id].q, gs.units[id].r)));
+  // area caster (Mago): aims a first hex (an enemy in range) then a bordering
+  // second hex; the roll lands on every unit in the two — friend or foe.
+  const isMage = active && !healing && !!TACT.units[unit.type].aoe;
+  const cellKeys = new Set(board.cells.map((c) => hkey(c.q, c.r)));
+  const mateSet = new Set();
+  if (isMage && blast && blast.a) {
+    const a = unhkey(blast.a);
+    for (const [dq, dr] of HEX_DIRS) {
+      const nk = hkey(a.q + dq, a.r + dr);
+      if (cellKeys.has(nk) && !board.blocked[nk]) mateSet.add(nk);
+    }
+  }
+  const fireBlast = () => {
+    if (!sel || !blast || !blast.a || !blast.b) return;
+    commit(tacticsActivate(gs, seat, sel, dest, { kind: "blast", cells: [blast.a, blast.b] }));
+    setSel(null);
+    setDest(null);
+    setBlast(null);
+    setInspect(null);
+    setInfo(null);
+  };
   // the whole area this unit threatens from where it will stand — open hexes in
   // attack range with line of sight, so you can see its reach before committing
   const threatSet = new Set();
@@ -5882,6 +5926,17 @@ function Tactics({ room, gs, seat, commit }) {
       } else if (sp) setInfo(sp); // tap a keep/fountain/flag for info even while placing
       return;
     }
+    // area caster mid-aim: an adjacent hex fixes the second target (or clears it)
+    if (canPlay && unit && isMage && blast && blast.a) {
+      if (k === blast.a) {
+        setBlast(null);
+        return;
+      }
+      if (!blast.b && mateSet.has(k)) {
+        setBlast({ a: blast.a, b: k });
+        return;
+      }
+    }
     // battle: moving has priority when a unit of yours is selected on your turn
     if (canPlay && unit) {
       const uk = hkey(unit.q, unit.r);
@@ -5891,6 +5946,7 @@ function Tactics({ room, gs, seat, commit }) {
       }
       if (reach[k] !== undefined) {
         setDest(k);
+        setBlast(null);
         return;
       }
     }
@@ -5901,18 +5957,45 @@ function Tactics({ room, gs, seat, commit }) {
     if (moved.current) return;
     const u = gs.units[id];
     if (!u) return;
+    const hk = hkey(u.q, u.r);
+    // an aiming Mago claims taps first: a valid enemy fixes the first hex, then any
+    // unit on a bordering hex (even one of yours) fixes the second — before the
+    // usual select / attack / inspect.
+    if (canPlay && sel && isMage) {
+      if (!blast || !blast.a) {
+        if (targetIds.includes(id)) {
+          setBlast({ a: hk, b: null });
+          setInfo({ k: "unit", id });
+          return;
+        }
+      } else if (!blast.b) {
+        if (hk === blast.a) {
+          setBlast(null);
+          return;
+        }
+        if (mateSet.has(hk)) {
+          setBlast({ a: blast.a, b: hk });
+          setInfo({ k: "unit", id });
+          return;
+        }
+      } else if (hk === blast.a) {
+        setBlast(null);
+        return;
+      }
+    }
     setInfo({ k: "unit", id }); // tapping any unit shows its card
     if (gs.phase !== "battle") return;
     if (u.owner === seat) {
       if (canPlay && tacticsReady(gs, id)) {
         setSel(id);
         setDest(null);
+        setBlast(null);
         setInspect(null);
       }
       return;
     }
-    // enemy unit: attack it if it's a valid target, otherwise preview its reach
-    if (canPlay && sel && targetIds.includes(id)) {
+    // enemy unit: single-target attack (non-casters), otherwise preview its reach
+    if (canPlay && sel && !isMage && targetIds.includes(id)) {
       commit(tacticsActivate(gs, seat, sel, dest, { kind: "attack", targetId: id }));
       setSel(null);
       setDest(null);
@@ -5927,6 +6010,7 @@ function Tactics({ room, gs, seat, commit }) {
     commit(tacticsActivate(gs, seat, sel, dest, null));
     setSel(null);
     setDest(null);
+    setBlast(null);
     setInspect(null);
   };
   // lock in the whole setup (company + placements); if it isn't our turn to
@@ -6020,7 +6104,13 @@ function Tactics({ room, gs, seat, commit }) {
       ? `Pronto — aspetto ${who(room, other(seat))}`
       : "Compagnia schierata — conferma"
     : sel
-    ? healing
+    ? isMage
+      ? blast && blast.a && blast.b
+        ? "Due caselle in mira — Lancia"
+        : blast && blast.a
+        ? "Scegli la 2ª casella, accanto alla prima"
+        : "Tocca un nemico per mirare — colpisce due caselle, anche i tuoi"
+      : healing
       ? "In cura qui — niente attacco"
       : dest
       ? "Tocca un nemico in rosso, o Fermati qui"
@@ -6130,6 +6220,9 @@ function Tactics({ room, gs, seat, commit }) {
               const isInsReach = insReach[k] !== undefined;
               const isInsThreat = insThreatSet.has(k);
               const isInsHex = insUnit && k === hkey(insUnit.q, insUnit.r);
+              const isAimA = blast && blast.a === k; // Mago's first target hex
+              const isAimB = blast && blast.b === k; // its bordering second hex
+              const isMate = isMage && blast && blast.a && !blast.b && mateSet.has(k); // candidate second hexes
               let fill = blocked ? "rgba(18,18,18,0.28)" : "rgba(255,255,255,0.9)";
               if (sp && sp.kind === "fount") fill = "rgba(44,120,160,0.22)";
               if (sp && sp.kind === "banner") fill = sp.side ? rgbaOf(TSIDE[sp.side], 0.2) : "rgba(184,134,43,0.16)"; // contested field objective
@@ -6139,7 +6232,13 @@ function Tactics({ room, gs, seat, commit }) {
               if (isReach || isDest) fill = "rgba(46,120,90,0.30)"; // where you can move
               if (isDeploy) fill = "rgba(184,134,43,0.24)";
               if (isTarget) fill = "rgba(165,52,47,0.34)"; // an enemy you can hit
-              const stroke = isSelHex
+              if (isMate) fill = "rgba(233,181,75,0.26)"; // where the blast can spill
+              if (isAimA || isAimB) fill = "rgba(233,181,75,0.5)"; // the two hexes it will hit
+              const stroke = isAimA || isAimB
+                ? "#C98A1A"
+                : isMate
+                ? "#E9B54B"
+                : isSelHex
                 ? me
                 : isTarget
                 ? "#A5342F"
@@ -6162,10 +6261,10 @@ function Tactics({ room, gs, seat, commit }) {
                     points={tCorners(p.x, p.y)}
                     fill={fill}
                     stroke={stroke}
-                    strokeWidth={isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat || (sp && sp.kind === "banner") ? 1.5 : 1}
-                    className={isTarget || isDeploy ? "hexpulse" : ""}
+                    strokeWidth={isAimA || isAimB ? 2.6 : isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat || isMate || (sp && sp.kind === "banner") ? 1.5 : 1}
+                    className={isTarget || isDeploy || isMate ? "hexpulse" : ""}
                     onClick={() => tapHex(k)}
-                    style={{ cursor: isDeploy || (canPlay && (isReach || isTarget || isDest || isSelHex)) ? "pointer" : "default" }}
+                    style={{ cursor: isDeploy || (canPlay && (isReach || isTarget || isDest || isSelHex || isAimA || isAimB || isMate)) ? "pointer" : "default" }}
                   />
                   {sp && (
                     <g transform={`translate(${p.x - 7} ${p.y - 7})`} style={{ pointerEvents: "none" }}>
@@ -6240,7 +6339,7 @@ function Tactics({ room, gs, seat, commit }) {
           icon = d.icon;
           tint = TSIDE[iu.owner];
           title = `${d.name}${iu.owner !== seat ? " · nemico" : ""}`;
-          desc = `d${d.max} · vita ${iu.hp}/${iu.max} · muove ${d.move} · tiro ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.aoe ? ` · l’attacco investe ogni nemico entro ${d.aoe} dal bersaglio` : ""}`;
+          desc = `d${d.max} · vita ${iu.hp}/${iu.max} · muove ${d.move} · tiro ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.aoe ? ` · colpisce due caselle vicine (anche i tuoi)` : ""}`;
         } else if (it.kind === "castle") {
           icon = "castle";
           tint = TSIDE[it.side];
@@ -6304,20 +6403,31 @@ function Tactics({ room, gs, seat, commit }) {
       )}
 
       {gs.phase === "battle" && canPlay && sel && (
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          {dest ? (
-            <Button kind="outline" full onClick={() => setDest(null)}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> Annulla mossa</span>
+        isMage && blast && blast.a ? (
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <Button kind="outline" full onClick={() => setBlast(null)}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> Annulla mira</span>
             </Button>
-          ) : (
-            <Button kind="outline" full onClick={() => { setSel(null); setDest(null); }}>
-              Deseleziona
+            <Button kind="solid" full tone={me} disabled={!blast.b} onClick={fireBlast}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="spark" s={15} /> {blast.b ? "Lancia" : "Scegli la 2ª casella"}</span>
             </Button>
-          )}
-          <Button kind="solid" full tone={me} onClick={endUnit}>
-            {healing ? "Curati qui" : dest ? "Fermati qui" : "Passa"}
-          </Button>
-        </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            {dest ? (
+              <Button kind="outline" full onClick={() => setDest(null)}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> Annulla mossa</span>
+              </Button>
+            ) : (
+              <Button kind="outline" full onClick={() => { setSel(null); setDest(null); setBlast(null); }}>
+                Deseleziona
+              </Button>
+            )}
+            <Button kind="solid" full tone={me} onClick={endUnit}>
+              {healing ? "Curati qui" : dest ? "Fermati qui" : "Passa"}
+            </Button>
+          </div>
+        )
       )}
 
       <Micro style={{ textAlign: "center", marginTop: 12 }}>

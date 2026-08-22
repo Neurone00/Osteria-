@@ -37,7 +37,7 @@ const EXPORTS = [
   "dealCamicia", "camiciaFlip", "demand",
   "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed", "peppaShuffle", "peppaReady", "peppaReorder", "peppaOffer",
   "TACT", "dealTactics", "tacticsSetup", "tacticsActivate", "tacticsReach", "tacticsTargets",
-  "tacticsRoll", "tacticsDeployable", "tacticsBoard", "hdist", "hkey", "unhkey",
+  "tacticsRoll", "tacticsDeployable", "tacticsBoard", "hdist", "hkey", "unhkey", "HEX_DIRS",
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
@@ -370,7 +370,25 @@ function playTactics() {
     // resting on your own castle/fountain heals but forbids an attack that turn
     const finalKey = to || R.hkey(g.units[uid].q, g.units[uid].r);
     const healing = finalKey === g.board.castle[seat] || finalKey === g.board.fount[seat];
-    const action = !healing && tgts.length && Math.random() < 0.9 ? { kind: "attack", targetId: tgts[Math.floor(Math.random() * tgts.length)] } : null;
+    const isMage = !!R.TACT.units[g.units[uid].type].aoe;
+    let action = null;
+    if (!healing && tgts.length && Math.random() < 0.9) {
+      if (isMage) {
+        // the Mago aims a first enemy hex, then a bordering non-obstacle hex
+        const tid = tgts[Math.floor(Math.random() * tgts.length)];
+        const t = probe.units[tid];
+        const k1 = R.hkey(t.q, t.r);
+        const cellSet = new Set(g.board.cells.map((c) => R.hkey(c.q, c.r)));
+        const mates = [];
+        for (const [dq, dr] of R.HEX_DIRS) {
+          const nk = R.hkey(t.q + dq, t.r + dr);
+          if (cellSet.has(nk) && !g.board.blocked[nk]) mates.push(nk);
+        }
+        if (mates.length) action = { kind: "blast", cells: [k1, mates[Math.floor(Math.random() * mates.length)]] };
+      } else {
+        action = { kind: "attack", targetId: tgts[Math.floor(Math.random() * tgts.length)] };
+      }
+    }
     const res = R.tacticsActivate(g, seat, uid, to, action);
     if (!res) return fail("tactics", "activate refused a move it validated as legal");
     g = res.g;
