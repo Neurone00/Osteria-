@@ -4852,12 +4852,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 ))}
               </div>
             </div>
-            <Micro style={{ textAlign: "right", maxWidth: 140, lineHeight: 1.6 }}>
-              {host
-                ? seated
-                  ? `${room.names.B} è al tavolo`
-                  : "In attesa del secondo giocatore…"
-                : `Sei il 2º giocatore${room.names.A ? ` · sfidi ${room.names.A}` : ""}`}
+            <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6 }}>
+              {seated ? `${room.names.B} è al tavolo` : "In attesa del secondo giocatore…"}
             </Micro>
           </div>
 
