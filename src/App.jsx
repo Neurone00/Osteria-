@@ -2687,18 +2687,19 @@ const Micro = ({ children, style }) => (
 
 // `soft` is a muted look for an action that isn't legal yet but is still
 // tappable — the handler explains what's missing rather than dead-ending.
-function Button({ children, onClick, disabled, soft, kind = "solid", full }) {
+function Button({ children, onClick, disabled, soft, kind = "solid", full, tone }) {
   const solid = kind === "solid";
   const muted = disabled || soft;
+  const ink = tone || T.ink; // a side can tint its own controls (Condottieri: blue vs red)
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       style={{
         width: full ? "100%" : "auto",
-        background: muted ? "transparent" : solid ? T.ink : "transparent",
-        color: muted ? T.ink30 : solid ? T.bg : T.ink,
-        border: `1.5px solid ${muted ? T.line : T.ink}`,
+        background: muted ? "transparent" : solid ? ink : "transparent",
+        color: muted ? T.ink30 : solid ? T.bg : ink,
+        border: `1.5px solid ${muted ? T.line : ink}`,
         borderRadius: 12,
         padding: solid ? "15px 18px" : "13px 16px",
         fontFamily: BRAND,
@@ -4627,7 +4628,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
 
           {g.opts.length > 0 && (
             <div style={{ marginTop: 20 }}>
-              <Accordion label={`Regole della casa${host ? "" : " · le sceglie l’host"}`}>
+              <Accordion label={`Regole della casa${host ? "" : " · le sceglie l’host"}`} open={!!g.board}>
                 <RuleChips conf={g} opts={room.opts} setOpt={host ? setOpt : null} />
               </Accordion>
             </div>
@@ -5609,7 +5610,7 @@ function TacticsHowTo({ onClose }) {
 
 // The recruit screen (full rules): spend a budget across the pool of classes,
 // building a company of 3–6. Tap a class to add it, tap a drafted chip to drop it.
-function TacticsDraft({ draft, setDraft, onConfirm }) {
+function TacticsDraft({ draft, setDraft, onConfirm, tone }) {
   const spent = tacticsCompanyCost(draft);
   const left = TACT.BUDGET - spent;
   const full = draft.length >= TACT.MAX_UNITS;
@@ -5660,7 +5661,7 @@ function TacticsDraft({ draft, setDraft, onConfirm }) {
         ))}
       </div>
       <div style={{ marginTop: 10 }}>
-        <Button kind="solid" full onClick={onConfirm} disabled={!ready}>
+        <Button kind="solid" full tone={tone} onClick={onConfirm} disabled={!ready}>
           {ready ? `Schiera ${draft.length} pedine` : `Almeno ${TACT.MIN_UNITS} pedine`}
         </Button>
       </div>
@@ -5670,6 +5671,7 @@ function TacticsDraft({ draft, setDraft, onConfirm }) {
 
 function Tactics({ room, gs, seat, commit }) {
   const board = gs.board;
+  const me = TSIDE[seat]; // this device's colour — blue for A, red for B; own chrome wears it
   const myTurn = gs.turn === seat && !gs.done; // roster/deploy hand-off, and whose turn it is in battle
   const canPlay = myTurn && gs.phase === "battle"; // battle: act on your own units when it's your move
   const [sel, setSel] = useState(null); // selected own unit id (battle)
@@ -6018,7 +6020,7 @@ function Tactics({ room, gs, seat, commit }) {
       {banner && (
         <div style={{ position: "fixed", inset: 0, zIndex: 62, display: "grid", placeItems: "center", pointerEvents: "none", padding: 20 }}>
           <div key={banner.title} className="pop" style={{ textAlign: "center", lineHeight: 1 }}>
-            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(42px, 13vw, 96px)", color: T.ink, letterSpacing: "-0.02em", textShadow: "0 4px 0 rgba(18,18,18,0.07)" }}>{banner.title}</div>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(42px, 13vw, 96px)", color: me, letterSpacing: "-0.02em", textShadow: "0 4px 0 rgba(18,18,18,0.07)" }}>{banner.title}</div>
             {banner.sub && <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, letterSpacing: "0.32em", textTransform: "uppercase", color: T.ink60, marginTop: 12, fontWeight: 600 }}>{banner.sub}</div>}
           </div>
         </div>
@@ -6089,7 +6091,7 @@ function Tactics({ room, gs, seat, commit }) {
               if (isDeploy) fill = "rgba(184,134,43,0.24)";
               if (isTarget) fill = "rgba(165,52,47,0.34)"; // an enemy you can hit
               const stroke = isSelHex
-                ? T.ink
+                ? me
                 : isTarget
                 ? "#A5342F"
                 : isThreat
@@ -6229,7 +6231,7 @@ function Tactics({ room, gs, seat, commit }) {
                 <button
                   key={f}
                   onClick={() => { setDraft([...Array(f).fill("fante"), ...Array(4 - f).fill("arciere")]); setLayout([]); setStep("deploy"); }}
-                  style={{ ...plain, flex: 1, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "10px 6px", cursor: "pointer", fontFamily: BRAND, fontWeight: 600, fontSize: 13, WebkitTapHighlightColor: "transparent" }}
+                  style={{ ...plain, flex: 1, border: `1.5px solid ${me}`, color: me, borderRadius: 12, padding: "10px 6px", cursor: "pointer", fontFamily: BRAND, fontWeight: 600, fontSize: 13, WebkitTapHighlightColor: "transparent" }}
                 >
                   {f} {uIco("fante", 14)} · {4 - f} {uIco("arciere", 14)}
                 </button>
@@ -6237,7 +6239,7 @@ function Tactics({ room, gs, seat, commit }) {
             </div>
           </div>
         ) : (
-          <TacticsDraft draft={draft} setDraft={setDraft} onConfirm={() => { setLayout([]); setStep("deploy"); }} />
+          <TacticsDraft draft={draft} setDraft={setDraft} tone={me} onConfirm={() => { setLayout([]); setStep("deploy"); }} />
         )
       )}
 
@@ -6246,7 +6248,7 @@ function Tactics({ room, gs, seat, commit }) {
           <Button kind="outline" full disabled={pending} onClick={() => (layout.length ? setLayout(layout.slice(0, -1)) : setStep("roster"))}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> {layout.length ? "Annulla" : "Compagnia"}</span>
           </Button>
-          <Button kind="solid" full disabled={layout.length !== draft.length || pending} onClick={submitSetup}>
+          <Button kind="solid" full tone={me} disabled={layout.length !== draft.length || pending} onClick={submitSetup}>
             {pending ? "In attesa…" : layout.length === draft.length ? "Schiera" : `Piazza ${draft.length - layout.length}`}
           </Button>
         </div>
@@ -6263,7 +6265,7 @@ function Tactics({ room, gs, seat, commit }) {
               Deseleziona
             </Button>
           )}
-          <Button kind="solid" full onClick={endUnit}>
+          <Button kind="solid" full tone={me} onClick={endUnit}>
             {healing ? "Curati qui" : dest ? "Fermati qui" : "Passa"}
           </Button>
         </div>
