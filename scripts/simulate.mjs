@@ -351,16 +351,16 @@ function playTactics() {
   }
   if (g.phase !== "battle") return fail("tactics", "did not reach battle");
   if (g.order.length !== compA.length + compB.length) return fail("tactics", `expected ${compA.length + compB.length} units deployed, got ${g.order.length}`);
-  // battle: no turns — either side's rested units may act. Random legal
-  // activations from the whole board until a win or the move cap ends it.
+  // battle: strict alternation — the side on turn moves one of its rested units.
+  // Random legal activations until a win or the move cap ends it.
   let steps = 0;
   const MAX = 4000;
   while (!g.done) {
     if (++steps > MAX) return fail("tactics", "battle never ended (move cap should have)");
-    const avail = g.order.filter((id) => (g.spent[id] || 0) < R.TACT.ACTS);
-    if (!avail.length) return fail("tactics", "no unit can act but the battle is not over");
-    const uid = avail[Math.floor(Math.random() * avail.length)];
-    const seat = g.units[uid].owner;
+    const seat = g.turn;
+    const mine = g.order.filter((id) => g.units[id].owner === seat && (g.spent[id] || 0) < R.TACT.ACTS);
+    if (!mine.length) return fail("tactics", `${seat} on turn with no rested unit`);
+    const uid = mine[Math.floor(Math.random() * mine.length)];
     const reach = R.tacticsReach(g, g.units[uid]);
     const spots = Object.keys(reach);
     const to = spots.length && Math.random() < 0.8 ? spots[Math.floor(Math.random() * spots.length)] : null;

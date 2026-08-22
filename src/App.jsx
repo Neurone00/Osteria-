@@ -1174,10 +1174,10 @@ function s40Discard(gs, seat, cardId) {
    explodes for a crit. Six classes (Fante, Arciere, Cavaliere, Balestriere,
    Fromboliere, Mago — the Mago's attack blasts everything within 2 of the
    target), each a die with its own move, range and point cost; draft a company
-   under a budget. Deploy near your castle, then fight with no turns: either side
-   activates any of its own units whenever it likes (move, then attack), a unit
-   twice before it must rest — and a side that runs its units out gets them all
-   back, so no one is ever stuck waiting. Heal on your fountain (+3), your castle
+   under a budget. Deploy near your castle, then fight in strict alternation —
+   one move each, back and forth (a unit twice before it must rest). A side that
+   runs its units out gets them all back, so its turn is never a dead one and
+   nobody sits through the other's whole company. Heal on your fountain (+3), your castle
    (full), or a contested banner out in the field (+2, and you may still attack).
    A castle bombards any enemy that ends beside it for 2. Win by wiping the enemy
    — or by holding their castle: step in, survive their answer, and the keep is
@@ -1571,12 +1571,12 @@ function tacticsWin(g, winner, how) {
   g.how = how;
   if (winner) g.tally[winner] += 1;
 }
-// After every move (there are no turns — either side moves whenever it likes):
-// count the move, refresh a side that has run its units out so nobody is ever
-// stuck, resolve a standing siege, and end the battle at the move cap.
+// After every move: count it, give a side that has run its units out its whole
+// company back (so nobody's turn is ever a dead one), resolve a standing siege,
+// end the battle at the move cap — then simply hand the turn to the other side.
 function tacticsAfterMove(g, mover) {
   g.moves += 1;
-  // a side with no rested unit gets its whole company back — you can always act
+  // a side with no rested unit gets its whole company back — a turn is never wasted
   for (const s of ["A", "B"]) {
     const owns = g.order.some((id) => g.units[id].owner === s);
     const ready = g.order.some((id) => g.units[id].owner === s && (g.spent[id] || 0) < TACT.ACTS);
@@ -1606,14 +1606,17 @@ function tacticsAfterMove(g, mover) {
       a = hp("A"),
       b = hp("B");
     tacticsWin(g, ba !== bb ? (ba > bb ? "A" : "B") : a === b ? null : a > b ? "A" : "B", "timeout");
+    return;
   }
+  g.turn = other(mover); // strict alternation, one move each
 }
 
 // One activation, resolved atomically: optionally move to `toKey`, then either
-// attack a target or wait. No turns — either seat may activate any of its own
-// rested units at any time. Healing on your own castle/fountain is automatic.
+// attack a target or wait. Play strictly alternates one move each; a side that
+// has run its units out gets them back, so its turn is never a dead one.
+// Healing on your own castle/fountain is automatic.
 function tacticsActivate(gs, seat, unitId, toKey, action) {
-  if (gs.done || gs.phase !== "battle") return null;
+  if (gs.done || gs.phase !== "battle" || gs.turn !== seat) return null;
   const g = clone(gs);
   const unit = g.units[unitId];
   if (!unit || unit.owner !== seat || (g.spent[unitId] || 0) >= TACT.ACTS) return null;
@@ -5495,7 +5498,7 @@ function RollReveal({ shot, onDone }) {
 const TACT_SLIDES = [
   { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6." },
   { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
-  { icon: "bow", title: "Niente turni", body: "Muovi quando vuoi, anche entrambi insieme: attivi una pedina (la sposti e attacchi), due volte prima che riposi. Il Mago colpisce un’area." },
+  { icon: "bow", title: "Uno per uno", body: "A turno, una mossa a testa: attivi una pedina (la sposti e attacchi), fino a due volte prima che riposi. Il Mago colpisce un’area." },
   { icon: "flag", title: "Come si vince", body: "Stermina l’altro o espugna il suo castello (tienilo un turno sotto tiro). Gli stendardi ti curano e, se il tempo scade, decidono la vittoria." },
 ];
 function TacticsHowTo({ onClose }) {
@@ -5586,8 +5589,8 @@ function TacticsDraft({ draft, setDraft, onConfirm }) {
 
 function Tactics({ room, gs, seat, commit }) {
   const board = gs.board;
-  const myTurn = gs.turn === seat && !gs.done; // turn matters only for roster/deploy hand-off
-  const canPlay = !gs.done && gs.phase === "battle"; // battle is turn-free: act any time on your own units
+  const myTurn = gs.turn === seat && !gs.done; // roster/deploy hand-off, and whose turn it is in battle
+  const canPlay = myTurn && gs.phase === "battle"; // battle: act on your own units when it's your move
   const [sel, setSel] = useState(null); // selected own unit id (battle)
   const [dest, setDest] = useState(null); // staged move hex key
   const [inspect, setInspect] = useState(null); // enemy unit id being previewed (move + range)
@@ -5875,7 +5878,9 @@ function Tactics({ room, gs, seat, commit }) {
       : dest
       ? "Tocca un nemico in rosso, o Fermati qui"
       : "Muovi, o colpisci un nemico in rosso"
-    : "Gioca quando vuoi — niente turni, muovi le tue pedine";
+    : canPlay
+    ? "Tocca a te — muovi una pedina"
+    : `Turno di ${who(room, gs.turn)}`;
   const insU = insUnit ? TACT.units[insUnit.type] : null;
   const status =
     insUnit && !sel
@@ -5918,7 +5923,7 @@ function Tactics({ room, gs, seat, commit }) {
       {/* top bar: phase / move count + view controls + how-to */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ width: 12, height: 12, borderRadius: 3, background: gs.phase === "battle" ? T.ink : TSIDE[gs.turn], display: "inline-block", opacity: gs.done ? 0.3 : 1 }} />
+          <span style={{ width: 12, height: 12, borderRadius: 3, background: TSIDE[gs.turn], display: "inline-block", opacity: gs.done ? 0.3 : 1 }} />
           <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 13 }}>
             {gs.phase === "battle" ? `Mossa ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} di ${TACT.MOVE_CAP}` : gs.phase === "deploy" ? "Schieramento" : "Compagnia"}
           </div>
