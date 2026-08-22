@@ -1971,6 +1971,26 @@ function recordWin(board, a, b, winner, game) {
   rec.byGame[game][w] = (rec.byGame[game][w] || 0) + 1;
   return nb;
 }
+// The game to open a fresh table on: the one played most across the local
+// head-to-head history, or a random one when there's no history yet.
+function mostPlayedGame(board) {
+  const tally = {};
+  for (const pk in board || {}) {
+    const bg = (board[pk] && board[pk].byGame) || {};
+    for (const g in bg) {
+      if (!GAMES[g]) continue;
+      let n = 0;
+      for (const w in bg[g]) n += bg[g][w] || 0;
+      tally[g] = (tally[g] || 0) + n;
+    }
+  }
+  const played = Object.keys(tally);
+  if (!played.length) {
+    const all = Object.keys(GAMES);
+    return all[Math.floor(Math.random() * all.length)];
+  }
+  return played.reduce((best, g) => (tally[g] > tally[best] ? g : best), played[0]);
+}
 
 /* Same-origin WebSocket relay — the Cloudflare Worker in ./worker. If it isn't
    there (a plain static host), the app falls back to PeerJS on its own. */
@@ -3953,14 +3973,15 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     // preCode is only a real 4-letter code from the bump flow; when this is a
     // button handler React passes the click event, so ignore anything non-string.
     const code = (typeof preCode === "string" && preCode) || Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
+    const g0 = mostPlayedGame(boardRef.current); // open on your most-played game (or a random one)
     const fresh = {
       code,
       v: 0,
       ts: Date.now(),
       names: { A: name.trim() || "Oste", B: null },
       status: "lobby",
-      game: "scopa",
-      opts: { ...GAMES.scopa.def, ...(savedRules.scopa || {}) },
+      game: g0,
+      opts: { ...GAMES[g0].def, ...(savedRules[g0] || {}) },
       scores: showScores, // table rule: show live points/prese (seeded from host's saved default)
       gs: null,
       log: [],
@@ -3986,14 +4007,15 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   // tester flips sides with the seat toggle and plays both hands.
   const openSolo = () => {
     const code = "SOLO";
+    const g0 = mostPlayedGame(boardRef.current);
     const fresh = {
       code,
       v: 0,
       ts: Date.now(),
       names: { A: name.trim() || "Uno", B: "Due" },
       status: "lobby",
-      game: "scopa",
-      opts: { ...GAMES.scopa.def, ...(savedRules.scopa || {}) },
+      game: g0,
+      opts: { ...GAMES[g0].def, ...(savedRules[g0] || {}) },
       scores: showScores,
       gs: null,
       log: [],
@@ -4591,11 +4613,13 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     const frontFace = (key, isMid) => {
       const gm = GAMES[key];
       return (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center", padding: "30px 22px", gap: 10 }}>
-          <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, letterSpacing: "0.26em", textTransform: "uppercase", color: T.ink30 }}>{gm.tag}</div>
-          <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(28px, 8vw, 44px)", letterSpacing: "-0.02em", lineHeight: 1.04 }}>{gm.name}</div>
-          <p style={{ color: T.ink60, fontSize: 13, lineHeight: 1.5, margin: "6px 0 0", maxWidth: 260 }}>{gm.line}</p>
-          {isMid && <div style={{ marginTop: 10, fontFamily: "ui-monospace, monospace", fontSize: 9.5, letterSpacing: "0.2em", textTransform: "uppercase", color: T.ink30 }}>Tocca per le regole ↻</div>}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center", padding: "22px 20px", gap: 12 }}>
+          <GameArt game={key} size={92} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(24px, 7vw, 38px)", letterSpacing: "-0.02em", lineHeight: 1.02 }}>{gm.name}</div>
+            <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, letterSpacing: "0.22em", textTransform: "uppercase", color: T.ink30 }}>{gm.tag}</div>
+          </div>
+          {isMid && <div style={{ marginTop: 4, fontFamily: "ui-monospace, monospace", fontSize: 9.5, letterSpacing: "0.16em", textTransform: "uppercase", color: T.ink30 }}>Tocca per le regole ↻</div>}
         </div>
       );
     };
@@ -4603,11 +4627,11 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       const gm = GAMES[key];
       return (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, padding: "18px 18px 16px" }}>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ paddingRight: 40 }}>
             <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 19 }}>{gm.name}</div>
-            <Micro>Regole della casa{host ? "" : " · l’host"}</Micro>
+            <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.45, margin: "5px 0 0" }}>{gm.line}</p>
           </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", marginTop: 12, paddingRight: 2 }}>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y", marginTop: 12, paddingRight: 2 }}>
             {gm.opts.length > 0 ? (
               <RuleChips conf={gm} opts={room.opts} setOpt={host ? setOpt : null} />
             ) : (
@@ -5017,12 +5041,12 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     const tick = () => {
       const cur = posRef.current;
       const diff = target - cur;
-      if (Math.abs(diff) < 0.002) {
+      if (Math.abs(diff) < 0.0015) {
         posRef.current = target;
         setPos(target);
         return;
       }
-      const np = cur + diff * 0.22;
+      const np = cur + diff * 0.16; // gentle ease toward the target
       posRef.current = np;
       setPos(np);
       raf.current = requestAnimationFrame(tick);
@@ -5047,8 +5071,8 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     animateTo(best);
   }, [index]); // eslint-disable-line
 
-  const cardW = Math.round(w * 0.65);
-  const step = cardW + 18;
+  const cardW = Math.round(w * 0.72); // wider cards…
+  const step = Math.round(cardW * 0.9); // …sitting closer to the middle one
 
   const settle = (target) => {
     animateTo(target);
@@ -5057,6 +5081,7 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
 
   const gest = useRef({ blocked: false }); // a real drag/scroll happened → the release is not a tap
   const onDown = (e) => {
+    if (flip) return; // flipped: let the card back scroll freely, no carousel drag
     cancelAnimationFrame(raf.current);
     const p = e.touches ? e.touches[0] : e;
     drag.current = { x0: p.clientX, y0: p.clientY, pos0: posRef.current, axis: null, moved: 0, lastX: p.clientX, lastT: nowMs(), vel: 0 };
@@ -5093,24 +5118,26 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     v = Math.max(-1.3, Math.min(1.3, v));
     cancelAnimationFrame(raf.current);
     const glide = () => {
-      v *= 0.9;
+      v *= 0.92; // a little more roll before it settles
       const np = posRef.current + v;
       posRef.current = np;
       setPos(np);
-      if (Math.abs(v) > 0.012) raf.current = requestAnimationFrame(glide);
+      if (Math.abs(v) > 0.01) raf.current = requestAnimationFrame(glide);
       else settle(Math.round(posRef.current));
     };
     raf.current = requestAnimationFrame(glide);
   };
 
-  const tapCard = (j) => {
+  // a tap on a card's FRONT: the middle one flips to its back; a neighbour is
+  // brought to the middle (never rotating). The back never flips on a stray tap —
+  // only its own ↺ button turns it over — so its toggles and scroll work freely.
+  const onFace = (j) => {
     if (gest.current.blocked) return;
     const mid = Math.round(posRef.current);
-    if (j === mid) {
-      setFlip((f) => !f); // flip the middle card to its rules/deal back
-    } else if (host) {
+    if (j === mid) setFlip(true);
+    else if (host) {
       setFlip(false);
-      settle(j); // focus a neighbour — no rotation
+      settle(j);
     }
   };
 
@@ -5122,32 +5149,27 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     const key = gkeys[mod(j)];
     const isMid = j === center;
     const x = delta * step;
-    const scale = isMid ? 1 : 0.84;
+    const scale = isMid ? 1 : 0.86;
+    const fld = isMid && flip;
     cards.push(
-      <div
-        key={j}
-        onClick={() => tapCard(j)}
-        style={{
-          position: "absolute",
-          left: "50%",
-          top: 0,
-          width: cardW,
-          height: "100%",
-          transform: `translateX(-50%) translateX(${x}px) scale(${scale})`,
-          transition: drag.current ? "none" : "transform 320ms cubic-bezier(.2,.8,.2,1), opacity 320ms ease",
-          opacity: isMid ? 1 : 0.5,
-          zIndex: isMid ? 2 : 1,
-          cursor: "pointer",
-          WebkitTapHighlightColor: "transparent",
-        }}
-      >
-        <div className="deck3d" style={{ width: "100%", height: "100%" }}>
-          <div className={`deckcard${isMid && flip ? " flip" : ""}`} style={{ width: "100%", height: "100%" }}>
-            <div className="deckface" style={deckShell}>
-              {front(key, isMid)}
-            </div>
-            <div className="deckface deckback" style={deckShell}>
-              {isMid ? back(key) : null}
+      <div key={j} style={{ position: "absolute", left: "50%", top: 0, width: cardW, height: "100%", transform: `translateX(-50%) translateX(${x}px)`, zIndex: isMid ? 3 : 1, WebkitTapHighlightColor: "transparent" }}>
+        {/* scale + fade animate smoothly on their own; translate is driven per-frame */}
+        <div style={{ width: "100%", height: "100%", transform: `scale(${scale})`, opacity: isMid ? 1 : 0.48, transition: "transform 300ms cubic-bezier(.2,.8,.2,1), opacity 300ms ease" }}>
+          <div className="deck3d" style={{ width: "100%", height: "100%" }}>
+            <div className={`deckcard${fld ? " flip" : ""}`} style={{ width: "100%", height: "100%" }}>
+              <div className="deckface" style={{ ...deckShell, pointerEvents: fld ? "none" : "auto", cursor: "pointer" }} onClick={() => onFace(j)}>
+                {front(key, isMid)}
+              </div>
+              <div className="deckface deckback" style={{ ...deckShell, pointerEvents: fld ? "auto" : "none" }}>
+                {isMid && (
+                  <>
+                    {back(key)}
+                    <button onClick={() => setFlip(false)} title="gira" style={{ ...plain, position: "absolute", top: 12, right: 12, width: 30, height: 30, borderRadius: 9, border: `1px solid ${T.line}`, background: T.bg, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                      <Ico n="rotateL" s={15} />
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -5165,7 +5187,7 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
       onMouseMove={onMove}
       onMouseUp={onUp}
       onMouseLeave={onUp}
-      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(60vh, 500px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "hidden" }}
+      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(52vh, 430px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "hidden" }}
     >
       {cards}
     </div>
@@ -5181,6 +5203,55 @@ const deckShell = {
   display: "flex",
   flexDirection: "column",
 };
+
+/* A key visual per game — paper cards, dice or the war-hex, in the house style. */
+function GameArt({ game, size = 88 }) {
+  const ink = T.ink,
+    red = "#B23A2E",
+    soft = "rgba(18,18,18,0.045)";
+  const C = { fill: "#fff", stroke: ink, strokeWidth: 3, strokeLinejoin: "round" };
+  const card = (cx, cy, rot, w = 30, h = 42) => <rect x={cx - w / 2} y={cy - h / 2} width={w} height={h} rx="5" {...C} transform={`rotate(${rot} ${cx} ${cy})`} />;
+  const dot = (cx, cy, r = 3, c = ink) => <circle cx={cx} cy={cy} r={r} fill={c} />;
+  const die = (cx, cy, faces, s = 26) => {
+    const pts = { 1: [[0.5, 0.5]], 2: [[0.3, 0.3], [0.7, 0.7]], 3: [[0.28, 0.28], [0.5, 0.5], [0.72, 0.72]], 4: [[0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]], 5: [[0.3, 0.3], [0.7, 0.3], [0.5, 0.5], [0.3, 0.7], [0.7, 0.7]] };
+    return (
+      <g>
+        <rect x={cx - s / 2} y={cy - s / 2} width={s} height={s} rx="6" {...C} />
+        {(pts[faces] || []).map(([a, b], i) => dot(cx - s / 2 + a * s, cy - s / 2 + b * s, 2.4))}
+      </g>
+    );
+  };
+  let art;
+  switch (game) {
+    case "scopa":
+    case "scienza":
+      art = (<g>{card(34, 54, -15)}{card(50, 50, 0)}{card(66, 54, 15)}{dot(50, 50, 8, red)}</g>); break;
+    case "ruba":
+      art = (<g>{card(42, 56, -6)}{card(60, 50, 10)}<path d="M38 32c8-6 18-6 26 0" fill="none" stroke={ink} strokeWidth="3" strokeLinecap="round" /><path d="M62 27l4 5-7 2z" fill={ink} /></g>); break;
+    case "camicia":
+      art = (<g>{card(44, 54, -12)}{card(58, 50, 12)}<path d="M50 18v12M44 24h12" stroke={red} strokeWidth="3" strokeLinecap="round" fill="none" /></g>); break;
+    case "briscola":
+      art = (<g>{card(50, 56, 0, 34, 46)}{dot(50, 60, 8, red)}<path d="M40 34l5-9 5 6 5-6 5 9z" fill="#E9B54B" stroke={ink} strokeWidth="2.4" strokeLinejoin="round" /></g>); break;
+    case "perudo":
+      art = (<g>{die(38, 42, 3)}{die(64, 48, 5)}<path d="M30 64h40l-6 14H36z" {...C} /></g>); break;
+    case "yahtzee":
+      art = (<g>{die(30, 50, 5, 22)}{die(53, 43, 3, 22)}{die(72, 54, 2, 22)}</g>); break;
+    case "scala":
+      art = (<g>{card(36, 62, -4, 24, 34)}{card(50, 52, -4, 24, 34)}{card(64, 42, -4, 24, 34)}</g>); break;
+    case "peppa":
+      art = (<g>{card(38, 52, -10)}{card(62, 52, 10)}<circle cx="62" cy="48" r="5.5" fill="none" stroke={red} strokeWidth="3" /><path d="M58.5 51.5l7-7" stroke={red} strokeWidth="3" strokeLinecap="round" /></g>); break;
+    case "condottieri":
+      art = (<g><polygon points="50,18 74,32 74,62 50,76 26,62 26,32" fill="rgba(46,120,90,0.12)" stroke={ink} strokeWidth="3" strokeLinejoin="round" />{die(50, 47, 3, 26)}</g>); break;
+    default:
+      art = card(50, 50, 0);
+  }
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ display: "block" }} aria-hidden="true">
+      <circle cx="50" cy="50" r="47" fill={soft} />
+      {art}
+    </svg>
+  );
+}
 
 /* Personal deck-face switch. Napoletane (Italian suits) or Francesi (♦♥♠♣). */
 function FaceToggle({ french, setFrench }) {
