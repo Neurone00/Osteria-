@@ -253,6 +253,12 @@ const isCard = (game) => !GAMES[game].dice;
 // Which shelf a game sits on, for the lobby filter pills. Explicit `cat` wins
 // (Paroliere is letter dice); otherwise derive from how it plays.
 const gameCat = (game) => GAMES[game].cat || (GAMES[game].dice ? "dadi" : GAMES[game].board ? "tavolo" : "carte");
+// The start button, kept short (the card already shows the game's name) and given
+// a little flavour per shelf: cards are dealt, dice get shaken, boards get set up.
+const dealCta = (gm) => {
+  const c = gm.cat || (gm.dice ? "dadi" : gm.board ? "tavolo" : "carte");
+  return c === "dadi" ? L("Scuoti!", "Shake!") : c === "tavolo" ? L("Schiera!", "Deploy!") : L("Distribuisci", "Deal");
+};
 const GAME_CATS = [
   ["carte", "Carte", "Cards"],
   ["dadi", "Dadi", "Dice"],
@@ -5152,7 +5158,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           <div style={{ marginTop: 14 }}>
             {host ? (
               <Button full disabled={!seated} onClick={start}>
-                {seated ? `${L("Distribuisci", "Deal")} · ${gm.name}` : L("Aspetta il 2º giocatore…", "Waiting for player 2…")}
+                {seated ? dealCta(gm) : L("Aspetta il 2º giocatore…", "Waiting for player 2…")}
               </Button>
             ) : (
               <Micro>{room.names.A} {L("sta preparando il tavolo — un attimo.", "is setting the table — one moment.")}</Micro>
