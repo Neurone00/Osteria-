@@ -4349,6 +4349,11 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const shuffleTap = (seed) =>
     publish({ ...room, prep: { ...room.prep, deck: shuffleWith(room.prep.deck, seed), shuffles: room.prep.shuffles + 1 } });
   const shuffleDone = () => publish({ ...room, prep: { ...room.prep, step: "cut" } });
+  // broadcast the cutter's live position so the dealer watches the cut in real time
+  const liveCut = (at) => {
+    if (!room.prep || room.prep.step !== "cut" || room.prep.cutAt === at) return;
+    publish({ ...room, prep: { ...room.prep, cutAt: at } });
+  };
   const cutAndDeal = (at) => {
     const p = room.prep;
     const gsNew = dealGame(room.game, room.opts, p.dealer, p.cont, cutDeck(p.deck, at));
@@ -4674,6 +4679,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           shuffleTap={shuffleTap}
           shuffleDone={shuffleDone}
           cutAndDeal={cutAndDeal}
+          liveCut={liveCut}
         />
       </Frame>
     );
@@ -7314,7 +7320,7 @@ function Confetti() {
 }
 
 /* ── shuffle & cut ── */
-function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal }) {
+function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
   const prep = room.prep;
   const amDealer = seat === prep.dealer;
   const step = prep.step;
@@ -7380,7 +7386,9 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal }) {
     if (!el) return;
     const r = el.getBoundingClientRect();
     const frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
-    setCutAt(Math.max(2, Math.min(38, Math.round(frac * 40))));
+    const v = Math.max(2, Math.min(38, Math.round(frac * 40)));
+    setCutAt(v);
+    liveCut && liveCut(v); // let the dealer watch the cut move in real time
   };
   const px = (e) => (e.touches && e.touches[0] ? e.touches[0].clientX : e.clientX);
   const onDown = (e) => {
@@ -7407,8 +7415,47 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal }) {
     </div>
   );
 
+  // the deck spread with a cut marker — interactive for the cutter, a live
+  // read-only mirror (the marker glides) for the dealer watching.
+  const cutSpread = (at, live) => (
+    <div
+      ref={live ? null : barRef}
+      onTouchStart={live ? undefined : onDown}
+      onTouchMove={live ? undefined : onMove}
+      onTouchEnd={live ? undefined : onUp}
+      onMouseDown={live ? undefined : onDown}
+      onMouseMove={live ? undefined : onMove}
+      onMouseUp={live ? undefined : onUp}
+      onMouseLeave={live ? undefined : onUp}
+      style={{ position: "relative", height: 108, margin: "24px 0 10px", touchAction: live ? "auto" : "none", userSelect: "none", WebkitUserSelect: "none", cursor: live ? "default" : "ew-resize" }}
+    >
+      <div style={{ position: "absolute", left: 0, right: 0, top: 22, bottom: 22, display: "flex", gap: 1 }}>
+        {Array.from({ length: 40 }, (_, i) => (
+          <div key={i} style={{ flex: 1, borderRadius: 2, background: i < at ? T.ink : "#4a4a48", boxShadow: i === at - 1 ? `2px 0 0 ${T.bg}` : "none", transition: live ? "background 90ms ease" : "none" }} />
+        ))}
+      </div>
+      <div style={{ position: "absolute", top: 6, bottom: 6, left: `calc(${(at / 40) * 100}% - 1px)`, width: 2, background: "#B8862B", transition: live ? "left 90ms ease" : "none" }} />
+      <div style={{ position: "absolute", top: -4, left: `calc(${(at / 40) * 100}% - 8px)`, color: "#B8862B", fontSize: 16, transition: live ? "left 90ms ease" : "none" }}>▼</div>
+    </div>
+  );
+
   if (step === "shuffle" && !amDealer) return wait(`${dealerName} mescola`, `${prep.shuffles} mescolate`);
-  if (step === "cut" && amDealer) return wait(`${cutterName} taglia il mazzo`, "un attimo");
+  if (step === "cut" && amDealer) {
+    const at = prep.cutAt ?? 20;
+    return (
+      <div className="fade" style={{ textAlign: "center", paddingTop: 8 }}>
+        <Micro>{cutterName} taglia</Micro>
+        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>Guarda dove sta tagliando il mazzo…</p>
+        {cutSpread(at, true)}
+        <Micro>
+          {at} sopra · {40 - at} sotto
+        </Micro>
+        <div style={{ marginTop: 22 }}>
+          <Micro>un attimo…</Micro>
+        </div>
+      </div>
+    );
+  }
 
   if (step === "shuffle")
     return (
@@ -7456,41 +7503,7 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal }) {
       <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>
         Trascina lungo il mazzo per scegliere dove tagliare, poi conferma.
       </p>
-      <div
-        ref={barRef}
-        onTouchStart={onDown}
-        onTouchMove={onMove}
-        onTouchEnd={onUp}
-        onMouseDown={onDown}
-        onMouseMove={onMove}
-        onMouseUp={onUp}
-        onMouseLeave={onUp}
-        style={{
-          position: "relative",
-          height: 108,
-          margin: "24px 0 10px",
-          touchAction: "none",
-          userSelect: "none",
-          WebkitUserSelect: "none",
-          cursor: "ew-resize",
-        }}
-      >
-        <div style={{ position: "absolute", left: 0, right: 0, top: 22, bottom: 22, display: "flex", gap: 1 }}>
-          {Array.from({ length: 40 }, (_, i) => (
-            <div
-              key={i}
-              style={{
-                flex: 1,
-                borderRadius: 2,
-                background: i < cutAt ? T.ink : "#4a4a48",
-                boxShadow: i === cutAt - 1 ? `2px 0 0 ${T.bg}` : "none",
-              }}
-            />
-          ))}
-        </div>
-        <div style={{ position: "absolute", top: 6, bottom: 6, left: `calc(${(cutAt / 40) * 100}% - 1px)`, width: 2, background: "#B8862B" }} />
-        <div style={{ position: "absolute", top: -4, left: `calc(${(cutAt / 40) * 100}% - 8px)`, color: "#B8862B", fontSize: 16 }}>▼</div>
-      </div>
+      {cutSpread(cutAt, false)}
       <Micro>
         {cutAt} sopra · {40 - cutAt} sotto
       </Micro>
