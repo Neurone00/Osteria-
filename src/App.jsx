@@ -3148,9 +3148,6 @@ function CaptureReveal({ room, seat }) {
           Scopa<span style={{ color: T.ink }}>!</span>
         </div>
       )}
-      {!shot.scopa && (
-        <div key={`p${shot.id}`} className="pop" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(44px, 15vw, 96px)", color: "#2E785A", letterSpacing: "-0.02em", lineHeight: 1, textShadow: "0 5px 0 rgba(18,18,18,0.08)" }}>Presa</div>
-      )}
       <div
         key={`c${shot.id}-${phase}`}
         className={phase === "fly" ? flyCls : "pop"}
