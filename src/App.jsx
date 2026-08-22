@@ -3013,7 +3013,7 @@ function ScopeTag({ n, cards }) {
     >
       {n} scopa
       {takers.map((c, i) => (
-        <span key={i} title="la carta che ha fatto scopa" style={{ display: "inline-flex", alignItems: "center", gap: 0, fontWeight: 700, fontSize: 12, borderLeft: i === 0 ? "1px solid rgba(165,52,47,0.34)" : "none", paddingLeft: i === 0 ? 5 : 0 }}>
+        <span key={i} title={L("la carta che ha fatto scopa","the card that scored the scopa")} style={{ display: "inline-flex", alignItems: "center", gap: 0, fontWeight: 700, fontSize: 12, borderLeft: i === 0 ? "1px solid rgba(165,52,47,0.34)" : "none", paddingLeft: i === 0 ? 5 : 0 }}>
           {faceLbl(c.v, french)}
           <Pip suit={c.s} size={13} />
         </span>
@@ -5714,11 +5714,11 @@ function RollReveal({ shot, onDone }) {
     <div onClick={onDone} style={{ position: "fixed", inset: 0, zIndex: 84, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
         <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase", color: "rgba(255,255,255,0.7)" }}>
-          {uIco(shot.atkType, 13, "rgba(255,255,255,0.75)")} attacca {uIco(shot.tgtType, 13, "rgba(255,255,255,0.75)")}
+          {uIco(shot.atkType, 13, "rgba(255,255,255,0.75)")} {L("attacca","attacks")} {uIco(shot.tgtType, 13, "rgba(255,255,255,0.75)")}
         </div>
         {crit && done >= 1 && (
           <div className="settle" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 20, color: "#E9B54B", letterSpacing: "0.04em", display: "flex", alignItems: "center", gap: 6 }}>
-            CRITICO! <Ico n="burst" s={18} c="#E9B54B" sw={2} />
+            {L("CRITICO!","CRIT!")} <Ico n="burst" s={18} c="#E9B54B" sw={2} />
           </div>
         )}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 8, maxWidth: 330 }}>{row}</div>
@@ -5726,13 +5726,13 @@ function RollReveal({ shot, onDone }) {
           {done >= 1 && (
             <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 34, color: "#fff", lineHeight: 1 }}>
               {complete ? shot.dmg : runTotal}
-              <span style={{ fontSize: 16, fontWeight: 600, marginLeft: 5 }}>danni</span>
+              <span style={{ fontSize: 16, fontWeight: 600, marginLeft: 5 }}>{L("danni","damage")}</span>
             </div>
           )}
-          {complete && shot.killed && <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: "#E9B54B", marginTop: 4 }}>abbattuto!</div>}
+          {complete && shot.killed && <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: "#E9B54B", marginTop: 4 }}>{L("abbattuto!","down!")}</div>}
           {complete && shot.splash > 0 && (
             <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14, color: "#E9B54B", marginTop: 4, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
-              <Ico n="spark" s={15} c="#E9B54B" /> e {shot.splash} nell’area
+              <Ico n="spark" s={15} c="#E9B54B" /> {L("e","and")} {shot.splash} {L("nell’area","in the area")}
             </div>
           )}
         </div>
@@ -5743,12 +5743,12 @@ function RollReveal({ shot, onDone }) {
 
 // Animated 3/4-slide "how to play", little text.
 const TACT_SLIDES = [
-  { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6, Esploratore d2." },
-  { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
-  { icon: "burst", title: "Il colpo pieno esplode", body: "Se tiri la faccia più alta è un Critico: rilanci il dado e sommi. Può incatenarsi — un colpo può valere doppio o più." },
-  { icon: "spark", title: "Il Mago colpisce due caselle", body: "Miri una casella a tiro (2–3, non un ostacolo) e una vicina: lo stesso danno investe chiunque stia lì — anche le tue pedine. Attento al fuoco amico." },
-  { icon: "bow", title: "Uno per uno", body: "A turno, una mossa a testa: attivi una pedina (la sposti e attacchi), fino a due volte prima che riposi." },
-  { icon: "flag", title: "Come si vince", body: "Stermina l’altro, espugna il suo castello (tienilo un turno sotto tiro), o conquista tutti gli stendardi. Uno stendardo dà +1 danno a chi ci combatte." },
+  { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6, Esploratore d2.", te: "Every piece is a die", be: "The face shows its life. Fante d8, Arciere d6, Esploratore d2." },
+  { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male.", te: "Wounded hits softer", be: "You attack by rolling 1 to your life: the more hurt you are, the less you deal." },
+  { icon: "burst", title: "Il colpo pieno esplode", body: "Se tiri la faccia più alta è un Critico: rilanci il dado e sommi. Può incatenarsi — un colpo può valere doppio o più.", te: "A full hit explodes", be: "Roll your top face and it's a Crit: roll again and add. It can chain — one hit can be worth double or more." },
+  { icon: "spark", title: "Il Mago colpisce due caselle", body: "Miri una casella a tiro (2–3, non un ostacolo) e una vicina: lo stesso danno investe chiunque stia lì — anche le tue pedine. Attento al fuoco amico.", te: "The Mago hits two hexes", be: "Aim one hex in range (2–3, not an obstacle) and one next to it: the same damage hits anyone there — your own pieces too. Mind the friendly fire." },
+  { icon: "bow", title: "Uno per uno", body: "A turno, una mossa a testa: attivi una pedina (la sposti e attacchi), fino a due volte prima che riposi.", te: "One at a time", be: "Take turns, one move each: activate a piece (move it and attack), up to twice before it rests." },
+  { icon: "flag", title: "Come si vince", body: "Stermina l’altro, espugna il suo castello (tienilo un turno sotto tiro), o conquista tutti gli stendardi. Uno stendardo dà +1 danno a chi ci combatte.", te: "How to win", be: "Wipe out the other, take their castle (hold it a turn under fire), or seize every banner. A banner gives +1 damage to whoever fights on it." },
 ];
 function TacticsHowTo({ onClose }) {
   const [i, setI] = useState(0);
@@ -5760,15 +5760,15 @@ function TacticsHowTo({ onClose }) {
         <div key={i} className="pop" style={{ lineHeight: 1 }}>
           <Ico n={s.icon} s={52} c={T.ink} sw={1.5} />
         </div>
-        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 12 }}>{s.title}</div>
-        <p style={{ color: T.ink60, fontSize: 14.5, lineHeight: 1.5, margin: "8px 0 0" }}>{s.body}</p>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 12 }}>{L(s.title, s.te)}</div>
+        <p style={{ color: T.ink60, fontSize: 14.5, lineHeight: 1.5, margin: "8px 0 0" }}>{L(s.body, s.be)}</p>
         <div style={{ display: "flex", justifyContent: "center", gap: 6, margin: "18px 0 16px" }}>
           {TACT_SLIDES.map((_, k) => (
             <span key={k} style={{ width: 7, height: 7, borderRadius: 999, background: k === i ? T.ink : T.line }} />
           ))}
         </div>
         <Button kind="solid" full onClick={() => (last ? onClose() : setI(i + 1))}>
-          {last ? "Giochiamo!" : "Avanti →"}
+          {last ? L("Giochiamo!", "Let's play!") : L("Avanti →", "Next →")}
         </Button>
       </div>
     </div>
@@ -5789,7 +5789,7 @@ function TacticsDraft({ draft, setDraft, onConfirm, tone }) {
   return (
     <div style={{ marginTop: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-        <Micro>Recluta · {TACT.MIN_UNITS}–{TACT.MAX_UNITS} pedine</Micro>
+        <Micro>{L("Recluta", "Recruit")} · {TACT.MIN_UNITS}–{TACT.MAX_UNITS} {L("pedine", "pieces")}</Micro>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 13, color: left > 0 ? T.ink : T.ink30 }}>{left} punti</div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -5829,7 +5829,7 @@ function TacticsDraft({ draft, setDraft, onConfirm, tone }) {
       </div>
       <div style={{ marginTop: 10 }}>
         <Button kind="solid" full tone={tone} onClick={onConfirm} disabled={!ready}>
-          {ready ? `Schiera ${draft.length} pedine` : `Almeno ${TACT.MIN_UNITS} pedine`}
+          {ready ? `${L("Schiera", "Deploy")} ${draft.length} ${L("pedine", "pieces")}` : `${L("Almeno", "At least")} ${TACT.MIN_UNITS} ${L("pedine", "pieces")}`}
         </Button>
       </div>
     </div>
@@ -5913,8 +5913,8 @@ function Tactics({ room, gs, seat, commit }) {
   // the battle opens and both companies are revealed at once
   useEffect(() => {
     let card = null;
-    if (gs.phase === "battle" && !gs.done) card = { title: "ALLE ARMI", sub: null };
-    else if (gs.phase === "setup" && mySetup) card = step === "roster" ? { title: "COMPAGNIA", sub: "Fase 1" } : { title: "SCHIERAMENTO", sub: "Fase 2" };
+    if (gs.phase === "battle" && !gs.done) card = { title: L("ALLE ARMI", "TO ARMS"), sub: null };
+    else if (gs.phase === "setup" && mySetup) card = step === "roster" ? { title: L("COMPAGNIA", "COMPANY"), sub: L("Fase 1", "Phase 1") } : { title: L("SCHIERAMENTO", "DEPLOYMENT"), sub: L("Fase 2", "Phase 2") };
     if (!card) return;
     setBanner(card);
     const t = setTimeout(() => setBanner(null), card.sub ? 1300 : 1600);
@@ -6204,31 +6204,31 @@ function Tactics({ room, gs, seat, commit }) {
     ? !mySetup
       ? `Pronto — aspetto ${who(room, other(seat))}`
       : step === "roster"
-      ? "Recluta la tua compagnia — di nascosto"
+      ? L("Recluta la tua compagnia — di nascosto", "Recruit your company — in secret")
       : nextType
-      ? `Piazza vicino al tuo castello — ${TACT.units[nextType]?.name} (${draft.length - layout.length} da piazzare)`
+      ? `${L("Piazza vicino al tuo castello", "Place near your castle")} — ${TACT.units[nextType]?.name} (${draft.length - layout.length} ${L("da piazzare", "to place")})`
       : submitted
       ? `Pronto — aspetto ${who(room, other(seat))}`
       : "Compagnia schierata — conferma"
     : sel
     ? isMage
       ? blast && blast.a && blast.b
-        ? "Due caselle in mira — Lancia"
+        ? L("Due caselle in mira — Lancia", "Two hexes aimed — Cast")
         : blast && blast.a
-        ? "Scegli la 2ª casella, accanto alla prima"
-        : "Tocca un nemico per mirare — colpisce due caselle, anche i tuoi"
+        ? L("Scegli la 2ª casella, accanto alla prima", "Pick the 2nd hex, next to the first")
+        : L("Tocca un nemico per mirare — colpisce due caselle, anche i tuoi", "Tap an enemy to aim — hits two hexes, your own too")
       : healing
-      ? "In cura qui — niente attacco"
+      ? L("In cura qui — niente attacco", "Healing here — no attack")
       : dest
-      ? "Tocca un nemico in rosso, o Fermati qui"
-      : "Muovi, o colpisci un nemico in rosso"
+      ? L("Tocca un nemico in rosso, o Fermati qui", "Tap an enemy in red, or Stop here")
+      : L("Muovi, o colpisci un nemico in rosso", "Move, or hit an enemy in red")
     : canPlay
-    ? "Tocca a te — muovi una pedina"
-    : `Turno di ${who(room, gs.turn)}`;
+    ? L("Tocca a te — muovi una pedina", "Your turn — move a piece")
+    : `${L("Turno di", "Turn:")} ${who(room, gs.turn)}`;
   const insU = insUnit ? TACT.units[insUnit.type] : null;
   const status =
     insUnit && !sel
-      ? `${insU.name} nemico — muove fino a ${insU.move}, colpisce a ${insU.min === insU.rng ? insU.rng : `${insU.min}–${insU.rng}`}`
+      ? `${insU.name} ${L("nemico — muove fino a", "enemy — moves up to")} ${insU.move}, ${L("colpisce a", "hits at")} ${insU.min === insU.rng ? insU.rng : `${insU.min}–${insU.rng}`}`
       : baseStatus;
 
   const vbtn = {
@@ -6277,14 +6277,14 @@ function Tactics({ room, gs, seat, commit }) {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ width: 12, height: 12, borderRadius: 3, background: TSIDE[gs.turn], display: "inline-block", opacity: gs.done ? 0.3 : 1 }} />
           <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 13 }}>
-            {gs.phase === "battle" ? `Mossa ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} di ${TACT.MOVE_CAP}` : gs.phase === "setup" ? (step === "roster" ? "Compagnia" : "Schieramento") : "…"}
+            {gs.phase === "battle" ? `${L("Mossa", "Move")} ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} ${L("di", "of")} ${TACT.MOVE_CAP}` : gs.phase === "setup" ? (step === "roster" ? L("Compagnia", "Company") : L("Schieramento", "Deployment")) : "…"}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <button style={vbtn} onClick={() => zoomBy(1.2)} title="zoom"><Ico n="plus" s={16} /></button>
           <button style={vbtn} onClick={() => zoomBy(1 / 1.2)} title="zoom"><Ico n="minus" s={16} /></button>
           <button style={vbtn} onClick={resetView} title="centra sul castello"><Ico n="recenter" s={16} /></button>
-          <button style={vbtn} onClick={() => setHelp(true)} title="come si gioca"><Ico n="help" s={16} /></button>
+          <button style={vbtn} onClick={() => setHelp(true)} title={L("come si gioca", "how to play")}><Ico n="help" s={16} /></button>
         </div>
       </div>
 
@@ -6445,23 +6445,23 @@ function Tactics({ room, gs, seat, commit }) {
           const d = TACT.units[iu.type];
           icon = d.icon;
           tint = TSIDE[iu.owner];
-          title = `${d.name}${iu.owner !== seat ? " · nemico" : ""}`;
-          desc = `d${d.max} · vita ${iu.hp}/${iu.max} · muove ${d.move} · tiro ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.fly ? ` · vola sopra gli ostacoli; su un ostacolo è al sicuro dai corpo a corpo` : ""}${d.aoe ? ` · colpisce due caselle vicine (anche i tuoi)` : ""}`;
+          title = `${d.name}${iu.owner !== seat ? L(" · nemico", " · enemy") : ""}`;
+          desc = `d${d.max} · ${L("vita","life")} ${iu.hp}/${iu.max} · ${L("muove","moves")} ${d.move} · ${L("tiro","range")} ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.fly ? L(" · vola sopra gli ostacoli; su un ostacolo è al sicuro dai corpo a corpo", " · flies over obstacles; on one it's safe from melee") : ""}${d.aoe ? L(" · colpisce due caselle vicine (anche i tuoi)", " · hits two adjacent hexes (your own too)") : ""}`;
         } else if (it.kind === "castle") {
           icon = "castle";
           tint = TSIDE[it.side];
-          title = `Castello ${it.side === seat ? "· tuo" : "· nemico"}`;
-          desc = it.side === seat ? "Ti risana del tutto. Difendilo." : "Entra e resisti un turno per espugnarlo e vincere.";
+          title = `${L("Castello","Castle")} ${it.side === seat ? L("· tuo","· yours") : L("· nemico","· enemy")}`;
+          desc = it.side === seat ? L("Ti risana del tutto. Difendilo.", "Heals you fully. Defend it.") : L("Entra e resisti un turno per espugnarlo e vincere.", "Enter and survive a turn to take it and win.");
         } else if (it.kind === "fount") {
           icon = "drop";
           tint = "#2C7AA0";
-          title = "Fontana";
-          desc = "Cura +3 a chi ci sosta. È sul fianco, lontana dai castelli.";
+          title = L("Fontana", "Fountain");
+          desc = L("Cura +3 a chi ci sosta. È sul fianco, lontana dai castelli.", "Heals +3 to whoever rests on it. Out on the flank, away from the castles.");
         } else {
           icon = "flag";
           tint = it.side ? TSIDE[it.side] : "#9A7B2E";
-          title = it.side ? `Stendardo · di ${who(room, it.side)}` : "Stendardo · libero";
-          desc = "+1 danno se attacchi standoci sopra. Tienili tutti per vincere.";
+          title = it.side ? `${L("Stendardo · di", "Banner · held by")} ${who(room, it.side)}` : L("Stendardo · libero", "Banner · free");
+          desc = L("+1 danno se attacchi standoci sopra. Tienili tutti per vincere.", "+1 damage attacking from it. Hold them all to win.");
         }
         return (
           <div style={{ marginTop: 8, border: `1px solid ${T.line}`, borderRadius: 12, padding: "9px 12px", display: "flex", alignItems: "center", gap: 10 }}>
@@ -6501,10 +6501,10 @@ function Tactics({ room, gs, seat, commit }) {
       {mySetup && step === "deploy" && (
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
           <Button kind="outline" full disabled={submitted} onClick={() => (layout.length ? setLayout(layout.slice(0, -1)) : setStep("roster"))}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> {layout.length ? "Annulla" : "Compagnia"}</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> {layout.length ? L("Annulla", "Undo") : L("Compagnia", "Company")}</span>
           </Button>
           <Button kind="solid" full tone={me} disabled={layout.length !== draft.length || submitted} onClick={submitSetup}>
-            {submitted ? "In attesa…" : layout.length === draft.length ? "Schiera" : `Piazza ${draft.length - layout.length}`}
+            {submitted ? L("In attesa…", "Waiting…") : layout.length === draft.length ? L("Schiera", "Deploy") : `${L("Piazza", "Place")} ${draft.length - layout.length}`}
           </Button>
         </div>
       )}
@@ -6513,32 +6513,32 @@ function Tactics({ room, gs, seat, commit }) {
         isMage && blast && blast.a ? (
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <Button kind="outline" full onClick={() => setBlast(null)}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> Annulla mira</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> {L("Annulla mira", "Cancel aim")}</span>
             </Button>
             <Button kind="solid" full tone={me} disabled={!blast.b} onClick={fireBlast}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="spark" s={15} /> {blast.b ? "Lancia" : "Scegli la 2ª casella"}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="spark" s={15} /> {blast.b ? L("Lancia", "Cast") : L("Scegli la 2ª casella", "Pick the 2nd hex")}</span>
             </Button>
           </div>
         ) : (
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             {dest ? (
               <Button kind="outline" full onClick={() => setDest(null)}>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> Annulla mossa</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> {L("Annulla mossa", "Undo move")}</span>
               </Button>
             ) : (
               <Button kind="outline" full onClick={() => { setSel(null); setDest(null); setBlast(null); }}>
-                Deseleziona
+                {L("Deseleziona", "Deselect")}
               </Button>
             )}
             <Button kind="solid" full tone={me} onClick={endUnit}>
-              {healing ? "Curati qui" : dest ? "Fermati qui" : "Passa"}
+              {healing ? L("Curati qui", "Heal here") : dest ? L("Fermati qui", "Stop here") : L("Passa", "Pass")}
             </Button>
           </div>
         )
       )}
 
       <Micro style={{ textAlign: "center", marginTop: 12 }}>
-        {who(room, "A")} {gs.order.filter((id) => gs.units[id].owner === "A").length} · {who(room, "B")} {gs.order.filter((id) => gs.units[id].owner === "B").length} pedine · mani {gs.tally.A}–{gs.tally.B}
+        {who(room, "A")} {gs.order.filter((id) => gs.units[id].owner === "A").length} · {who(room, "B")} {gs.order.filter((id) => gs.units[id].owner === "B").length} {L("pedine","pieces")} · {L("mani","hands")} {gs.tally.A}–{gs.tally.B}
       </Micro>
     </div>
   );
@@ -7433,7 +7433,7 @@ function Scala({ room, gs, seat, mine, commit }) {
         <div key={c.id} style={{ marginLeft: i ? -14 : 0, position: "relative", borderRadius: 6, boxShadow: c.joker ? "0 0 0 2px #B8862B" : "none" }}>
           <S40Card card={c} w={30} h={44} />
           {c.joker && (
-            <span title="jolly — sostituibile con la carta che rappresenta" style={{ position: "absolute", top: -6, right: -6, width: 15, height: 15, borderRadius: "50%", background: "#B8862B", color: "#fff", fontSize: 10, fontWeight: 800, lineHeight: "15px", textAlign: "center", boxShadow: "0 1px 2px rgba(18,18,18,0.35)" }}>⇄</span>
+            <span title={L("jolly — sostituibile con la carta che rappresenta","joker — swappable for the card it stands for")} style={{ position: "absolute", top: -6, right: -6, width: 15, height: 15, borderRadius: "50%", background: "#B8862B", color: "#fff", fontSize: 10, fontWeight: 800, lineHeight: "15px", textAlign: "center", boxShadow: "0 1px 2px rgba(18,18,18,0.35)" }}>⇄</span>
           )}
         </div>
       ))}
