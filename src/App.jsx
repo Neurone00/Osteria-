@@ -1067,15 +1067,117 @@ function dealScala(dealer, tally, pre) {
     penalty: null,
   };
 }
-// The top of the scarti may be taken only if it can be used at once: laid off
-// onto a table meld (once opened), or combined with two hand cards into a valid
-// tris/scala — the card you'd then open or cala with. Drawing from the mazzo is
-// always free.
+// k-combinations of an array (small arrays only — used for tris/poker sets).
+function kcombos(arr, k) {
+  if (k > arr.length) return [];
+  const out = [];
+  const rec = (start, acc) => {
+    if (acc.length === k) return out.push(acc.slice());
+    for (let i = start; i < arr.length; i++) {
+      acc.push(arr[i]);
+      rec(i + 1, acc);
+      acc.pop();
+    }
+  };
+  rec(0, []);
+  return out;
+}
+// Every valid meld (tris/poker/scala, ≤1 joker) that can be built from a pool of
+// cards. analyzeMeld is the source of truth — we only propose plausible groups.
+function s40MeldCandidates(pool) {
+  const nats = pool.filter((c) => !c.joker);
+  const joker = pool.find((c) => c.joker) || null; // a meld holds at most one joker
+  const out = [];
+  const seen = new Set();
+  const push = (cards) => {
+    if (cards.length < 3) return;
+    if (!analyzeMeld(cards).ok) return;
+    const k = cards.map((c) => c.id).sort().join(",");
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(cards);
+  };
+  // SETS — same rank, distinct suits, optionally one joker
+  const byRank = {};
+  for (const c of nats) (byRank[c.v] = byRank[c.v] || []).push(c);
+  for (const v in byRank) {
+    const bySuit = {};
+    for (const c of byRank[v]) if (!bySuit[c.s]) bySuit[c.s] = c; // one per suit
+    const ds = Object.values(bySuit);
+    for (const cmb of kcombos(ds, 3)) push(cmb);
+    for (const cmb of kcombos(ds, 4)) push(cmb);
+    if (joker) for (const cmb of [...kcombos(ds, 2), ...kcombos(ds, 3)]) push([...cmb, joker]);
+  }
+  // RUNS — same suit, consecutive ranks (ace low or high), at most one joker gap
+  const bySuit = {};
+  for (const c of nats) (bySuit[c.s] = bySuit[c.s] || []).push(c);
+  for (const s in bySuit) {
+    const rc = {}; // rank → a card of this suit (ace also offered as 14)
+    for (const c of bySuit[s]) {
+      if (!rc[c.v]) rc[c.v] = c;
+      if (c.v === 1 && !rc[14]) rc[14] = c;
+    }
+    for (let L = 3; L <= 13; L++)
+      for (let lo = 1; lo + L - 1 <= 14; lo++) {
+        const hi = lo + L - 1;
+        const cards = [];
+        let gaps = 0;
+        for (let r = lo; r <= hi; r++) (rc[r] ? cards.push(rc[r]) : gaps++);
+        if (gaps === 0) push(cards);
+        else if (gaps === 1 && joker) push([...cards, joker]);
+      }
+  }
+  return out;
+}
+// Can this seat OPEN (lay melds worth ≥40) using `top` in one of them? A packing
+// search over the candidate melds: disjoint melds, ≥40 total, top card included.
+function s40CanOpenWith(hand, top) {
+  const pool = [...hand, top];
+  const bit = {};
+  pool.forEach((c, i) => (bit[c.id] = 1 << i));
+  const topBit = bit[top.id];
+  const cands = s40MeldCandidates(pool)
+    .map((cards) => {
+      let mask = 0;
+      for (const c of cards) mask |= bit[c.id];
+      return { mask, value: analyzeMeld(cards).value, hasTop: (mask & topBit) !== 0 };
+    })
+    .filter((c) => c.value > 0)
+    .sort((a, b) => b.value - a.value);
+  const n = cands.length;
+  if (!n) return false;
+  const sufVal = new Array(n + 1).fill(0);
+  const sufTop = new Array(n + 1).fill(false);
+  for (let i = n - 1; i >= 0; i--) {
+    sufVal[i] = sufVal[i + 1] + cands[i].value;
+    sufTop[i] = sufTop[i + 1] || cands[i].hasTop;
+  }
+  const memo = new Set();
+  const dfs = (i, used, total, topUsed) => {
+    if (topUsed && total >= 40) return true;
+    if (i >= n || total + sufVal[i] < 40) return false;
+    if (!topUsed && !sufTop[i]) return false; // no way left to include the taken card
+    const key = i + ":" + used + ":" + (topUsed ? 1 : 0);
+    if (memo.has(key)) return false;
+    memo.add(key);
+    if (dfs(i + 1, used, total, topUsed)) return true; // skip meld i
+    const c = cands[i];
+    if ((c.mask & used) === 0 && dfs(i + 1, used | c.mask, total + c.value, topUsed || c.hasTop)) return true;
+    return false;
+  };
+  return dfs(0, 0, 0, false);
+}
+// The top of the scarti can be taken only if it can be used at once. Before you
+// open, that means only if this exact card lets you go down with ≥40 (it must
+// slot into a combination that reaches the opening). Once opened, it's enough
+// that it lays onto a table meld or forms a fresh meld with two hand cards.
+// Drawing from the mazzo is always free.
 function s40CanUseDiscard(gs, seat) {
   const top = gs.discard[gs.discard.length - 1];
   if (!top) return false;
   const hand = gs.hands[seat];
-  if (gs.opened[seat]) for (const m of gs.melds) if (analyzeMeld([...m.cards, top]).ok) return true;
+  if (!gs.opened[seat]) return s40CanOpenWith(hand, top);
+  for (const m of gs.melds) if (analyzeMeld([...m.cards, top]).ok) return true;
   for (let i = 0; i < hand.length; i++) for (let j = i + 1; j < hand.length; j++) if (analyzeMeld([top, hand[i], hand[j]]).ok) return true;
   return false;
 }
@@ -1545,7 +1647,9 @@ function tacticsTargets(g, unit) {
     const d = hdist(unit, t);
     if (d < u.min || d > u.rng) return false;
     if (u.rng > 1 && !tacticsLoS(g, unit, t)) return false;
-    if (u.rng === 1 && g.board.blocked[hkey(t.q, t.r)]) return false; // a flyer perched on an obstacle is out of melee reach
+    // a flyer perched on an obstacle is out of melee reach — and out of the Mago's
+    // blast too, since that can't target an obstacle hex. Archers/crossbows still hit it.
+    if (g.board.blocked[hkey(t.q, t.r)] && (u.rng === 1 || u.aoe)) return false;
     return true;
   });
 }

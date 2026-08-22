@@ -656,12 +656,20 @@ function s40MeldTests() {
 
   // discard usability gate
   const D = (id, s, v) => ({ id, s, v });
-  const gU = { opened: { A: false, B: false }, melds: [], discard: [D("d", "H", 7)], hands: { A: [D("a", "H", 5), D("b", "H", 6), D("c", "S", 2)], B: [] } };
-  if (!R.s40CanUseDiscard(gU, "A")) fail("scala discard gate", "7H should be usable with 5H,6H (run)");
+  // not opened: a small run that reaches nowhere near 40 is NOT enough
+  const gLowRun = { opened: { A: false, B: false }, melds: [], discard: [D("d", "H", 7)], hands: { A: [D("a", "H", 5), D("b", "H", 6), D("c", "S", 2)], B: [] } };
+  if (R.s40CanUseDiscard(gLowRun, "A")) fail("scala discard gate", "before opening, 7H+5H,6H (18 pts) must NOT be takeable");
+  // not opened: the card completes a 40-point opening (a fourth king → set of 40)
+  const gOpen = { opened: { A: false, B: false }, melds: [], discard: [D("d", "S", 13)], hands: { A: [D("a", "H", 13), D("b", "D", 13), D("c", "C", 13), D("e", "S", 2)], B: [] } };
+  if (!R.s40CanUseDiscard(gOpen, "A")) fail("scala discard gate", "before opening, KS completing four kings (40) must be takeable");
   const gNo = { opened: { A: false, B: false }, melds: [], discard: [D("d", "H", 7)], hands: { A: [D("a", "S", 2), D("b", "C", 4), D("c", "D", 9)], B: [] } };
   if (R.s40CanUseDiscard(gNo, "A")) fail("scala discard gate", "7H should not be usable with junk hand");
+  // once opened: a lay-off onto a table meld is enough
   const gLay = { opened: { A: true, B: false }, melds: [{ id: "m", cards: [D("x", "H", 4), D("y", "H", 5), D("z", "H", 6)] }], discard: [D("d", "H", 7)], hands: { A: [D("a", "S", 2)], B: [] } };
-  if (!R.s40CanUseDiscard(gLay, "A")) fail("scala discard gate", "7H should be usable as a lay-off onto 4-5-6H");
+  if (!R.s40CanUseDiscard(gLay, "A")) fail("scala discard gate", "7H should be usable as a lay-off onto 4-5-6H once opened");
+  // once opened: forming a fresh meld with two hand cards is also enough
+  const gOpenedRun = { opened: { A: true, B: false }, melds: [], discard: [D("d", "H", 7)], hands: { A: [D("a", "H", 5), D("b", "H", 6), D("c", "S", 2)], B: [] } };
+  if (!R.s40CanUseDiscard(gOpenedRun, "A")) fail("scala discard gate", "once opened, 7H+5H,6H (a fresh run) must be takeable");
 }
 
 /* ── prepared deck (shuffle + cut ritual) ───────────────────── */
