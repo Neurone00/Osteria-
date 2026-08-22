@@ -1175,16 +1175,17 @@ function s40Discard(gs, seat, cardId) {
    Fromboliere, Mago — the Mago's attack blasts everything within 2 of the
    target), each a die with its own move, range and point cost; draft a company
    under a budget. Deploy near your castle, then fight in strict alternation —
-   one move each, back and forth (a unit twice before it must rest). A side that
-   runs its units out gets them all back, so its turn is never a dead one and
-   nobody sits through the other's whole company. Heal on your fountain (+3), your castle
-   (full), or a contested banner out in the field (+2, and you may still attack).
-   A castle bombards any enemy that ends beside it for 2. Win by wiping the enemy
-   — or by holding their castle: step in, survive their answer, and the keep is
-   yours. The battle ends after a fixed number of moves, decided on banners held,
+   one move each, back and forth. A unit may move twice, then it rests for a turn
+   (a side's lone survivor never rests, so it's never stuck). Heal at your castle
+   (full) or a fountain (+3) — fountains sit on the flanks, across from the
+   castles, so healing means leaving your line. Contested flags out in the field
+   add +1 to an attack made from one, and holding every flag at once wins outright.
+   A castle bombards any enemy that ends beside it for 2. Win by wiping the enemy,
+   holding their castle (step in, survive their answer), or seizing all the flags.
+   Otherwise the battle ends after a fixed number of moves, decided on flags held,
    then total HP. Obstacles block movement and line of sight; there is no
    elevation. A house-rule toggle plays the essential version: two classes, a
-   fixed company of four, a small board, no banners. */
+   fixed company of four, a small board, no flags. */
 const TACT = {
   R: 10, // map radius — a hexagon this many rings across, then eroded to an irregular coast
   ERODE: 0.34, // chance a border hex is chipped away each pass (2 passes) → random shape
@@ -1194,7 +1195,7 @@ const TACT = {
   SIEGE_STALL: 3, // if the enemy won't answer a siege, the keep falls after this many moves anyway
   ACTS: 2, // moves a single unit may spend before it must rest — you can move the same one twice
   CASTLE_DMG: 2, // a castle bombards any enemy that ends its turn next to it
-  BANNER_HEAL: 2, // standing on a contested banner mends this much (and you may still attack)
+  FLAG_DMG: 1, // attacking while you stand on a flag adds this much damage
   BUDGET: 15, // points to spend drafting a company
   MIN_UNITS: 3,
   MAX_UNITS: 6,
@@ -1316,26 +1317,17 @@ function tacticsBoardTry(R, erode, shp) {
   // enough room to deploy a full company next to each castle, or the shape is no good
   const deployRoom = (c) => cells.filter((x) => hdist(x, c) <= shp.deployR).length;
   if (deployRoom(cA) < shp.room || deployRoom(cB) < shp.room) return null;
-  const inward = (from, steps) => {
-    let cur = from;
-    for (let i = 0; i < steps; i++) {
-      let best = cur,
-        bd = hdist(cur, { q: 0, r: 0 });
-      for (const [dq, dr] of HEX_DIRS) {
-        const n = { q: cur.q + dq, r: cur.r + dr };
-        if (set.has(hkey(n.q, n.r)) && hdist(n, { q: 0, r: 0 }) < bd) {
-          best = n;
-          bd = hdist(n, { q: 0, r: 0 });
-        }
-      }
-      cur = best;
-    }
-    return cur;
-  };
-  const fA = inward(cA, 3),
-    fB = inward(cB, 3);
+  // fountains sit on the flanks — the axis across from the castles (castles N/S
+  // → fountains E/W), well clear of both keeps, so healing means leaving your
+  // line for the side of the map.
+  const sx = (c) => c.q + c.r / 2; // a hex's screen-x, for true left/right
+  const rMid = (rMin + rMax) / 2;
+  const flankBand = cells.filter((c) => Math.abs(c.r - rMid) <= Math.max(2, (rMax - rMin) * 0.22));
+  const band = flankBand.length ? flankBand : cells;
+  const west = band.reduce((a, b) => (sx(b) < sx(a) ? b : a));
+  const east = band.reduce((a, b) => (sx(b) > sx(a) ? b : a));
   const castle = { A: hkey(cA.q, cA.r), B: hkey(cB.q, cB.r) };
-  const fount = { A: hkey(fA.q, fA.r), B: hkey(fB.q, fB.r) };
+  const fount = { A: hkey(east.q, east.r), B: hkey(west.q, west.r) };
   const reserved = new Set([castle.A, castle.B, fount.A, fount.B]);
   const nearCastle = (c) => hdist(c, cA) <= shp.deployR || hdist(c, cB) <= shp.deployR;
   for (let attempt = 0; attempt < 60; attempt++) {
@@ -1386,8 +1378,10 @@ function dealTactics(dealer, opts, tally) {
     units: {}, // id → { id, owner, type, hp, max, q, r }
     order: [], // stable unit ids
     toPlace: { A: [], B: [] }, // unit types still to deploy
-    turn: dealer || "A", // used only for the roster pick and the deploy hand-off; battle is turn-free
-    spent: {}, // unit id → moves used before it must rest (capped at TACT.ACTS)
+    turn: dealer || "A", // whose move it is (roster/deploy hand-off, and battle alternation)
+    spent: {}, // unit id → moves used (capped at TACT.ACTS, then the unit rests)
+    rest: {}, // unit id → the owner-turn index it started resting on
+    turns: { A: 0, B: 0 }, // moves each side has made — drives the one-turn rest
     siege: null, // { seat, unitId, at, armed } — a unit sitting in the enemy castle
     moves: 0, // battle moves made by either side; the game ends at TACT.MOVE_CAP
     dealer: dealer || "A",
@@ -1453,6 +1447,8 @@ function tacticsDeploy(gs, seat, type, k) {
       g.turn = g.dealer;
       g.moves = 0;
       g.spent = {};
+      g.rest = {};
+      g.turns = { A: 0, B: 0 };
     }
   }
   return { g, quiet: true, ev: { t: "deploy", type } };
@@ -1486,6 +1482,8 @@ function tacticsDeployAll(gs, seat, placements) {
     g.turn = g.dealer;
     g.moves = 0;
     g.spent = {};
+    g.rest = {};
+    g.turns = { A: 0, B: 0 };
   }
   return { g, quiet: true, ev: { t: "deploy", n: placements.length } };
 }
@@ -1571,20 +1569,40 @@ function tacticsWin(g, winner, how) {
   g.how = how;
   if (winner) g.tally[winner] += 1;
 }
-// After every move: count it, give a side that has run its units out its whole
-// company back (so nobody's turn is ever a dead one), resolve a standing siege,
-// end the battle at the move cap — then simply hand the turn to the other side.
+const tacticsSquad = (g, seat) => g.order.filter((id) => g.units[id].owner === seat).length;
+// A unit can act unless it's resting — but a side's lone survivor never rests.
+function tacticsReady(g, id) {
+  const u = g.units[id];
+  if (!u) return false;
+  if (tacticsSquad(g, u.owner) <= 1) return true;
+  return (g.spent[id] || 0) < TACT.ACTS;
+}
+const tacticsHoldsAll = (g, seat) => g.board.banners.length > 0 && g.board.banners.every((k) => g.order.some((id) => g.units[id].owner === seat && hkey(g.units[id].q, g.units[id].r) === k));
+
+// After every move: count it, wake units that have finished their one-turn rest,
+// resolve a standing siege, check the win-by-flags and the move cap — then hand
+// the turn to the other side (strict alternation, one move each).
 function tacticsAfterMove(g, mover) {
   g.moves += 1;
-  // a side with no rested unit gets its whole company back — a turn is never wasted
+  g.turns[mover] = (g.turns[mover] || 0) + 1;
+  // a lone survivor never rests; a rested unit wakes once its owner has taken a turn
   for (const s of ["A", "B"]) {
-    const owns = g.order.some((id) => g.units[id].owner === s);
-    const ready = g.order.some((id) => g.units[id].owner === s && (g.spent[id] || 0) < TACT.ACTS);
-    if (owns && !ready) for (const id of g.order) if (g.units[id].owner === s) delete g.spent[id];
+    const squad = g.order.filter((id) => g.units[id].owner === s);
+    if (squad.length === 1) {
+      delete g.spent[squad[0]];
+      delete g.rest[squad[0]];
+    }
+  }
+  for (const id of g.order) {
+    const o = g.units[id].owner;
+    if ((g.spent[id] || 0) >= TACT.ACTS && g.rest[id] != null && (g.turns[o] || 0) - g.rest[id] >= 2) {
+      delete g.spent[id];
+      delete g.rest[id];
+    }
   }
   // siege: holding the enemy keep takes it once the defender has had a move to
-  // answer and the keep still stands — or, if they simply won't answer, after a
-  // few moves regardless. Broken the moment the besieger dies or steps off.
+  // answer and the keep still stands — or, if they won't answer, after a few
+  // moves regardless. Broken the moment the besieger dies or steps off.
   const s = g.siege;
   if (s) {
     const u = g.units[s.unitId];
@@ -1597,18 +1615,29 @@ function tacticsAfterMove(g, mover) {
       }
     }
   }
-  // the battle ends after the move cap — decide on banners held, then total HP
+  // holding every flag at once wins the game outright
+  if (tacticsHoldsAll(g, "A")) return tacticsWin(g, "A", "flags");
+  if (tacticsHoldsAll(g, "B")) return tacticsWin(g, "B", "flags");
+  // the battle ends after the move cap — decide on flags held, then total HP
   if (g.moves >= TACT.MOVE_CAP) {
-    const banners = (x) => g.board.banners.filter((k) => g.order.some((id) => g.units[id].owner === x && hkey(g.units[id].q, g.units[id].r) === k)).length;
+    const flags = (x) => g.board.banners.filter((k) => g.order.some((id) => g.units[id].owner === x && hkey(g.units[id].q, g.units[id].r) === k)).length;
     const hp = (x) => g.order.filter((id) => g.units[id].owner === x).reduce((t, id) => t + g.units[id].hp, 0);
-    const ba = banners("A"),
-      bb = banners("B"),
+    const fa = flags("A"),
+      fb = flags("B"),
       a = hp("A"),
       b = hp("B");
-    tacticsWin(g, ba !== bb ? (ba > bb ? "A" : "B") : a === b ? null : a > b ? "A" : "B", "timeout");
+    tacticsWin(g, fa !== fb ? (fa > fb ? "A" : "B") : a === b ? null : a > b ? "A" : "B", "timeout");
     return;
   }
   g.turn = other(mover); // strict alternation, one move each
+  // never a dead turn: if the side to move has units but all are resting, wake them
+  const t = g.turn;
+  if (g.order.some((id) => g.units[id].owner === t) && !g.order.some((id) => g.units[id].owner === t && tacticsReady(g, id))) {
+    for (const id of g.order) if (g.units[id].owner === t) {
+      delete g.spent[id];
+      delete g.rest[id];
+    }
+  }
 }
 
 // One activation, resolved atomically: optionally move to `toKey`, then either
@@ -1619,7 +1648,7 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   if (gs.done || gs.phase !== "battle" || gs.turn !== seat) return null;
   const g = clone(gs);
   const unit = g.units[unitId];
-  if (!unit || unit.owner !== seat || (g.spent[unitId] || 0) >= TACT.ACTS) return null;
+  if (!unit || unit.owner !== seat || !tacticsReady(g, unitId)) return null;
   if (toKey && toKey !== hkey(unit.q, unit.r)) {
     if (tacticsReach(g, unit)[toKey] === undefined) return null;
     const { q, r } = unhkey(toKey);
@@ -1638,21 +1667,22 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     const d = hdist(unit, target);
     if (d < u.min || d > u.rng || (u.rng > 1 && !tacticsLoS(g, unit, target))) return null;
     const res = tacticsRoll(unit.hp);
+    const dmg = res.total + (g.board.banners.includes(uk) ? TACT.FLAG_DMG : 0); // +1 attacking from a flag
     const tpos = { q: target.q, r: target.r }; // remember the impact hex before anything dies
-    target.hp -= res.total;
+    target.hp -= dmg;
     const killed = target.hp <= 0;
     if (killed) {
       delete g.units[action.targetId];
       g.order = g.order.filter((id) => id !== action.targetId);
     }
-    // a Mago's blast splashes the same roll onto every other enemy within its aoe
+    // a Mago's blast splashes the same damage onto every other enemy within its aoe
     let splash = 0;
     if (u.aoe) {
       for (const id of [...g.order]) {
         const o = g.units[id];
         if (!o || o.owner === seat || id === action.targetId) continue;
         if (hdist(tpos, o) <= u.aoe) {
-          o.hp -= res.total;
+          o.hp -= dmg;
           splash += 1;
           if (o.hp <= 0) {
             delete g.units[id];
@@ -1661,8 +1691,8 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
         }
       }
     }
-    roll = { attacker: unitId, target: action.targetId, atkType: unit.type, tgtType: target.type, dmg: res.total, crit: res.crit, killed };
-    ev = { t: "attack", unit: unit.type, target: target.type, dmg: res.total, crit: res.crit, killed, splash };
+    roll = { attacker: unitId, target: action.targetId, atkType: unit.type, tgtType: target.type, dmg, crit: res.crit, killed };
+    ev = { t: "attack", unit: unit.type, target: target.type, dmg, crit: res.crit, killed, splash };
     kind = res.crit ? "scopa" : "take"; // a crit gets the big slam + shake
   }
   // castle bombardment: a unit that ends its turn adjacent to the ENEMY castle
@@ -1680,7 +1710,6 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   if (alive) {
     if (uk === g.board.castle[seat]) unit.hp = unit.max; // rally to full at your keep
     else if (uk === g.board.fount[seat]) unit.hp = Math.min(unit.max, unit.hp + 3);
-    else if (g.board.banners.includes(uk)) unit.hp = Math.min(unit.max, unit.hp + TACT.BANNER_HEAL); // hold the field
   }
   g.last = { ...(roll || {}), unitId, to: uk };
   // holding the enemy castle doesn't win on contact: plant the siege and let it
@@ -1693,7 +1722,12 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   if (!g.order.some((id) => g.units[id].owner === "A")) tacticsWin(g, "B", "wipe");
   else if (!g.order.some((id) => g.units[id].owner === "B")) tacticsWin(g, "A", "wipe");
   if (!g.done) {
-    g.spent[unitId] = (g.spent[unitId] || 0) + 1;
+    // a unit that's still alive spends a move; on its last move it starts resting
+    // (a lone survivor is exempt — tracked in tacticsAfterMove, which also wakes)
+    if (g.units[unitId] && tacticsSquad(g, seat) > 1) {
+      g.spent[unitId] = (g.spent[unitId] || 0) + 1;
+      if (g.spent[unitId] >= TACT.ACTS) g.rest[unitId] = g.turns[seat] || 0;
+    }
     tacticsAfterMove(g, seat);
   }
   return { g, kind, ev, roll };
@@ -5410,6 +5444,27 @@ const rgbaOf = (hex, a) => {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 };
 const uIco = (type, s = 14, c) => <Ico n={TACT.units[type]?.icon || "sword"} s={s} c={c} />;
+// The unit token's outline reads its die: a d4 is a triangle, a d6 a square, a
+// d8 an octagon — so shape alone tells you how big the die is.
+const TOKEN = 34;
+const tokenKind = (max) => (max <= 4 ? "tri" : max >= 8 ? "oct" : "sq");
+function UnitToken({ type, label, col, stroke, sw = 2.4, dashed, floaty, dim }) {
+  const kind = tokenKind(TACT.units[type]?.max || 6);
+  const strokeCol = stroke || col;
+  const dash = dashed ? "3.5 2.5" : undefined;
+  const tri = kind === "tri";
+  return (
+    <div className={floaty ? "floaty" : ""} style={{ width: TOKEN, height: TOKEN, position: "relative", opacity: dim ? 0.45 : dashed ? 0.9 : 1 }}>
+      <svg width={TOKEN} height={TOKEN} viewBox="0 0 34 34" style={{ position: "absolute", inset: 0, overflow: "visible", filter: "drop-shadow(0 2px 3px rgba(18,18,18,0.26))" }}>
+        {kind === "sq" && <rect x="2.5" y="2.5" width="29" height="29" rx="7" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeDasharray={dash} />}
+        {kind === "tri" && <path d="M17 2.4 32 30.6 2 30.6 Z" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeLinejoin="round" strokeDasharray={dash} />}
+        {kind === "oct" && <polygon points="11,2.5 23,2.5 31.5,11 31.5,23 23,31.5 11,31.5 2.5,23 2.5,11" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeLinejoin="round" strokeDasharray={dash} />}
+      </svg>
+      <span style={{ position: "absolute", top: tri ? 9 : 2, left: "50%", transform: "translateX(-50%)", pointerEvents: "none", lineHeight: 0 }}>{uIco(type, 9, col)}</span>
+      <span style={{ position: "absolute", left: 0, right: 0, top: tri ? "62%" : "53%", transform: "translateY(-50%)", textAlign: "center", fontFamily: BRAND, fontWeight: 700, fontSize: 17, color: col, lineHeight: 1, pointerEvents: "none" }}>{label}</span>
+    </div>
+  );
+}
 const THEXR = 23; // hex size (centre → corner) — small enough to pan a big map
 const tpx = (q, r) => ({ x: THEXR * Math.sqrt(3) * (q + r / 2), y: THEXR * 1.5 * r });
 const tCorners = (cx, cy) =>
@@ -5499,7 +5554,7 @@ const TACT_SLIDES = [
   { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6." },
   { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male." },
   { icon: "bow", title: "Uno per uno", body: "A turno, una mossa a testa: attivi una pedina (la sposti e attacchi), fino a due volte prima che riposi. Il Mago colpisce un’area." },
-  { icon: "flag", title: "Come si vince", body: "Stermina l’altro o espugna il suo castello (tienilo un turno sotto tiro). Gli stendardi ti curano e, se il tempo scade, decidono la vittoria." },
+  { icon: "flag", title: "Come si vince", body: "Stermina l’altro, espugna il suo castello (tienilo un turno sotto tiro), o conquista tutti gli stendardi. Uno stendardo dà +1 danno a chi ci combatte." },
 ];
 function TacticsHowTo({ onClose }) {
   const [i, setI] = useState(0);
@@ -5594,6 +5649,7 @@ function Tactics({ room, gs, seat, commit }) {
   const [sel, setSel] = useState(null); // selected own unit id (battle)
   const [dest, setDest] = useState(null); // staged move hex key
   const [inspect, setInspect] = useState(null); // enemy unit id being previewed (move + range)
+  const [info, setInfo] = useState(null); // tapped element info: { k:"unit", id } | { k, side } for terrain
   const [draft, setDraft] = useState([]); // company being recruited (roster phase)
   // deploy staging, kept per seat so a solo seat-flip doesn't lose either side's
   // arrangement (each real device only ever touches its own seat)
@@ -5739,26 +5795,38 @@ function Tactics({ room, gs, seat, commit }) {
 
   const tapHex = (k) => {
     if (moved.current) return;
+    const sp = specialMark(k);
     if (gs.phase === "deploy") {
       if (myDeploy && nextType && deploySet.has(k)) {
         const { q, r } = unhkey(k);
         setLayout([...layout, { type: nextType, q, r }]);
-      }
+        setInfo(null);
+      } else if (sp) setInfo(sp); // tap a keep/fountain/flag for info even while placing
       return;
     }
-    if (!canPlay) return;
-    if (unit) {
+    // battle: moving has priority when a unit of yours is selected on your turn
+    if (canPlay && unit) {
       const uk = hkey(unit.q, unit.r);
-      if (k === uk) setDest(null);
-      else if (reach[k] !== undefined) setDest(k);
+      if (k === uk) {
+        setDest(null);
+        return;
+      }
+      if (reach[k] !== undefined) {
+        setDest(k);
+        return;
+      }
     }
+    // otherwise show info for a special hex, or dismiss it
+    setInfo(sp || null);
   };
   const tapUnit = (id) => {
     if (moved.current) return;
-    if (gs.phase !== "battle") return;
     const u = gs.units[id];
+    if (!u) return;
+    setInfo({ k: "unit", id }); // tapping any unit shows its card
+    if (gs.phase !== "battle") return;
     if (u.owner === seat) {
-      if (canPlay && (gs.spent[id] || 0) < TACT.ACTS) {
+      if (canPlay && tacticsReady(gs, id)) {
         setSel(id);
         setDest(null);
         setInspect(null);
@@ -5771,6 +5839,7 @@ function Tactics({ room, gs, seat, commit }) {
       setSel(null);
       setDest(null);
       setInspect(null);
+      setInfo(null);
       return;
     }
     setInspect((cur) => (cur === id ? null : id));
@@ -5857,6 +5926,8 @@ function Tactics({ room, gs, seat, commit }) {
       ? gs.win === seat
         ? gs.how === "castle"
           ? "Hai preso il castello — vittoria!"
+          : gs.how === "flags"
+          ? "Hai preso tutti gli stendardi — vittoria!"
           : "Nemico sterminato — vittoria!"
         : "Sconfitta…"
       : "Pareggio"
@@ -6027,42 +6098,24 @@ function Tactics({ room, gs, seat, commit }) {
             })}
           </svg>
 
-          {/* unit dice, flat on the board */}
+          {/* unit dice, flat on the board — shape shows the die (△ d4 · □ d6 · ⯃ d8) */}
           {gs.order.map((id) => {
             const u = gs.units[id];
             const showAt = sel === id && dest ? unhkey(dest) : { q: u.q, r: u.r };
             const p = at(showAt.q, showAt.r);
-            const spent = (gs.spent[id] || 0) >= TACT.ACTS && gs.phase === "battle";
+            const resting = gs.phase === "battle" && !tacticsReady(gs, id);
             const isSel = sel === id;
             const isIns = inspect === id;
             const isTgt = targetSet.has(hkey(u.q, u.r)) && !(sel === id);
             const col = TSIDE[u.owner];
+            const stroke = isSel ? T.ink : isTgt ? "#A5342F" : col;
             return (
               <div
                 key={id}
                 onClick={() => tapUnit(id)}
                 style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", cursor: canPlay ? "pointer" : "default", transition: "left 200ms ease, top 200ms ease" }}
               >
-                <div
-                  className={isSel ? "floaty" : ""}
-                  style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 8,
-                    background: "#fff",
-                    border: `2.5px solid ${col}`,
-                    outline: isSel ? `2px solid ${T.ink}` : isTgt ? `2px solid #A5342F` : isIns ? `2px solid ${col}` : "none",
-                    outlineOffset: 1,
-                    boxShadow: `0 2px 5px rgba(18,18,18,0.28)`,
-                    display: "grid",
-                    placeItems: "center",
-                    position: "relative",
-                    opacity: spent ? 0.5 : 1,
-                  }}
-                >
-                  <span style={{ position: "absolute", top: 0, left: 2 }}>{uIco(u.type, 9, col)}</span>
-                  <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18, color: col, lineHeight: 1 }}>{u.hp}</span>
-                </div>
+                <UnitToken type={u.type} label={u.hp} col={col} stroke={stroke} sw={isSel || isTgt || isIns ? 3.2 : 2.4} floaty={isSel} dim={resting} />
               </div>
             );
           })}
@@ -6072,30 +6125,13 @@ function Tactics({ room, gs, seat, commit }) {
           {layout.map((pl, i) => {
             const p = at(pl.q, pl.r);
             const col = TSIDE[seat];
-            const u = TACT.units[pl.type];
             return (
               <div
                 key={`stg${i}`}
                 onClick={() => setLayout(layout.filter((_, j) => j !== i))}
                 style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", cursor: "pointer", transition: "left 160ms ease, top 160ms ease" }}
               >
-                <div
-                  style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: 8,
-                    background: "#fff",
-                    border: `2.5px dashed ${col}`,
-                    boxShadow: `0 2px 5px rgba(18,18,18,0.22)`,
-                    display: "grid",
-                    placeItems: "center",
-                    position: "relative",
-                    opacity: 0.9,
-                  }}
-                >
-                  <span style={{ position: "absolute", top: 0, left: 2 }}>{uIco(pl.type, 9, col)}</span>
-                  <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18, color: col, lineHeight: 1 }}>{u.max}</span>
-                </div>
+                <UnitToken type={pl.type} label={TACT.units[pl.type].max} col={col} dashed />
               </div>
             );
           })}
@@ -6106,6 +6142,48 @@ function Tactics({ room, gs, seat, commit }) {
       <div style={{ marginTop: 10, textAlign: "center", minHeight: 22 }}>
         <div key={status} className="swap" style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15 }}>{status}</div>
       </div>
+
+      {/* tap any element for info: a unit's card, or what a keep/fountain/flag does */}
+      {(() => {
+        const iu = info && info.k === "unit" ? gs.units[info.id] : null;
+        const it = info && info.kind ? info : null;
+        if (!iu && !it) return null;
+        let icon, tint, title, desc;
+        if (iu) {
+          const d = TACT.units[iu.type];
+          icon = d.icon;
+          tint = TSIDE[iu.owner];
+          title = `${d.name}${iu.owner !== seat ? " · nemico" : ""}`;
+          desc = `d${d.max} · vita ${iu.hp}/${iu.max} · muove ${d.move} · tiro ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.aoe ? ` · area ${d.aoe}` : ""}`;
+        } else if (it.kind === "castle") {
+          icon = "castle";
+          tint = TSIDE[it.side];
+          title = `Castello ${it.side === seat ? "· tuo" : "· nemico"}`;
+          desc = it.side === seat ? "Ti risana del tutto. Difendilo." : "Entra e resisti un turno per espugnarlo e vincere.";
+        } else if (it.kind === "fount") {
+          icon = "drop";
+          tint = "#2C7AA0";
+          title = "Fontana";
+          desc = "Cura +3 a chi ci sosta. È sul fianco, lontana dai castelli.";
+        } else {
+          icon = "flag";
+          tint = it.side ? TSIDE[it.side] : "#9A7B2E";
+          title = it.side ? `Stendardo · di ${who(room, it.side)}` : "Stendardo · libero";
+          desc = "+1 danno se attacchi standoci sopra. Tienili tutti per vincere.";
+        }
+        return (
+          <div style={{ marginTop: 8, border: `1px solid ${T.line}`, borderRadius: 12, padding: "9px 12px", display: "flex", alignItems: "center", gap: 10 }}>
+            <Ico n={icon} s={20} c={tint} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 13.5, color: T.ink }}>{title}</div>
+              <Micro style={{ marginTop: 1 }}>{desc}</Micro>
+            </div>
+            <button onClick={() => setInfo(null)} style={{ ...plain, cursor: "pointer", padding: 4, color: T.ink30, display: "grid", placeItems: "center", WebkitTapHighlightColor: "transparent" }}>
+              <Ico n="plus" s={15} c={T.ink30} style={{ transform: "rotate(45deg)" }} />
+            </button>
+          </div>
+        );
+      })()}
 
       {gs.phase === "roster" && myTurn && gs.roster[seat] == null && (
         gs.simple ? (
@@ -7480,8 +7558,10 @@ function Summary({ room, gs }) {
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
           {gs.how === "castle" ? (
             <>Castello espugnato <Ico n="castle" s={16} /></>
+          ) : gs.how === "flags" ? (
+            <>Stendardi conquistati <Ico n="flag" s={16} /></>
           ) : gs.how === "timeout" ? (
-            "Tempo scaduto"
+            "Mosse esaurite"
           ) : gs.win ? (
             <>Campo sterminato <Ico n="sword" s={16} /></>
           ) : (
