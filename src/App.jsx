@@ -2912,7 +2912,7 @@ function InstallPrompt() {
     );
 
   const link = { ...plain, display: "flex", width: "fit-content", alignItems: "center", gap: 6, margin: "14px auto 0", textAlign: "center", color: T.ink, fontWeight: 600 };
-  const label = inApp && isAndroid ? "Apri in Chrome per installare" : "Installa l’app";
+  const label = inApp && isAndroid ? L("Apri in Chrome per installare","Open in Chrome to install") : L("Installa l’app","Install the app");
   const labelIco = inApp && isAndroid ? "exit" : "download";
   // In-app browsers can't install, so lead with the way out rather than a button
   // that would appear to do nothing.
@@ -3746,7 +3746,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             }, 1200);
             return;
           }
-          setMsg("Nessun tavolo risponde a questo codice.");
+          setMsg(L("Nessun tavolo risponde a questo codice.","No table answered that code."));
           setScreen("home");
         } else if (t.includes("unavailable-id") && host && idRetries++ < 4) {
           setLink("waiting");
@@ -3838,12 +3838,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
 
   const joinTable = async (forceCode) => {
     const code = (typeof forceCode === "string" ? forceCode : codeIn).trim().toUpperCase();
-    if (code.length !== 4) return setMsg("Il codice è di quattro lettere.");
+    if (code.length !== 4) return setMsg(L("Il codice è di quattro lettere.","The code is four letters."));
     setSeat("B");
     setLink("waiting");
     if (hasStore()) {
       const r = await storeRead(code);
-      if (!r) return setMsg(`Nessun tavolo al codice ${code}.`);
+      if (!r) return setMsg(`${L("Nessun tavolo al codice","No table at code")} ${code}.`);
       roomRef.current = r;
       setRoom(r);
       openStorage(code);
@@ -3852,7 +3852,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       setTimeout(() => {
         if (!roomRef.current) {
           netRef.current?.close();
-          setMsg(`Nessun tavolo al codice ${code}.`);
+          setMsg(`${L("Nessun tavolo al codice","No table at code")} ${code}.`);
           setScreen("home");
         }
       }, 3500);
@@ -6975,7 +6975,7 @@ function Perudo({ room, gs, seat, mine, commit }) {
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <Button full disabled={!legal} onClick={() => commit(perudoBid(gs, seat, bidQty, bidFace))}>
-                  Rilancia
+                  {L("Rilancia","Raise")}
                 </Button>
                 {gs.bid && (
                   <Button kind="line" onClick={() => commit(perudoDoubt(gs, seat))}>
@@ -7112,7 +7112,7 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
         </Sheet>
       )}
       {showHelp && (
-        <Sheet title="Come si contano i punti" onClose={() => setShowHelp(false)}>
+        <Sheet title={L("Come si contano i punti","How scoring works")} onClose={() => setShowHelp(false)}>
           <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink80 || T.ink }}>
             {[
               ["Uno–Sei", "somma dei dadi di quel numero"],
@@ -7355,7 +7355,7 @@ function Scala({ room, gs, seat, mine, commit }) {
   const canTakeDiscard = mine && gs.phase === "draw" && gs.discard.length > 0 && s40CanUseDiscard(gs, seat);
   const draw = (source) => {
     if (!(mine && gs.phase === "draw")) return;
-    if (source === "discard" && !canTakeDiscard) return setHint("Prendi lo scarto solo se lo usi subito — in un tris, una scala o l’apertura.");
+    if (source === "discard" && !canTakeDiscard) return setHint(L("Prendi lo scarto solo se lo usi subito — in un tris, una scala o l’apertura.","Take the discard only to use it now — in a set, a run or your opening."));
     commit(s40Draw(gs, seat, source));
   };
   const layOff = (meldId) => {
@@ -7669,22 +7669,22 @@ function Scala({ room, gs, seat, mine, commit }) {
               <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
                 {opened ? (
                   <Button full soft={!selMeld.ok} onClick={doCala}>
-                    Cala
+                    {L("Cala","Lay")}
                   </Button>
                 ) : (
                   <>
                     <Button kind="line" soft={!selMeld.ok} onClick={doAggiungi}>
-                      Aggiungi
+                      {L("Aggiungi","Add")}
                     </Button>
                     <Button full soft={stagedTotal < 40} onClick={doApri}>
-                      Apri {staged.length ? `· ${stagedTotal}` : ""}
+                      {L("Apri","Open")} {staged.length ? `· ${stagedTotal}` : ""}
                     </Button>
                   </>
                 )}
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", justifyContent: "space-between" }}>
                 <Button kind="line" full soft={sel.length !== 1} onClick={doScarta}>
-                  Scarta
+                  {L("Scarta","Discard")}
                 </Button>
                 {(sel.length > 0 || staged.length > 0) && (
                   <button
