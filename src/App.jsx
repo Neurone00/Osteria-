@@ -3163,16 +3163,16 @@ function LeaveDialog({ show, onStay, onGo }) {
     <div style={{ position: "fixed", inset: 0, zIndex: 70, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "26px 22px 20px", maxWidth: 340, width: "100%", textAlign: "center", boxShadow: "0 20px 50px rgba(18,18,18,0.3)" }}>
         <div><Ico n="wine" s={32} c={T.ink} sw={1.6} /></div>
-        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 8 }}>Già ti alzi dal tavolo?</div>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 8 }}>{L("Già ti alzi dal tavolo?", "Leaving the table already?")}</div>
         <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 20px" }}>
-          La mano è ancora calda e il tuo posto è caldo pure lui. Se esci lasci le carte all’oste — e l’oste bara.
+          {L("La mano è ancora calda e il tuo posto è caldo pure lui. Se esci lasci le carte all’oste — e l’oste bara.", "The hand's still warm, and so is your seat. Leave and you hand your cards to the innkeeper — and the innkeeper cheats.")}
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <Button full onClick={onStay}>
-            Resto a giocare
+            {L("Resto a giocare", "Stay and play")}
           </Button>
           <button onClick={onGo} style={{ ...plain, color: T.ink60, fontSize: 14, padding: "6px 0" }}>
-            Esco lo stesso
+            {L("Esco lo stesso", "Leave anyway")}
           </button>
         </div>
       </div>
@@ -3186,12 +3186,12 @@ function LeaveDialog({ show, onStay, onGo }) {
 function FinaleModal({ show, decided, outcome, room, gs, seat, onAgain, onExit }) {
   if (!show) return null;
   const isHost = seat === "A";
-  const nextLabel = scopaLike(room.game) && !gs.matchDone ? "Prossima mano" : "Gioca ancora";
+  const nextLabel = scopaLike(room.game) && !gs.matchDone ? L("Prossima mano", "Next hand") : L("Gioca ancora", "Play again");
   const win = outcome === "win";
   const draw = outcome === "draw";
-  const head = !decided ? "Punteggio" : win ? "Vittoria!" : draw ? "Pareggio" : "Sconfitta";
+  const head = !decided ? L("Punteggio", "Score") : win ? L("Vittoria!", "You win!") : draw ? L("Pareggio", "Draw") : L("Sconfitta", "You lose");
   const color = !decided ? T.ink : win ? "#B8862B" : draw ? T.ink60 : "#A5342F";
-  const sub = !decided ? null : win ? "Offre l’oste" : draw ? "Pari e patta — nessuno paga" : "Ci sta una rivincita.";
+  const sub = !decided ? null : win ? L("Offre l’oste", "Drinks on the house") : draw ? L("Pari e patta — nessuno paga", "All square — nobody pays") : L("Ci sta una rivincita.", "There's always a rematch.");
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 90, background: SCRIM, display: "grid", placeItems: "center", padding: 20, overflowY: "auto" }}>
       <div className="fade" style={{ position: "relative", background: T.bg, border: `1px solid ${T.line}`, borderRadius: 20, padding: "22px 20px", maxWidth: 360, width: "100%", boxShadow: "0 24px 60px rgba(18,18,18,0.35)", overflow: "hidden" }}>
@@ -3209,10 +3209,10 @@ function FinaleModal({ show, decided, outcome, room, gs, seat, onAgain, onExit }
               {nextLabel}
             </Button>
           ) : (
-            <Micro style={{ textAlign: "center" }}>distribuisce {room.names.A}…</Micro>
+            <Micro style={{ textAlign: "center" }}>{room.names.A} {L("distribuisce", "is dealing")}…</Micro>
           )}
           <button onClick={onExit} style={{ ...plain, color: T.ink60, fontSize: 14, padding: "6px 0" }}>
-            Torna ai giochi
+            {L("Torna ai giochi", "Back to games")}
           </button>
         </div>
       </div>
@@ -3231,28 +3231,28 @@ function EndGameOverlay({ room, seat, onAgree, onDecline, onCancel }) {
       <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "24px 22px 20px", maxWidth: 340, width: "100%", textAlign: "center", boxShadow: "0 20px 50px rgba(18,18,18,0.3)" }}>
         {mineReq ? (
           <>
-            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 20, color: T.ink }}>Aspetto {who(room, other(seat))}…</div>
-            <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px 0 16px" }}>Hai chiesto di chiudere la partita. Deve dire di sì anche l’altro.</p>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 20, color: T.ink }}>{L("Aspetto", "Waiting for")} {who(room, other(seat))}…</div>
+            <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px 0 16px" }}>{L("Hai chiesto di chiudere la partita. Deve dire di sì anche l’altro.", "You asked to end the game. The other player has to agree too.")}</p>
             <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 18 }}>
               <span className="recdot" style={{ animationDelay: "0ms" }} />
               <span className="recdot" style={{ animationDelay: "140ms" }} />
               <span className="recdot" style={{ animationDelay: "280ms" }} />
             </div>
             <Button kind="line" full onClick={onCancel}>
-              Annulla
+              {L("Annulla", "Cancel")}
             </Button>
           </>
         ) : (
           <>
             <div><Ico n="exit" s={30} c={T.ink} sw={1.6} /></div>
-            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 21, color: T.ink, marginTop: 6 }}>{who(room, req.by)} vuole smettere</div>
-            <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px 0 18px" }}>Chiudete qui e tornate a scegliere un gioco?</p>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 21, color: T.ink, marginTop: 6 }}>{who(room, req.by)} {L("vuole smettere", "wants to stop")}</div>
+            <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px 0 18px" }}>{L("Chiudete qui e tornate a scegliere un gioco?", "End here and go back to pick a game?")}</p>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <Button full onClick={onAgree}>
-                Sì, ai giochi
+                {L("Sì, ai giochi", "Yes, to the games")}
               </Button>
               <button onClick={onDecline} style={{ ...plain, color: T.ink60, fontSize: 14, padding: "6px 0" }}>
-                No, continuiamo
+                {L("No, continuiamo", "No, keep playing")}
               </button>
             </div>
           </>
@@ -3286,7 +3286,7 @@ function ReconnectVeil({ show, busy, onRetry }) {
           <span className="recdot" style={{ animationDelay: "140ms" }} />
           <span className="recdot" style={{ animationDelay: "280ms" }} />
         </div>
-        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 20, color: T.ink }}>Riconnessione…</div>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 20, color: T.ink }}>{L("Riconnessione…", "Reconnecting…")}</div>
         <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px 0 20px" }}>Connessione persa. Riprendo il tavolo appena torna la rete.</p>
         <Button full soft={busy} onClick={onRetry}>
           {busy ? "Riconnetto…" : "Riconnetti ora"}
@@ -4420,27 +4420,27 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, padding: "18px 18px 16px" }}>
           <div style={{ paddingRight: 40 }}>
             <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 19 }}>{gm.name}</div>
-            <Micro style={{ marginTop: 3 }}>Regole della casa</Micro>
+            <Micro style={{ marginTop: 3 }}>{L("Regole della casa", "House rules")}</Micro>
           </div>
           <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y", marginTop: 12, paddingRight: 2 }}>
             {gm.opts.length > 0 ? (
               <RuleChips conf={gm} opts={room.opts} setOpt={host ? setOpt : null} />
             ) : (
-              <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 12.5, lineHeight: 1.5 }}>Nessuna regola da scegliere per questo gioco.</Micro>
+              <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 12.5, lineHeight: 1.5 }}>{L("Nessuna regola da scegliere per questo gioco.", "No rules to set for this game.")}</Micro>
             )}
             {usesRitual(key) && (
               <>
-                <Micro style={{ marginTop: 18 }}>Punti e prese{host ? "" : " · li decide l’host"}</Micro>
+                <Micro style={{ marginTop: 18 }}>{L("Punti e prese", "Points & captures")}{host ? "" : L(" · li decide l’host", " · host decides")}</Micro>
                 <Segmented
                   options={[
-                    { v: false, label: "Nascondi" },
-                    { v: true, label: "Mostra" },
+                    { v: false, label: L("Nascondi", "Hide") },
+                    { v: true, label: L("Mostra", "Show") },
                   ]}
                   value={!!room.scores}
                   onPick={host ? setScores : null}
                   style={{ marginTop: 8 }}
                 />
-                <Micro style={{ marginTop: 18 }}>Carte · sul tuo telefono</Micro>
+                <Micro style={{ marginTop: 18 }}>{L("Carte · sul tuo telefono", "Cards · on your phone")}</Micro>
                 <FaceToggle french={french} setFrench={setFrench} />
               </>
             )}
@@ -4448,10 +4448,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           <div style={{ marginTop: 14 }}>
             {host ? (
               <Button full disabled={!seated} onClick={start}>
-                {seated ? `Distribuisci · ${gm.name}` : "Aspetta il 2º giocatore…"}
+                {seated ? `${L("Distribuisci", "Deal")} · ${gm.name}` : L("Aspetta il 2º giocatore…", "Waiting for player 2…")}
               </Button>
             ) : (
-              <Micro>{room.names.A} sta preparando il tavolo — un attimo.</Micro>
+              <Micro>{room.names.A} {L("sta preparando il tavolo — un attimo.", "is setting the table — one moment.")}</Micro>
             )}
           </div>
         </div>
@@ -4466,7 +4466,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <div className="fade">
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
             <div>
-              <Micro>Codice tavolo</Micro>
+              <Micro>{L("Codice tavolo", "Table code")}</Micro>
               <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
                 {room.code.split("").map((ch, i) => (
                   <div key={i} style={{ ...codeTile, width: 34, height: 44, fontSize: 19 }}>
@@ -4476,21 +4476,21 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               </div>
             </div>
             <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6 }}>
-              {seated ? `${room.names.B} è al tavolo` : "In attesa del secondo giocatore…"}
+              {seated ? `${room.names.B} ${L("è al tavolo", "is at the table")}` : L("In attesa del secondo giocatore…", "Waiting for the second player…")}
             </Micro>
           </div>
 
           {!seated && (
             <div className="fade" style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, padding: 12, border: `1px solid ${T.line}`, borderRadius: 12, flexWrap: "wrap" }}>
               <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 12.5, lineHeight: 1.5, flex: 1, minWidth: 140 }}>
-                Dai il codice all’altro giocatore, oppure avvicinate i telefoni (Bump).
+                {L("Dai il codice all’altro giocatore, oppure avvicinate i telefoni (Bump).", "Give the code to the other player, or tap phones together (Bump).")}
               </Micro>
               <button onClick={() => share(room.code)} style={sharePill}>
-                Condividi link
+                {L("Condividi link", "Share link")}
               </button>
               {hasNfc() && (
                 <button onClick={() => writeNfc(room.code)} style={sharePill}>
-                  Tag NFC
+                  {L("Tag NFC", "NFC tag")}
                 </button>
               )}
             </div>
@@ -4506,9 +4506,9 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           <Rule />
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <Micro>Gioco</Micro>
+            <Micro>{L("Gioco", "Game")}</Micro>
             <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 11, color: T.ink30 }}>
-              {host ? "Scorri · tocca per le regole" : "Sceglie l’host"}
+              {host ? L("Scorri · tocca per le regole", "Swipe · tap for rules") : L("Sceglie l’host", "Host picks")}
             </Micro>
           </div>
           <div style={{ marginTop: 10 }}>
@@ -4531,7 +4531,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     return (
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title="Prepara il mazzo" />
+        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={L("Prepara il mazzo", "Prepare the deck")} />
         {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
         <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
         <Prepare
@@ -5081,8 +5081,8 @@ function FaceToggle({ french, setFrench }) {
   return (
     <Segmented
       options={[
-        { v: false, label: "Napoletane" },
-        { v: true, label: "Francesi ♦♥♠♣" },
+        { v: false, label: L("Napoletane", "Neapolitan") },
+        { v: true, label: L("Francesi ♦♥♠♣", "French ♦♥♠♣") },
       ]}
       value={french}
       onPick={(v) => setFrench(v)}
