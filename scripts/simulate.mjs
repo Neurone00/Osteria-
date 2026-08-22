@@ -36,7 +36,7 @@ const EXPORTS = [
   "dealRuba", "rubaOptions", "rubaPlay",
   "dealCamicia", "camiciaFlip", "demand",
   "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed", "peppaShuffle", "peppaReady", "peppaReorder", "peppaOffer",
-  "TACT", "dealTactics", "tacticsRoster", "tacticsDeploy", "tacticsDeployAll", "tacticsActivate", "tacticsReach", "tacticsTargets",
+  "TACT", "dealTactics", "tacticsSetup", "tacticsActivate", "tacticsReach", "tacticsTargets",
   "tacticsRoll", "tacticsDeployable", "tacticsBoard", "hdist", "hkey", "unhkey",
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
@@ -321,36 +321,31 @@ function playTactics() {
   const openKeys = g.board.cells.map((c) => R.hkey(c.q, c.r)).filter((k) => !g.board.blocked[k]);
   if (!tacticsConnectedKeys(openKeys)) return fail("tactics", "generated board is not fully connected");
   for (const k of g.board.banners) if (!openKeys.includes(k)) return fail("tactics", "a banner sits on a blocked or off-board hex");
-  const compA = draftCompany(g.simple),
-    compB = draftCompany(g.simple);
-  let r = R.tacticsRoster(g, "A", compA);
-  if (!r) return fail("tactics", "roster A refused");
-  g = r.g;
-  r = R.tacticsRoster(g, "B", compB);
-  if (!r) return fail("tactics", "roster B refused");
-  g = r.g;
-  if (g.phase !== "deploy") return fail("tactics", "did not reach deploy after both rosters");
-  // both sides arrange their whole company, then lock it in as one move (the
-  // dealer commits first, so submit for whoever holds the turn each pass)
-  let guard = 0;
-  while (g.phase === "deploy") {
-    if (++guard > 4) return fail("tactics", "deploy never finished");
+  // roster + deployment are one hidden step: each seat drafts a company and
+  // places it, locked in serialized (dealer first). Nothing is shared until both
+  // are in and the battle opens.
+  let expected = 0,
+    guard = 0;
+  while (g.phase === "setup") {
+    if (++guard > 4) return fail("tactics", "setup never finished");
     const seat = g.turn;
+    const comp = draftCompany(g.simple);
     const used = new Set();
     const placements = [];
-    for (const type of g.toPlace[seat]) {
+    for (const type of comp) {
       const spot = openKeys.find((k) => !used.has(k) && R.tacticsDeployable(g, seat, k));
       if (!spot) return fail("tactics", `no legal deploy hex for ${seat}`);
       used.add(spot);
       const { q, r: rr } = R.unhkey(spot);
       placements.push({ type, q, r: rr });
     }
-    const d = R.tacticsDeployAll(g, seat, placements);
-    if (!d) return fail("tactics", "batch deploy refused a legal placement");
+    const d = R.tacticsSetup(g, seat, placements);
+    if (!d) return fail("tactics", "setup refused a legal company");
     g = d.g;
+    expected += comp.length;
   }
   if (g.phase !== "battle") return fail("tactics", "did not reach battle");
-  if (g.order.length !== compA.length + compB.length) return fail("tactics", `expected ${compA.length + compB.length} units deployed, got ${g.order.length}`);
+  if (g.order.length !== expected) return fail("tactics", `expected ${expected} units deployed, got ${g.order.length}`);
   // battle: strict alternation — the side on turn moves one of its rested units.
   // Random legal activations until a win or the move cap ends it.
   let steps = 0;

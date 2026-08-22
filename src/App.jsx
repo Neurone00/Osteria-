@@ -1407,11 +1407,10 @@ function dealTactics(dealer, opts, tally) {
     simple, // essential rules: two classes, fixed company of 4, small board, no banners
     rules,
     board: tacticsBoard(simple, rules.random),
-    phase: "roster", // roster → deploy → battle
-    roster: { A: null, B: null }, // drafted company (array of type keys), or null until chosen
+    phase: "setup", // setup (draft + place, hidden & at once) → battle
+    setup: { A: null, B: null }, // each seat's locked-in placements; hidden until both are in
     units: {}, // id → { id, owner, type, hp, max, q, r }
     order: [], // stable unit ids
-    toPlace: { A: [], B: [] }, // unit types still to deploy
     turn: dealer || "A", // whose move it is (roster/deploy hand-off, and battle alternation)
     spent: {}, // unit id → moves used (capped at TACT.ACTS, then the unit rests)
     rest: {}, // unit id → the owner-turn index it started resting on
@@ -1446,72 +1445,39 @@ function tacticsSimpleLegal(company) {
   );
 }
 
-// Lock in a drafted company (an array of type keys). Legality depends on the
-// mode: the essential four, or a budget draft of 3–6 from the full pool.
-function tacticsRoster(gs, seat, company) {
-  if (gs.done || gs.phase !== "roster" || gs.turn !== seat || gs.roster[seat] != null) return null;
-  const legal = gs.simple ? tacticsSimpleLegal(company) : tacticsCompanyLegal(company);
+// Roster and deployment happen at once and in private: each player drafts a
+// company AND places it entirely on their own device, seeing nothing of the
+// other's. Locking in writes only your own placements into a hidden slot; when
+// both are in, every unit is built and the battle begins — the reveal. The two
+// submits stay serialized by turn (dealer first) so they never race under the
+// one-writer transport, but neither player waits to set up.
+// `placements` is [{ type, q, r }] — the drafted company, each on a legal hex.
+function tacticsSetup(gs, seat, placements) {
+  if (gs.done || gs.phase !== "setup" || gs.turn !== seat || gs.setup[seat] != null) return null;
+  if (!Array.isArray(placements)) return null;
+  const types = placements.map((p) => p.type);
+  const legal = gs.simple ? tacticsSimpleLegal(types) : tacticsCompanyLegal(types);
   if (!legal) return null;
-  const g = clone(gs);
-  g.roster[seat] = [...company];
-  if (g.roster[other(seat)] == null) g.turn = other(seat);
-  else {
-    for (const s of ["A", "B"]) g.toPlace[s] = [...g.roster[s]];
-    g.phase = "deploy";
-    g.turn = g.dealer;
-  }
-  return { g, quiet: true, ev: { t: "roster", n: company.length } };
-}
-
-function tacticsDeploy(gs, seat, type, k) {
-  if (gs.done || gs.phase !== "deploy" || gs.turn !== seat) return null;
-  const g = clone(gs);
-  const queue = g.toPlace[seat];
-  const i = queue.indexOf(type);
-  if (i < 0 || !tacticsDeployable(g, seat, k)) return null;
-  const { q, r } = unhkey(k);
-  const id = `${seat}${type[0]}${g.order.length}`;
-  g.units[id] = { id, owner: seat, type, hp: TACT.units[type].max, max: TACT.units[type].max, q, r };
-  g.order.push(id);
-  queue.splice(i, 1);
-  if (queue.length === 0) {
-    if (g.toPlace[other(seat)].length) g.turn = other(seat);
-    else {
-      g.phase = "battle";
-      g.turn = g.dealer;
-      g.moves = 0;
-      g.spent = {};
-      g.rest = {};
-      g.turns = { A: 0, B: 0 };
-    }
-  }
-  return { g, quiet: true, ev: { t: "deploy", type } };
-}
-
-// Both sides arrange their whole company at once, in parallel and locally, then
-// lock it in as a single move. The submit stays serialized by turn (the dealer
-// commits first, then the other) so the two writes never race under the
-// one-writer-per-move transport — but neither player waits to *place* their
-// pieces. `placements` is [{ type, q, r }] covering exactly this seat's queue.
-function tacticsDeployAll(gs, seat, placements) {
-  if (gs.done || gs.phase !== "deploy" || gs.turn !== seat) return null;
-  const need = gs.toPlace[seat];
-  if (!Array.isArray(placements) || placements.length !== need.length) return null;
-  // the placed types must be exactly this seat's queue (as a multiset)
-  if ([...need].sort().join(",") !== placements.map((p) => p.type).sort().join(",")) return null;
   const g = clone(gs);
   const used = new Set();
   for (const p of placements) {
     const k = hkey(p.q, p.r);
-    if (used.has(k) || !tacticsDeployable(g, seat, k)) return null;
+    if (used.has(k)) return null;
+    if (!tacticsOpen(g, k) || hdist(unhkey(k), unhkey(g.board.castle[seat])) > g.board.deployR) return null;
     used.add(k);
-    const id = `${seat}${p.type[0]}${g.order.length}`;
-    g.units[id] = { id, owner: seat, type: p.type, hp: TACT.units[p.type].max, max: TACT.units[p.type].max, q: p.q, r: p.r };
-    g.order.push(id);
   }
-  g.toPlace[seat] = [];
-  if (g.toPlace[other(seat)].length) g.turn = other(seat);
-  else {
+  g.setup[seat] = placements.map((p) => ({ type: p.type, q: p.q, r: p.r }));
+  if (g.setup[other(seat)] == null) {
+    g.turn = other(seat); // hand the lock-in to the other side (still hidden)
+  } else {
+    // both companies are in — build every unit and open the battle
+    for (const s of ["A", "B"]) {
+      for (const p of g.setup[s]) {
+        const id = `${s}${p.type[0]}${g.order.length}`;
+        g.units[id] = { id, owner: s, type: p.type, hp: TACT.units[p.type].max, max: TACT.units[p.type].max, q: p.q, r: p.r };
+        g.order.push(id);
+      }
+    }
     g.phase = "battle";
     g.turn = g.dealer;
     g.moves = 0;
@@ -1519,7 +1485,7 @@ function tacticsDeployAll(gs, seat, placements) {
     g.rest = {};
     g.turns = { A: 0, B: 0 };
   }
-  return { g, quiet: true, ev: { t: "deploy", n: placements.length } };
+  return { g, quiet: true, ev: { t: "setup" } };
 }
 
 // Hexes a unit can step to (BFS to its Move, around obstacles and other units).
@@ -5687,15 +5653,12 @@ function Tactics({ room, gs, seat, commit }) {
   const [dest, setDest] = useState(null); // staged move hex key
   const [inspect, setInspect] = useState(null); // enemy unit id being previewed (move + range)
   const [info, setInfo] = useState(null); // tapped element info: { k:"unit", id } | { k, side } for terrain
-  const [draft, setDraft] = useState([]); // company being recruited (roster phase)
-  // deploy staging, kept per seat so a solo seat-flip doesn't lose either side's
-  // arrangement (each real device only ever touches its own seat)
-  const [layouts, setLayouts] = useState({ A: [], B: [] });
-  const [pendings, setPendings] = useState({ A: false, B: false });
-  const layout = layouts[seat];
-  const pending = pendings[seat];
-  const setLayout = (next) => setLayouts((l) => ({ ...l, [seat]: typeof next === "function" ? next(l[seat]) : next }));
-  const setPending = (v) => setPendings((p) => ({ ...p, [seat]: v }));
+  // setup (roster + deployment) is done locally and privately, then locked in
+  const [draft, setDraft] = useState([]); // company being recruited
+  const [step, setStep] = useState("roster"); // setup sub-step: "roster" → "deploy"
+  const [layout, setLayout] = useState([]); // this seat's placements
+  const [pending, setPending] = useState(false); // arranged & waiting for our turn to lock in
+  const [banner, setBanner] = useState(null); // big phase title card: { title, sub }
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [help, setHelp] = useState(false);
@@ -5717,40 +5680,44 @@ function Tactics({ room, gs, seat, commit }) {
     }
   }, [room?.anim?.id]);
 
-  // clear any stale selection when the turn/phase flips
+  // clear any stale battle selection when the turn/phase flips
   useEffect(() => {
     setSel(null);
     setDest(null);
     setInspect(null);
-    setDraft([]);
   }, [gs.turn, gs.phase]);
 
-  // deploy is arranged locally and in parallel — reset the staging when the
-  // phase changes, when this seat has locked in (its queue emptied), or when the
-  // viewpoint flips seats in solo. NOT on turn change: our arrangement must
-  // survive the other side locking in first.
-  const toPlaceN = (gs.toPlace[seat] || []).length;
-  // drop a side's staged arrangement once it has locked in (its queue emptied)
-  // or once we leave the deploy phase — but never merely because we flipped seats.
-  const aOpen = gs.phase === "deploy" && (gs.toPlace.A || []).length > 0;
-  const bOpen = gs.phase === "deploy" && (gs.toPlace.B || []).length > 0;
+  // setup is arranged locally and privately. Reset the whole setup when the
+  // phase changes, when this seat has locked in, or when the viewpoint flips
+  // seats in solo — but never merely because the other side locked in first.
+  const mySetup = gs.phase === "setup" && gs.setup && gs.setup[seat] == null && !gs.done; // still setting up
+  const queueN = draft.length;
   useEffect(() => {
-    setLayouts((l) => ({ A: aOpen ? l.A : [], B: bOpen ? l.B : [] }));
-    setPendings((p) => ({ A: aOpen ? p.A : false, B: bOpen ? p.B : false }));
-  }, [gs.phase, aOpen, bOpen]);
+    setStep("roster");
+    setDraft([]);
+    setLayout([]);
+    setPending(false);
+  }, [seat, gs.phase, mySetup]);
 
-  // an arrangement that's already finished locks in the moment its turn comes
-  // (the dealer commits first). Keyed on whose turn it is, so in solo the second
-  // side resolves without a flip; on a real device only its own seat is ever
-  // pending, so this never double-submits.
+  // a finished arrangement locks in the moment our turn comes (dealer first)
   useEffect(() => {
-    const t = gs.turn;
-    const need = (gs.toPlace[t] || []).length;
-    if (gs.phase === "deploy" && !gs.done && pendings[t] && need > 0 && layouts[t].length === need) {
-      commit(tacticsDeployAll(gs, t, layouts[t]));
-      setPendings((p) => ({ ...p, [t]: false }));
+    if (pending && gs.phase === "setup" && !gs.done && gs.turn === seat && gs.setup[seat] == null && draft.length > 0 && layout.length === draft.length) {
+      commit(tacticsSetup(gs, seat, layout));
+      setPending(false);
     }
-  }, [pendings, gs.turn, gs.phase]);
+  }, [pending, gs.turn, gs.phase]);
+
+  // big phase title cards: ROSTER / DEPLOYMENT while setting up, ALLE ARMI when
+  // the battle opens and both companies are revealed at once
+  useEffect(() => {
+    let card = null;
+    if (gs.phase === "battle" && !gs.done) card = { title: "ALLE ARMI", sub: null };
+    else if (gs.phase === "setup" && mySetup) card = step === "roster" ? { title: "ROSTER", sub: "Phase" } : { title: "DEPLOYMENT", sub: "Phase" };
+    if (!card) return;
+    setBanner(card);
+    const t = setTimeout(() => setBanner(null), card.sub ? 1300 : 1600);
+    return () => clearTimeout(t);
+  }, [gs.phase, step, mySetup]);
 
   // layout — bounds computed from the irregular cell set
   const centers = board.cells.map((c) => ({ c, ...tpx(c.q, c.r) }));
@@ -5823,18 +5790,18 @@ function Tactics({ room, gs, seat, commit }) {
   }
   const insCol = insUnit ? TSIDE[insUnit.owner] : null;
 
-  // deploy: this seat can arrange its own company whenever it still has pieces
-  // to place — regardless of whose turn it is to lock in (both sides at once).
-  const myDeploy = gs.phase === "deploy" && !gs.done && toPlaceN > 0;
+  // placement (the deploy sub-step of setup): this seat drops its drafted company
+  // onto its own castle's zone, privately — the opponent sees none of it.
+  const myPlace = mySetup && step === "deploy" && !gs.done;
   const layoutKeys = new Set(layout.map((p) => hkey(p.q, p.r)));
-  const nextType = myDeploy ? gs.toPlace[seat][layout.length] : null; // next piece to place, null once all placed
-  const deploySet = myDeploy && nextType ? new Set(board.cells.map((c) => hkey(c.q, c.r)).filter((k) => tacticsDeployable(gs, seat, k) && !layoutKeys.has(k))) : new Set();
+  const nextType = myPlace ? draft[layout.length] : null; // next piece to place, null once all placed
+  const deploySet = myPlace && nextType ? new Set(board.cells.map((c) => hkey(c.q, c.r)).filter((k) => tacticsDeployable(gs, seat, k) && !layoutKeys.has(k))) : new Set();
 
   const tapHex = (k) => {
     if (moved.current) return;
     const sp = specialMark(k);
-    if (gs.phase === "deploy") {
-      if (myDeploy && nextType && deploySet.has(k)) {
+    if (gs.phase === "setup") {
+      if (myPlace && nextType && deploySet.has(k)) {
         const { q, r } = unhkey(k);
         setLayout([...layout, { type: nextType, q, r }]);
         setInfo(null);
@@ -5888,11 +5855,11 @@ function Tactics({ room, gs, seat, commit }) {
     setDest(null);
     setInspect(null);
   };
-  // lock in the whole arrangement; if it isn't our turn to commit yet, mark it
-  // pending and the effect above submits the moment the turn comes round.
-  const submitDeploy = () => {
-    if (layout.length !== toPlaceN || toPlaceN === 0) return;
-    if (gs.turn === seat) commit(tacticsDeployAll(gs, seat, layout));
+  // lock in the whole setup (company + placements); if it isn't our turn to
+  // commit yet, mark it pending and the effect above submits when the turn comes.
+  const submitSetup = () => {
+    if (draft.length === 0 || layout.length !== draft.length) return;
+    if (gs.turn === seat) commit(tacticsSetup(gs, seat, layout));
     else setPending(true);
   };
 
@@ -5968,18 +5935,16 @@ function Tactics({ room, gs, seat, commit }) {
           : "Nemico sterminato — vittoria!"
         : "Sconfitta…"
       : "Pareggio"
-    : gs.phase === "roster"
-    ? gs.roster[seat] == null
-      ? "Scegli la tua compagnia"
-      : `${who(room, other(seat))} sta scegliendo…`
-    : gs.phase === "deploy"
-    ? myDeploy
-      ? nextType
-        ? `Schiera vicino al castello — ${TACT.units[nextType]?.name} (${toPlaceN - layout.length} da piazzare)`
-        : pending
-        ? `Pronto — aspetto ${who(room, other(seat))}`
-        : "Compagnia pronta — conferma lo schieramento"
-      : `${who(room, other(seat))} sta schierando…`
+    : gs.phase === "setup"
+    ? !mySetup
+      ? `Pronto — aspetto ${who(room, other(seat))}`
+      : step === "roster"
+      ? "Recluta la tua compagnia — di nascosto"
+      : nextType
+      ? `Piazza vicino al tuo castello — ${TACT.units[nextType]?.name} (${draft.length - layout.length} da piazzare)`
+      : pending
+      ? `Pronto — aspetto ${who(room, other(seat))}`
+      : "Compagnia schierata — conferma"
     : sel
     ? healing
       ? "In cura qui — niente attacco"
@@ -6027,13 +5992,21 @@ function Tactics({ room, gs, seat, commit }) {
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
       {shot && <RollReveal shot={shot} onDone={() => setShot(null)} />}
       {help && <TacticsHowTo onClose={() => setHelp(false)} />}
+      {banner && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 62, display: "grid", placeItems: "center", pointerEvents: "none", padding: 20 }}>
+          <div key={banner.title} className="pop" style={{ textAlign: "center", lineHeight: 1 }}>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(42px, 13vw, 96px)", color: T.ink, letterSpacing: "-0.02em", textShadow: "0 4px 0 rgba(18,18,18,0.07)" }}>{banner.title}</div>
+            {banner.sub && <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, letterSpacing: "0.32em", textTransform: "uppercase", color: T.ink60, marginTop: 12, fontWeight: 600 }}>{banner.sub}</div>}
+          </div>
+        </div>
+      )}
 
       {/* top bar: phase / move count + view controls + how-to */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ width: 12, height: 12, borderRadius: 3, background: TSIDE[gs.turn], display: "inline-block", opacity: gs.done ? 0.3 : 1 }} />
           <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 13 }}>
-            {gs.phase === "battle" ? `Mossa ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} di ${TACT.MOVE_CAP}` : gs.phase === "deploy" ? "Schieramento" : "Compagnia"}
+            {gs.phase === "battle" ? `Mossa ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} di ${TACT.MOVE_CAP}` : gs.phase === "setup" ? (step === "roster" ? "Roster" : "Schieramento") : "…"}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
@@ -6157,21 +6130,23 @@ function Tactics({ room, gs, seat, commit }) {
             );
           })}
 
-          {/* pieces this seat has arranged but not yet locked in (deploy phase);
-              dashed to read as provisional — tap one to pick it back up */}
-          {layout.map((pl, i) => {
-            const p = at(pl.q, pl.r);
-            const col = TSIDE[seat];
-            return (
-              <div
-                key={`stg${i}`}
-                onClick={() => setLayout(layout.filter((_, j) => j !== i))}
-                style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", cursor: "pointer", transition: "left 160ms ease, top 160ms ease" }}
-              >
-                <UnitToken type={pl.type} label={TACT.units[pl.type].max} col={col} dashed />
-              </div>
-            );
-          })}
+          {/* your own setup pieces — only you see them. Dashed while you arrange
+              (tap to pick one back up), solid once you've locked them in. */}
+          {gs.phase === "setup" &&
+            (gs.setup[seat] || layout).map((pl, i) => {
+              const p = at(pl.q, pl.r);
+              const col = TSIDE[seat];
+              const locked = gs.setup[seat] != null;
+              return (
+                <div
+                  key={`stg${i}`}
+                  onClick={() => (locked ? null : setLayout(layout.filter((_, j) => j !== i)))}
+                  style={{ position: "absolute", left: p.x, top: p.y, transform: "translate(-50%,-50%)", cursor: locked ? "default" : "pointer", transition: "left 160ms ease, top 160ms ease" }}
+                >
+                  <UnitToken type={pl.type} label={TACT.units[pl.type].max} col={col} dashed={!locked} />
+                </div>
+              );
+            })}
         </div>
       </div>
 
@@ -6222,7 +6197,7 @@ function Tactics({ room, gs, seat, commit }) {
         );
       })()}
 
-      {gs.phase === "roster" && myTurn && gs.roster[seat] == null && (
+      {mySetup && step === "roster" && (
         gs.simple ? (
           <div style={{ marginTop: 12 }}>
             <Micro style={{ textAlign: "center" }}>Compagnia di 4 · almeno un Fante e un Arciere</Micro>
@@ -6230,7 +6205,7 @@ function Tactics({ room, gs, seat, commit }) {
               {[1, 2, 3].map((f) => (
                 <button
                   key={f}
-                  onClick={() => commit(tacticsRoster(gs, seat, [...Array(f).fill("fante"), ...Array(4 - f).fill("arciere")]))}
+                  onClick={() => { setDraft([...Array(f).fill("fante"), ...Array(4 - f).fill("arciere")]); setLayout([]); setStep("deploy"); }}
                   style={{ ...plain, flex: 1, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "10px 6px", cursor: "pointer", fontFamily: BRAND, fontWeight: 600, fontSize: 13, WebkitTapHighlightColor: "transparent" }}
                 >
                   {f} {uIco("fante", 14)} · {4 - f} {uIco("arciere", 14)}
@@ -6239,17 +6214,17 @@ function Tactics({ room, gs, seat, commit }) {
             </div>
           </div>
         ) : (
-          <TacticsDraft draft={draft} setDraft={setDraft} onConfirm={() => commit(tacticsRoster(gs, seat, draft))} />
+          <TacticsDraft draft={draft} setDraft={setDraft} onConfirm={() => { setLayout([]); setStep("deploy"); }} />
         )
       )}
 
-      {gs.phase === "deploy" && myDeploy && (
+      {mySetup && step === "deploy" && (
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <Button kind="outline" full disabled={layout.length === 0 || pending} onClick={() => setLayout(layout.slice(0, -1))}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> Annulla</span>
+          <Button kind="outline" full disabled={pending} onClick={() => (layout.length ? setLayout(layout.slice(0, -1)) : setStep("roster"))}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> {layout.length ? "Annulla" : "Compagnia"}</span>
           </Button>
-          <Button kind="solid" full disabled={layout.length !== toPlaceN || pending} onClick={submitDeploy}>
-            {pending ? "In attesa…" : layout.length === toPlaceN ? "Schiera" : `Piazza ${toPlaceN - layout.length}`}
+          <Button kind="solid" full disabled={layout.length !== draft.length || pending} onClick={submitSetup}>
+            {pending ? "In attesa…" : layout.length === draft.length ? "Schiera" : `Piazza ${draft.length - layout.length}`}
           </Button>
         </div>
       )}
