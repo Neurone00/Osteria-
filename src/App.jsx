@@ -7452,6 +7452,45 @@ const s40Sorted = (cards, by = "seme") => {
     })
     .map((c) => c.id);
 };
+// A meld laid on the table, arranged for reading: a set by suit, a run in
+// ascending rank with any joker sitting in the exact slot it fills.
+function s40SortMeld(cards) {
+  const info = analyzeMeld(cards);
+  if (!info.ok) return cards;
+  const jokers = cards.filter((c) => c.joker);
+  const nats = cards.filter((c) => !c.joker);
+  if (info.kind === "set") return [...nats.slice().sort((a, b) => S40_SUIT_ORD[a.s] - S40_SUIT_ORD[b.s]), ...jokers];
+  const free = jokers.filter((c) => !c.rep); // fills a gap; ≤1 per meld
+  const fixed = [...nats, ...jokers.filter((c) => c.rep)]; // cards with a definite rank
+  const rankOf = (c, aceHigh) => {
+    const v = c.joker ? c.rep.v : c.v;
+    return v === 1 ? (aceHigh ? 14 : 1) : v;
+  };
+  for (const aceHigh of [false, true]) {
+    const ranks = fixed.map((c) => rankOf(c, aceHigh)).sort((a, b) => a - b);
+    if (new Set(ranks).size !== ranks.length) continue;
+    const len = cards.length;
+    for (let lo = ranks[ranks.length - 1] - len + 1; lo <= ranks[0]; lo++) {
+      const hi = lo + len - 1;
+      if (lo < 1 || hi > 14 || ranks[0] < lo || ranks[ranks.length - 1] > hi) continue;
+      const byRank = {};
+      for (const c of fixed) byRank[rankOf(c, aceHigh)] = c;
+      const out = [];
+      let fi = 0,
+        ok = true;
+      for (let r = lo; r <= hi; r++) {
+        if (byRank[r]) out.push(byRank[r]);
+        else if (fi < free.length) out.push(free[fi++]);
+        else {
+          ok = false;
+          break;
+        }
+      }
+      if (ok && out.length === cards.length && fi === free.length) return out;
+    }
+  }
+  return cards;
+}
 function S40Card({ card, w = 32, h = 46, sel, dim, fresh, onClick }) {
   const style = {
     width: w,
@@ -7557,6 +7596,7 @@ function Scala({ room, gs, seat, mine, commit }) {
   // real hand as cards are drawn, melded or discarded (new cards go to the end,
   // gone cards drop out). Reordering is a pointer-drag; a tap still selects.
   const [order, setOrder] = useState([]);
+  const [sortMode, setSortMode] = useState("seme"); // "seme" | "numero" | null(=manual); active → the hand stays sorted and drawn cards slot in
   const [dragId, setDragId] = useState(null);
   const drag = useRef(null);
   const handRow = useRef(null);
@@ -7565,11 +7605,17 @@ function Scala({ room, gs, seat, mine, commit }) {
   useEffect(() => {
     const ids = hand.map((c) => c.id);
     setOrder((prev) => {
+      // an active sort keeps the whole hand ordered — a freshly drawn card lands
+      // in its right place on its own
+      if (sortMode) {
+        const sorted = s40Sorted(hand, sortMode);
+        return sorted.join(",") === prev.join(",") ? prev : sorted;
+      }
       const keep = prev.filter((id) => ids.includes(id));
       const add = ids.filter((id) => !keep.includes(id));
       if (keep.length === prev.length && add.length === 0) return prev;
       if (keep.length === 0) return s40Sorted(hand); // first layout: fully sorted
-      // a drawn card slots into its sorted place without disturbing the rest
+      // manual arrangement: a drawn card still slots into place without disturbing the rest
       const next = keep.slice();
       for (const id of add) {
         const c = cardOf(id);
@@ -7579,7 +7625,7 @@ function Scala({ room, gs, seat, mine, commit }) {
       }
       return next;
     });
-  }, [handKey]);
+  }, [handKey, sortMode]);
   const laid = order.map((id) => hand.find((c) => c.id === id)).filter(Boolean);
   const ordered = laid.length === hand.length ? laid : hand;
 
@@ -7607,6 +7653,7 @@ function Scala({ room, gs, seat, mine, commit }) {
     if (!s.moved) {
       s.moved = true;
       setDragId(s.id);
+      setSortMode(null); // hand-arranging by drag turns the auto-sort off
     }
     e.preventDefault();
     const row = handRow.current;
@@ -7690,9 +7737,12 @@ function Scala({ room, gs, seat, mine, commit }) {
       onClick={target ? () => layOff(m.id) : undefined}
       style={{ display: "flex", padding: 4, borderRadius: 8, border: `1px solid ${target ? T.ink : "transparent"}`, cursor: target ? "pointer" : "default" }}
     >
-      {m.cards.map((c, i) => (
-        <div key={c.id} style={{ marginLeft: i ? -14 : 0 }}>
+      {s40SortMeld(m.cards).map((c, i) => (
+        <div key={c.id} style={{ marginLeft: i ? -14 : 0, position: "relative", borderRadius: 6, boxShadow: c.joker ? "0 0 0 2px #B8862B" : "none" }}>
           <S40Card card={c} w={30} h={44} />
+          {c.joker && (
+            <span title="jolly — sostituibile con la carta che rappresenta" style={{ position: "absolute", top: -6, right: -6, width: 15, height: 15, borderRadius: "50%", background: "#B8862B", color: "#fff", fontSize: 10, fontWeight: 800, lineHeight: "15px", textAlign: "center", boxShadow: "0 1px 2px rgba(18,18,18,0.35)" }}>⇄</span>
+          )}
         </div>
       ))}
     </div>
@@ -7748,12 +7798,19 @@ function Scala({ room, gs, seat, mine, commit }) {
         </div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
           <span style={{ ...plain, color: T.ink30 }}>ordina:</span>
-          <button onClick={() => setOrder(s40Sorted(hand, "numero"))} style={{ ...plain, color: T.ink }}>
-            numero
-          </button>
-          <button onClick={() => setOrder(s40Sorted(hand, "seme"))} style={{ ...plain, color: T.ink }}>
-            seme
-          </button>
+          {["numero", "seme"].map((m) => {
+            const on = sortMode === m;
+            return (
+              <button
+                key={m}
+                onClick={() => setSortMode((cur) => (cur === m ? null : m))}
+                title={on ? "attivo — le carte pescate si ordinano da sole" : "ordina e tieni ordinato"}
+                style={{ ...plain, cursor: "pointer", color: on ? T.bg : T.ink, background: on ? T.ink : "transparent", border: `1px solid ${on ? T.ink : T.line}`, borderRadius: 999, padding: "2px 9px", fontFamily: BRAND, fontWeight: 600, fontSize: 12, WebkitTapHighlightColor: "transparent" }}
+              >
+                {m}
+              </button>
+            );
+          })}
           <Micro>{hand.length}</Micro>
         </div>
       </div>
