@@ -1177,7 +1177,7 @@ function s40Discard(gs, seat, cardId) {
    A dice skirmish on a hex board. Each unit IS a die: its face shows its
    current HP, and because a wounded die hits weaker, an attack rolls 1..HP —
    the die literally shrinks as it takes damage. Rolling the top face (≥2)
-   explodes for a crit. Six classes (Fante, Arciere, Cavaliere, Balestriere,
+   explodes for a crit. Six classes (Fante, Arciere, Esploratore, Balestriere,
    Fromboliere, Mago — the Mago's attack blasts everything within 2 of the
    target), each a die with its own move, range and point cost; draft a company
    under a budget. Deploy near your castle, then fight in strict alternation —
@@ -1217,13 +1217,13 @@ const TACT = {
   units: {
     fante: { name: "Fante", max: 8, move: 2, min: 1, rng: 1, cost: 3, icon: "sword" }, // d8 melee bruiser
     arciere: { name: "Arciere", max: 6, move: 2, min: 2, rng: 3, cost: 3, icon: "bow" }, // d6 kite, 2–3 away
-    cavaliere: { name: "Cavaliere", max: 6, move: 3, min: 1, rng: 1, cost: 4, icon: "horse" }, // d6 fast flanker
+    esploratore: { name: "Esploratore", max: 2, move: 4, min: 1, rng: 1, cost: 3, icon: "compass" }, // d2 scout: races across the map, but soft (two hits and it's gone)
     balestriere: { name: "Balestriere", max: 8, move: 1, min: 2, rng: 4, cost: 5, icon: "crossbow" }, // d8 slow sniper, 2–4
     fromboliere: { name: "Fromboliere", max: 4, move: 3, min: 1, rng: 2, cost: 2, icon: "sling" }, // d4 cheap skirmisher
     mago: { name: "Mago", max: 6, move: 2, min: 2, rng: 3, cost: 5, icon: "spark", aoe: 2 }, // d6 blast: hits everything within 2 of the target
   },
 };
-const TYPE_ORDER = ["fante", "arciere", "cavaliere", "balestriere", "fromboliere", "mago"];
+const TYPE_ORDER = ["fante", "arciere", "esploratore", "balestriere", "fromboliere", "mago"];
 // A drafted company is legal when it has 3..6 units and fits the budget.
 function tacticsCompanyCost(company) {
   return company.reduce((t, type) => t + (TACT.units[type]?.cost || 0), 0);
@@ -2739,11 +2739,11 @@ function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
         <path {...P} d="M3.5 20.5 20 4M20 4h-4M20 4v4" />
       </>
     ),
-    horse: (
+    compass: (
       <>
-        <path {...P} d="M7 21h9" />
-        <path {...P} d="M9 21c-.5-3-.3-5 1.6-6.4" />
-        <path {...P} d="M10.6 14.6C8.5 15 6.7 13.9 6.7 12c0-2.4 2.3-3.4 3.6-5.4l-.7-1.3 2-.8.7 1.6c2.6 1 4.4 3.3 4.4 6.9V21" />
+        <circle {...P} cx="12" cy="12" r="9" />
+        <path {...P} d="M15.5 8.5 13 13l-4.5 2.5L11 11z" />
+        {dot(12, 12)}
       </>
     ),
     crossbow: (
@@ -5474,7 +5474,7 @@ const uIco = (type, s = 14, c) => <Ico n={TACT.units[type]?.icon || "sword"} s={
 // The unit token's outline reads its die: a d4 is a triangle, a d6 a square, a
 // d8 an octagon — so shape alone tells you how big the die is.
 const TOKEN = 34;
-const tokenKind = (max) => (max <= 4 ? "tri" : max >= 8 ? "oct" : "sq");
+const tokenKind = (max) => (max <= 2 ? "coin" : max <= 4 ? "tri" : max >= 8 ? "oct" : "sq");
 function UnitToken({ type, label, col, stroke, sw = 2.4, dashed, floaty, dim }) {
   const kind = tokenKind(TACT.units[type]?.max || 6);
   const strokeCol = stroke || col;
@@ -5483,6 +5483,7 @@ function UnitToken({ type, label, col, stroke, sw = 2.4, dashed, floaty, dim }) 
   return (
     <div className={floaty ? "floaty" : ""} style={{ width: TOKEN, height: TOKEN, position: "relative", opacity: dim ? 0.45 : dashed ? 0.9 : 1 }}>
       <svg width={TOKEN} height={TOKEN} viewBox="0 0 34 34" style={{ position: "absolute", inset: 0, overflow: "visible", filter: "drop-shadow(0 2px 3px rgba(18,18,18,0.26))" }}>
+        {kind === "coin" && <circle cx="17" cy="17" r="14.5" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeDasharray={dash} />}
         {kind === "sq" && <rect x="2.5" y="2.5" width="29" height="29" rx="7" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeDasharray={dash} />}
         {kind === "tri" && <path d="M17 2.4 32 30.6 2 30.6 Z" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeLinejoin="round" strokeDasharray={dash} />}
         {kind === "oct" && <polygon points="11,2.5 23,2.5 31.5,11 31.5,23 23,31.5 11,31.5 2.5,23 2.5,11" fill="#fff" stroke={strokeCol} strokeWidth={sw} strokeLinejoin="round" strokeDasharray={dash} />}
