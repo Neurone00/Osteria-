@@ -27,8 +27,9 @@ const nodes = mount.querySelectorAll("*").length;
 // The home screen is what an arriving player sees first: the wordmark, the name
 // field and the two ways onto a table. Games and rules are chosen later, in the
 // lobby, so they are not expected here.
-const wanted = ["Osteria", "Apri un tavolo", "oppure", "Entra"];
-const missing = wanted.filter((w) => !text.includes(w));
+// The interface language follows the system locale, so accept either language.
+const wanted = [["Osteria"], ["Apri un tavolo", "Open a table"], ["oppure", "or"], ["Entra", "Join"]];
+const missing = wanted.filter((alts) => !alts.some((w) => text.includes(w))).map((alts) => alts[0]);
 
 console.log(`mounted ${nodes} nodes`);
 if (errs.length) console.error("errors:", errs);

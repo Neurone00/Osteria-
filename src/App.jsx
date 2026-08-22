@@ -15,6 +15,12 @@ const T = {
 // offline artifact). Body copy stays on the neutral system stack.
 const BRAND = "'Fredoka', 'Baloo 2', ui-rounded, 'Segoe UI Rounded', system-ui, -apple-system, sans-serif";
 const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace"; // one mono stack everywhere
+// Interface language. Italian is the default and the reference copy; every other
+// system language gets English. `L(it, en)` picks the string for the current
+// language — a module global set once per App render, read by every component.
+let LANG = "it";
+const L = (it, en) => (LANG === "en" && en != null ? en : it);
+const systemLang = () => (typeof navigator !== "undefined" && /^it/i.test(navigator.language || navigator.userLanguage || "") ? "it" : "en");
 // One dim behind every modal dialog, so they all sit on the same scrim.
 const SCRIM = "rgba(18,18,18,0.85)";
 const SUIT = {
@@ -93,12 +99,13 @@ const GAMES = {
     name: "Scopa",
     tag: "3 carte a testa",
     line: "Prendi una carta di ugual valore, o una somma. Svuota il tavolo per fare scopa.",
+    en: { tag: "3 cards each", line: "Take a card of equal value, or a sum. Clear the table to score a scopa." },
     opts: [
-      { k: "target", label: "Partita a", cycle: [11, 16, 21], hint: "Punti che chiudono la partita" },
-      { k: "asso", label: "Asso piglia tutto", cycle: [false, true], hint: "L’asso raccoglie tutte le carte del tavolo" },
-      { k: "acepile", label: "Asso solo va in pila", cycle: [false, true], hint: "Un asso giocato su tavolo vuoto va in presa, non resta scoperto" },
-      { k: "rebello", label: "Rebello", cycle: [false, true], hint: "Un punto extra a chi prende il re di denari" },
-      { k: "napola", label: "Napola", cycle: [false, true], hint: "Bonus per l’asso, il due e il tre di denari nella stessa pila" },
+      { k: "target", label: "Partita a", cycle: [11, 16, 21], hint: "Punti che chiudono la partita", le: "Game to", he: "Points that end the game" },
+      { k: "asso", label: "Asso piglia tutto", cycle: [false, true], hint: "L’asso raccoglie tutte le carte del tavolo", le: "Ace takes all", he: "An ace sweeps every card on the table" },
+      { k: "acepile", label: "Asso solo va in pila", cycle: [false, true], hint: "Un asso giocato su tavolo vuoto va in presa, non resta scoperto", le: "Lone ace to pile", he: "An ace on an empty table is captured, not left face-up" },
+      { k: "rebello", label: "Rebello", cycle: [false, true], hint: "Un punto extra a chi prende il re di denari", le: "Rebello", he: "Extra point for taking the king of coins" },
+      { k: "napola", label: "Napola", cycle: [false, true], hint: "Bonus per l’asso, il due e il tre di denari nella stessa pila", le: "Napola", he: "Bonus for the ace, two and three of coins in one pile" },
     ],
     def: { target: 11, asso: false, acepile: false, rebello: false, napola: false },
   },
@@ -106,11 +113,12 @@ const GAMES = {
     name: "Scopa scientifica",
     tag: "5 in mano, tavolo vuoto",
     line: "Come la scopa, ma cinque carte in mano e niente sul tavolo: più memoria, più strategia.",
+    en: { tag: "5 in hand, empty table", line: "Like scopa, but five cards in hand and nothing on the table: more memory, more strategy." },
     opts: [
-      { k: "target", label: "Partita a", cycle: [11, 16, 21], hint: "Punti che chiudono la partita" },
-      { k: "asso", label: "Asso piglia tutto", cycle: [false, true], hint: "L’asso raccoglie tutte le carte del tavolo" },
-      { k: "rebello", label: "Rebello", cycle: [false, true], hint: "Un punto extra a chi prende il re di denari" },
-      { k: "napola", label: "Napola", cycle: [false, true], hint: "Bonus per l’asso, il due e il tre di denari nella stessa pila" },
+      { k: "target", label: "Partita a", cycle: [11, 16, 21], hint: "Punti che chiudono la partita", le: "Game to", he: "Points that end the game" },
+      { k: "asso", label: "Asso piglia tutto", cycle: [false, true], hint: "L’asso raccoglie tutte le carte del tavolo", le: "Ace takes all", he: "An ace sweeps every card on the table" },
+      { k: "rebello", label: "Rebello", cycle: [false, true], hint: "Un punto extra a chi prende il re di denari", le: "Rebello", he: "Extra point for taking the king of coins" },
+      { k: "napola", label: "Napola", cycle: [false, true], hint: "Bonus per l’asso, il due e il tre di denari nella stessa pila", le: "Napola", he: "Bonus for the ace, two and three of coins in one pile" },
     ],
     def: { target: 11, hand: 5, notable: true, asso: false, acepile: false, rebello: false, napola: false },
   },
@@ -118,9 +126,10 @@ const GAMES = {
     name: "Rubamazzo",
     tag: "ruba il mazzo",
     line: "Abbina il tavolo per raccogliere. Abbina la cima di un mazzo e lo rubi tutto.",
+    en: { tag: "steal the pile", line: "Match the table to collect. Match the top of a pile and steal the whole thing." },
     opts: [
-      { k: "sums", label: "Somme del nord", cycle: [false, true], hint: "Prendi anche abbinando la somma di più carte del tavolo" },
-      { k: "pilesum", label: "Mazzo nelle somme", cycle: [false, true], hint: "La cima del mazzo avversario conta nelle somme" },
+      { k: "sums", label: "Somme del nord", cycle: [false, true], hint: "Prendi anche abbinando la somma di più carte del tavolo", le: "Northern sums", he: "Also capture by matching the sum of several table cards" },
+      { k: "pilesum", label: "Mazzo nelle somme", cycle: [false, true], hint: "La cima del mazzo avversario conta nelle somme", le: "Pile in sums", he: "The opponent's top pile card counts in sums" },
     ],
     def: { sums: false, pilesum: false },
   },
@@ -128,13 +137,15 @@ const GAMES = {
     name: "Straccia camicia",
     tag: "niente scelte, solo nervi",
     line: "Gira la carta in cima. Asso, due e tre fanno pagare 1, 2 o 3 all’altro.",
-    opts: [{ k: "intl", label: "Variante figure", cycle: [false, true], hint: "Anche le figure fanno pagare: Asso 4, Re 3, Cavallo 2, Fante 1" }],
+    en: { tag: "no choices, just nerve", line: "Flip the top card. Ace, two and three make the other pay 1, 2 or 3." },
+    opts: [{ k: "intl", label: "Variante figure", cycle: [false, true], hint: "Anche le figure fanno pagare: Asso 4, Re 3, Cavallo 2, Fante 1", le: "Face-card variant", he: "Face cards charge too: Ace 4, King 3, Knight 2, Jack 1" }],
     def: { intl: false },
   },
   briscola: {
     name: "Briscola",
     tag: "la briscola comanda",
     line: "Prendi con la carta più forte, o taglia con una briscola. Chi fa più punti su 120 vince.",
+    en: { tag: "trumps rule", line: "Take with the stronger card, or cut with a trump. Most points out of 120 wins." },
     opts: [],
     def: {},
   },
@@ -142,6 +153,7 @@ const GAMES = {
     name: "Perudo",
     tag: "dadi e bugie",
     line: "Cinque dadi a testa, nascosti. Rilancia sulla quantità di una faccia (gli 1 sono jolly) o grida Dubito.",
+    en: { tag: "dice and lies", line: "Five hidden dice each. Raise the count of a face (1s are wild) or call the bluff." },
     dice: true,
     opts: [],
     def: {},
@@ -150,6 +162,7 @@ const GAMES = {
     name: "Yahtzee",
     tag: "cinque dadi, tre tiri",
     line: "Tira fino a tre volte tenendo i dadi che vuoi, poi segna in una casella. Più punti in tredici turni.",
+    en: { tag: "five dice, three rolls", line: "Roll up to three times, keeping the dice you want, then fill a box. Most points in thirteen turns." },
     dice: true,
     opts: [],
     def: {},
@@ -158,6 +171,7 @@ const GAMES = {
     name: "Scala 40",
     tag: "aprire a quaranta",
     line: "Due mazzi francesi più due jolly. Cala tris e scale, apri con almeno 40 punti, poi attacca e svuota la mano.",
+    en: { tag: "open at forty", line: "Two French decks plus two jokers. Lay sets and runs, open with at least 40 points, then attack and empty your hand." },
     big: true, // its own 106-card deck — no shuffle/cut ritual
     opts: [],
     def: {},
@@ -166,6 +180,7 @@ const GAMES = {
     name: "Peppa Tencia",
     tag: "chi resta con la Peppa",
     line: "Si tolgono tre cavalli: uno resta spaiato, la Peppa. Scarta le coppie, poi pesca a caso dall’altro. Chi resta con la Peppa perde.",
+    en: { tag: "don't be left with the Peppa", line: "Three knights are removed: one is left unpaired — the Peppa. Discard pairs, then draw blind from the other. Left holding the Peppa, you lose." },
     instant: true, // its own 37-card deck — no shuffle/cut ritual
     opts: [],
     def: {},
@@ -174,19 +189,23 @@ const GAMES = {
     name: "Condottieri",
     tag: "dadi in battaglia",
     line: "Ogni pedina è un dado: la faccia è la vita, e ferito colpisce meno. Schiera vicino al castello, poi muovi e tira. Vinci sterminando l’altro o prendendone il castello.",
+    en: { tag: "dice at war", line: "Every piece is a die: its face is its life, and wounded it hits softer. Deploy by your castle, then move and roll. Win by wiping out the other or taking their castle." },
     instant: true, // its own hex board — no card deck or shuffle ritual
     board: true, // a tactics board, not cards or dice-cups
     opts: [
-      { k: "simple", label: "Regole essenziali", cycle: [false, true], hint: "Due classi, compagnia fissa di 4, mappa piccola, senza stendardi" },
-      { k: "flagAtk", label: "Stendardi: +1 attacco", cycle: [false, true], hint: "Attaccare stando su uno stendardo fa +1 danno" },
-      { k: "flagWin", label: "Re della collina", cycle: [false, true], hint: "Chi tiene tutti gli stendardi nello stesso momento vince" },
-      { k: "flagHeal", label: "Stendardi curano", cycle: [false, true], hint: "Sostare su uno stendardo cura +2" },
-      { k: "random", label: "Posizioni casuali", cycle: [false, true], hint: "Castelli, fontane e stendardi in punti casuali a ogni partita" },
-      { k: "passAllies", label: "Attraversa gli alleati", cycle: [false, true], hint: "Le pedine passano attraverso quelle amiche, ma non possono fermarcisi" },
+      { k: "simple", label: "Regole essenziali", cycle: [false, true], hint: "Due classi, compagnia fissa di 4, mappa piccola, senza stendardi", le: "Essential rules", he: "Two classes, fixed company of 4, small map, no banners" },
+      { k: "flagAtk", label: "Stendardi: +1 attacco", cycle: [false, true], hint: "Attaccare stando su uno stendardo fa +1 danno", le: "Banners: +1 attack", he: "Attacking from a banner deals +1 damage" },
+      { k: "flagWin", label: "Re della collina", cycle: [false, true], hint: "Chi tiene tutti gli stendardi nello stesso momento vince", le: "King of the hill", he: "Hold every banner at once to win" },
+      { k: "flagHeal", label: "Stendardi curano", cycle: [false, true], hint: "Sostare su uno stendardo cura +2", le: "Banners heal", he: "Resting on a banner heals +2" },
+      { k: "random", label: "Posizioni casuali", cycle: [false, true], hint: "Castelli, fontane e stendardi in punti casuali a ogni partita", le: "Random positions", he: "Castles, fountains and banners in random spots each game" },
+      { k: "passAllies", label: "Attraversa gli alleati", cycle: [false, true], hint: "Le pedine passano attraverso quelle amiche, ma non possono fermarcisi", le: "Pass through allies", he: "Pieces move through friendly ones, but can't stop on them" },
     ],
     def: { simple: false, flagAtk: true, flagWin: true, flagHeal: false, random: true, passAllies: false },
   },
 };
+// game meta + option labels/hints in the current language
+const gtag = (g) => L(g.tag, g.en && g.en.tag);
+const gline = (g) => L(g.line, g.en && g.en.line);
 const isCard = (game) => !GAMES[game].dice;
 // The shuffle-and-cut "mischia" ritual runs for every card game except the ones
 // dealt instantly (Peppa's trimmed deck). Scala uses it too, on its own 106-card
@@ -3375,6 +3394,8 @@ export default function App() {
   const [savedRules, setSavedRules] = useState({});
   const [name, setName] = useState("");
   const [showScores, setShowScores] = useState(false); // live points/cards-taken, off by default
+  const [lang, setLang] = useState(systemLang); // "it" | "en" — default follows the phone
+  LANG = lang; // set before children render, so every L() reads the current language
   const booted = useRef(false);
   useEffect(() => {
     (async () => {
@@ -3384,6 +3405,7 @@ export default function App() {
       if (p.rules && typeof p.rules === "object") setSavedRules(p.rules);
       if (typeof p.name === "string") setName(p.name);
       if (typeof p.showScores === "boolean") setShowScores(p.showScores);
+      if (p.lang === "it" || p.lang === "en") setLang(p.lang);
     })();
   }, []);
   useEffect(() => {
@@ -3391,8 +3413,8 @@ export default function App() {
       booted.current = true;
       return;
     }
-    savePrefs({ french, rules: savedRules, name, showScores });
-  }, [french, savedRules, name, showScores]);
+    savePrefs({ french, rules: savedRules, name, showScores, lang });
+  }, [french, savedRules, name, showScores, lang]);
   const setGameRules = (game, opts) => setSavedRules((r) => ({ ...r, [game]: opts }));
   return (
     <SuitCtx.Provider value={french}>
@@ -3405,12 +3427,14 @@ export default function App() {
         setName={setName}
         showScores={showScores}
         setShowScores={setShowScores}
+        lang={lang}
+        setLang={setLang}
       />
     </SuitCtx.Provider>
   );
 }
 
-function Game({ french, setFrench, savedRules, setGameRules, name, setName, showScores, setShowScores }) {
+function Game({ french, setFrench, savedRules, setGameRules, name, setName, showScores, setShowScores, lang, setLang }) {
   const [screen, setScreen] = useState("home");
   const [codeIn, setCodeIn] = useState("");
   const [seat, setSeat] = useState("A");
@@ -4249,10 +4273,13 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   if (screen === "home")
     return (
       <Frame jolt={false}>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <LangPill lang={lang} setLang={setLang} />
+        </div>
         <div
           className="fade"
           style={{
-            minHeight: "calc(100dvh - 40px)",
+            minHeight: "calc(100dvh - 80px)",
             display: "flex",
             flexDirection: "column",
             justifyContent: "center",
@@ -4277,7 +4304,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           >
             Osteria<span style={{ color: "#A5342F", display: "inline-block", transform: "rotate(7deg)" }}>!</span>
           </h1>
-          <Micro style={{ textAlign: "center", marginTop: 6 }}>Due giocatori · due telefoni · un codice</Micro>
+          <Micro style={{ textAlign: "center", marginTop: 6 }}>{L("Due giocatori · due telefoni · un codice", "Two players · two phones · one code")}</Micro>
 
           <div style={{ marginTop: 18 }}>
             <input
@@ -4286,19 +4313,19 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 typedName.current = true;
                 setName(e.target.value);
               }}
-              placeholder="Il tuo nome"
+              placeholder={L("Il tuo nome", "Your name")}
               maxLength={14}
               style={{ ...field, fontFamily: BRAND, fontSize: 18, textAlign: "center", padding: "14px 13px" }}
             />
             <div style={{ marginTop: 10 }}>
               <Button full onClick={() => openTable()}>
-                Apri un tavolo
+                {L("Apri un tavolo", "Open a table")}
               </Button>
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
               <div style={{ flex: 1, height: 1, background: T.line }} />
-              <Micro>oppure</Micro>
+              <Micro>{L("oppure", "or")}</Micro>
               <div style={{ flex: 1, height: 1, background: T.line }} />
             </div>
 
@@ -4306,11 +4333,11 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               <input
                 value={codeIn}
                 onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
-                placeholder="CODICE"
+                placeholder={L("CODICE", "CODE")}
                 style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: MONO, fontSize: 18, minWidth: 0 }}
               />
               <Button kind="line" onClick={() => joinTable()}>
-                Entra
+                {L("Entra", "Join")}
               </Button>
             </div>
 
@@ -4336,7 +4363,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 onClick={openSolo}
                 style={{ ...plain, display: "flex", width: "fit-content", alignItems: "center", gap: 6, margin: "16px auto 0", color: T.ink, fontWeight: 600, fontSize: 13.5 }}
               >
-                <Ico n="flask" s={15} /> Prova da solo <span style={{ color: T.ink30, fontWeight: 400 }}>· due lati, un telefono</span>
+                <Ico n="flask" s={15} /> {L("Prova da solo", "Play solo")} <span style={{ color: T.ink30, fontWeight: 400 }}>{L("· due lati, un telefono", "· both sides, one phone")}</span>
               </button>
             )}
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
@@ -4351,14 +4378,14 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     return (
       <Frame jolt={false}>
         <div className="fade" style={{ paddingTop: 60, textAlign: "center" }}>
-          <Micro>Connessione a {codeIn.toUpperCase()}</Micro>
+          <Micro>{L("Connessione a", "Connecting to")} {codeIn.toUpperCase()}</Micro>
           <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 18 }}>
             <Back size="sm" />
             <Back size="sm" />
           </div>
           <div style={{ marginTop: 24 }}>
             <Button kind="line" onClick={leave}>
-              Indietro
+              {L("Indietro", "Back")}
             </Button>
           </div>
         </div>
@@ -4380,10 +4407,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           <GameArt game={key} size={92} />
           <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
             <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(24px, 7vw, 38px)", letterSpacing: "-0.02em", lineHeight: 1.02 }}>{gm.name}</div>
-            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.22em", textTransform: "uppercase", color: T.ink30 }}>{gm.tag}</div>
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: "0.22em", textTransform: "uppercase", color: T.ink30 }}>{gtag(gm)}</div>
           </div>
-          <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.5, margin: 0, maxWidth: 270 }}>{gm.line}</p>
-          {isMid && <div style={{ marginTop: 2, fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.16em", textTransform: "uppercase", color: T.ink30 }}>Tocca per le regole ↻</div>}
+          <p style={{ color: T.ink60, fontSize: 12.5, lineHeight: 1.5, margin: 0, maxWidth: 270 }}>{gline(gm)}</p>
+          {isMid && <div style={{ marginTop: 2, fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.16em", textTransform: "uppercase", color: T.ink30 }}>{L("Tocca per le regole", "Tap for the rules")} ↻</div>}
         </div>
       );
     };
@@ -4433,7 +4460,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     return (
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title="Al tavolo" />
+        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={L("Al tavolo", "At the table")} lang={lang} setLang={setLang} />
         {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
         <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
         <div className="fade">
@@ -4605,7 +4632,7 @@ function Frame({ children, jolt }) {
   );
 }
 
-function Head({ room, link, onLeave, onReconnect, title, sound, setSound }) {
+function Head({ room, link, onLeave, onReconnect, title, sound, setSound, lang, setLang }) {
   return (
     <div
       style={{
@@ -4619,24 +4646,39 @@ function Head({ room, link, onLeave, onReconnect, title, sound, setSound }) {
     >
       <div>
         <Micro>
-          {room.code} · {link === "live" ? "connesso" : link === "waiting" ? "in attesa" : "disconnesso"}
+          {room.code} · {link === "live" ? L("connesso", "connected") : link === "waiting" ? L("in attesa", "waiting") : L("disconnesso", "offline")}
         </Micro>
         <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em", marginTop: 2, fontFamily: BRAND }}>{title}</div>
       </div>
-      <div style={{ display: "flex", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
         {link === "lost" && (
           <button onClick={() => (onReconnect ? onReconnect() : window.location.reload())} style={{ ...plain, color: T.ink, fontWeight: 700 }}>
-            Riconnetti
+            {L("Riconnetti", "Reconnect")}
           </button>
         )}
+        {setLang && <LangPill lang={lang} setLang={setLang} />}
         <button onClick={() => setSound(!sound)} style={plain}>
-          {sound ? "Audio on" : "Audio off"}
+          {sound ? L("Audio on", "Sound on") : L("Audio off", "Sound off")}
         </button>
         <button onClick={onLeave} style={plain}>
-          Esci
+          {L("Esci", "Exit")}
         </button>
       </div>
     </div>
+  );
+}
+
+// The one language control: a pill showing the current language, tap to switch.
+// Shown only on the home and game-selection screens.
+function LangPill({ lang, setLang }) {
+  return (
+    <button
+      onClick={() => setLang(lang === "it" ? "en" : "it")}
+      title={lang === "it" ? "Switch to English" : "Passa all’italiano"}
+      style={{ ...plain, cursor: "pointer", border: `1px solid ${T.line}`, borderRadius: 999, padding: "4px 11px", fontFamily: MONO, fontSize: 11.5, fontWeight: 700, letterSpacing: "0.1em", color: T.ink, background: "rgba(18,18,18,0.03)", WebkitTapHighlightColor: "transparent" }}
+    >
+      {lang.toUpperCase()}
+    </button>
   );
 }
 const plain = {
@@ -4729,10 +4771,10 @@ function RuleChips({ conf, opts, setOpt }) {
                 key={o.k}
                 onClick={setOpt ? () => setOpt(o.k, next) : undefined}
                 disabled={!setOpt}
-                title={o.hint}
+                title={L(o.hint, o.he)}
                 style={{ border: `1.5px solid ${T.ink}`, background: "transparent", borderRadius: 12, padding: "8px 14px", cursor: setOpt ? "pointer" : "default", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, minWidth: 84, WebkitTapHighlightColor: "transparent" }}
               >
-                <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: T.ink60 }}>{o.label}</span>
+                <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: T.ink60 }}>{L(o.label, o.le)}</span>
                 <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, color: T.ink, lineHeight: 1 }}>{String(cur)}</span>
               </button>
             );
@@ -4748,12 +4790,12 @@ function RuleChips({ conf, opts, setOpt }) {
                 key={o.k}
                 onClick={setOpt ? () => setOpt(o.k, !on) : undefined}
                 disabled={!setOpt}
-                title={o.hint}
+                title={L(o.hint, o.he)}
                 style={{ ...plain, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "10px 0", textAlign: "left", cursor: setOpt ? "pointer" : "default", borderTop: idx ? `1px solid ${T.line}` : "none", WebkitTapHighlightColor: "transparent" }}
               >
                 <span style={{ minWidth: 0 }}>
-                  <span style={{ display: "block", fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: on ? T.ink : T.ink60 }}>{o.label}</span>
-                  {o.hint && <span style={{ display: "block", fontSize: 12, color: T.ink30, marginTop: 2, lineHeight: 1.3 }}>{o.hint}</span>}
+                  <span style={{ display: "block", fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: on ? T.ink : T.ink60 }}>{L(o.label, o.le)}</span>
+                  {o.hint && <span style={{ display: "block", fontSize: 12, color: T.ink30, marginTop: 2, lineHeight: 1.3 }}>{L(o.hint, o.he)}</span>}
                 </span>
                 <Switch on={on} />
               </button>
@@ -4938,7 +4980,7 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
       onMouseMove={onMove}
       onMouseUp={onUp}
       onMouseLeave={onUp}
-      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(52vh, 430px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "hidden" }}
+      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(66vh, 560px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "visible" }}
     >
       {gkeys.map((key, i) => {
         const isMid = i === midIdx;
