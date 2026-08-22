@@ -186,9 +186,14 @@ const GAMES = {
   },
 };
 const isCard = (game) => !GAMES[game].dice;
-// Scala (its own big deck) and Peppa (a trimmed 37-card deck) skip the 40-card
-// shuffle-and-cut ritual and are dealt straight away.
+// The shuffle-and-cut "mischia" ritual runs for every card game except the ones
+// dealt instantly (Peppa's trimmed deck). Scala uses it too, on its own 106-card
+// deck. `usesRitual` additionally gates the lobby's points/face toggles, which the
+// big French-only Scala deck doesn't want — so keep it excluding `big`.
+const usesShuffle = (game) => isCard(game) && !GAMES[game].instant;
 const usesRitual = (game) => isCard(game) && !GAMES[game].big && !GAMES[game].instant;
+// The deck the mischia shuffles — Scala brings its own 106-card French deck.
+const ritualDeck = (game) => shuffle(game === "scala" ? makeS40Deck() : makeDeck());
 // Scopa and its scientific variant share the same engine, scoring and board.
 const scopaLike = (game) => game === "scopa" || game === "scienza";
 // A house rule is a plain on/off toggle when it only cycles false↔true; anything
@@ -4514,7 +4519,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       : game === "yahtzee"
       ? dealYahtzee(dealer, cont?.tally || null)
       : game === "scala"
-      ? dealScala(dealer, cont?.tally || null)
+      ? dealScala(dealer, cont?.tally || null, deck)
       : game === "peppa"
       ? dealPeppa(dealer, cont?.tally || null)
       : game === "condottieri"
@@ -4526,7 +4531,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   // Enter the shuffle-and-cut ritual with a fresh RNG deck; the dealer shuffles,
   // the other player cuts, then the cut hand deals from the result.
   const beginPrepare = (dealer, cont) =>
-    publish({ ...room, status: "prep", prep: { deck: shuffle(makeDeck()), step: "shuffle", shuffles: 0, dealer, cont: cont || null } });
+    publish({ ...room, status: "prep", prep: { deck: ritualDeck(room.game), step: "shuffle", shuffles: 0, dealer, cont: cont || null } });
 
   const shuffleTap = (seed) =>
     publish({ ...room, prep: { ...room.prep, deck: shuffleWith(room.prep.deck, seed), shuffles: room.prep.shuffles + 1 } });
@@ -4542,15 +4547,15 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     publish({ ...room, status: "play", gs: gsNew, prep: null, log: [], ev: null, anim: null });
   };
 
-  const start = () => (usesRitual(room.game) ? beginPrepare("A", null) : dealNow(dealGame(room.game, room.opts, "A", null)));
+  const start = () => (usesShuffle(room.game) ? beginPrepare("A", null) : dealNow(dealGame(room.game, room.opts, "A", null)));
   const again = () => {
     const g = room.gs;
     // Scopa runs the shuffle-and-cut ritual before every hand — mid-match the
     // dealer alternates and the running scores carry over; a finished match
     // starts fresh from seat A.
     if (scopaLike(room.game)) beginPrepare(g.matchDone ? "A" : other(g.dealer), g.matchDone ? null : { scores: g.scores });
-    else if (usesRitual(room.game)) beginPrepare(other(g.dealer), { tally: g.tally });
-    else if (GAMES[room.game].big || GAMES[room.game].instant) dealNow(dealGame(room.game, room.opts, other(g.dealer), { tally: g.tally })); // scala, peppa
+    else if (usesShuffle(room.game)) beginPrepare(other(g.dealer), { tally: g.tally }); // ruba, camicia, briscola, scala
+    else if (GAMES[room.game].instant) dealNow(dealGame(room.game, room.opts, other(g.dealer), { tally: g.tally })); // peppa
     else dealNow(dealGame(room.game, room.opts, g.win ? other(g.win) : "A", { tally: g.tally })); // dice
   };
 
@@ -7949,7 +7954,7 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
   useEffect(() => () => stopHold(), []);
 
   // Cut: drag across the spread to choose where to lift.
-  const [cutAt, setCutAt] = useState(20);
+  const [cutAt, setCutAt] = useState(() => Math.max(2, Math.round((prep.deck.length || 40) / 2)));
   const barRef = useRef(null);
   const drag = useRef(false);
   const fromX = (clientX) => {
@@ -7957,7 +7962,8 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
     if (!el) return;
     const r = el.getBoundingClientRect();
     const frac = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
-    const v = Math.max(2, Math.min(38, Math.round(frac * 40)));
+    const N = prep.deck.length; // 40 for the normal deck, 106 for Scala
+    const v = Math.max(2, Math.min(N - 2, Math.round(frac * N)));
     setCutAt(v);
     liveCut && liveCut(v); // let the dealer watch the cut move in real time
   };
@@ -8001,12 +8007,14 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
       style={{ position: "relative", height: 108, margin: "24px 0 10px", touchAction: live ? "auto" : "none", userSelect: "none", WebkitUserSelect: "none", cursor: live ? "default" : "ew-resize" }}
     >
       <div style={{ position: "absolute", left: 0, right: 0, top: 22, bottom: 22, display: "flex", gap: 1 }}>
-        {Array.from({ length: 40 }, (_, i) => (
-          <div key={i} style={{ flex: 1, borderRadius: 2, background: i < at ? T.ink : "#4a4a48", boxShadow: i === at - 1 ? `2px 0 0 ${T.bg}` : "none", transition: live ? "background 90ms ease" : "none" }} />
-        ))}
+        {Array.from({ length: 40 }, (_, i) => {
+          const fr = at / (prep.deck.length || 40); // where the cut sits, 0..1
+          const lit = i / 40 < fr;
+          return <div key={i} style={{ flex: 1, borderRadius: 2, background: lit ? T.ink : "#4a4a48", boxShadow: i === Math.round(fr * 40) - 1 ? `2px 0 0 ${T.bg}` : "none", transition: live ? "background 90ms ease" : "none" }} />;
+        })}
       </div>
-      <div style={{ position: "absolute", top: 6, bottom: 6, left: `calc(${(at / 40) * 100}% - 1px)`, width: 2, background: "#B8862B", transition: live ? "left 90ms ease" : "none" }} />
-      <div style={{ position: "absolute", top: -4, left: `calc(${(at / 40) * 100}% - 8px)`, color: "#B8862B", fontSize: 16, transition: live ? "left 90ms ease" : "none" }}>▼</div>
+      <div style={{ position: "absolute", top: 6, bottom: 6, left: `calc(${(at / (prep.deck.length || 40)) * 100}% - 1px)`, width: 2, background: "#B8862B", transition: live ? "left 90ms ease" : "none" }} />
+      <div style={{ position: "absolute", top: -4, left: `calc(${(at / (prep.deck.length || 40)) * 100}% - 8px)`, color: "#B8862B", fontSize: 16, transition: live ? "left 90ms ease" : "none" }}>▼</div>
     </div>
   );
 
@@ -8019,7 +8027,7 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
         <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.5, margin: "8px auto 0", maxWidth: 300 }}>Guarda dove sta tagliando il mazzo…</p>
         {cutSpread(at, true)}
         <Micro>
-          {at} sopra · {40 - at} sotto
+          {at} sopra · {prep.deck.length - at} sotto
         </Micro>
         <div style={{ marginTop: 22 }}>
           <Micro>un attimo…</Micro>
@@ -8076,7 +8084,7 @@ function Prepare({ room, seat, shuffleTap, shuffleDone, cutAndDeal, liveCut }) {
       </p>
       {cutSpread(cutAt, false)}
       <Micro>
-        {cutAt} sopra · {40 - cutAt} sotto
+        {cutAt} sopra · {prep.deck.length - cutAt} sotto
       </Micro>
       <div style={{ marginTop: 22 }}>
         <Button full onClick={() => cutAndDeal(cutAt)}>
