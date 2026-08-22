@@ -4389,12 +4389,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             {/* quick-pair: Bump is the headline way in; shake + NFC are alternates */}
             {!hasStore() && (
               <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-                <button onClick={() => bump()} style={{ ...plain, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "12px 14px", fontFamily: BRAND, fontWeight: 700, fontSize: 16, color: T.ink, WebkitTapHighlightColor: "transparent" }}>
-                  <Ico n="bump" s={20} /> {L("Bump — avvicinate i telefoni", "Bump — bring phones close")}
+                <button onClick={() => { armShake(); bump(); }} style={{ ...plain, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, border: `1.5px solid ${T.ink}`, borderRadius: 12, padding: "12px 14px", fontFamily: BRAND, fontWeight: 700, fontSize: 16, color: T.ink, WebkitTapHighlightColor: "transparent" }}>
+                  <Ico n="bump" s={20} /> {L("Bump — tocca o scuoti", "Bump — tap or shake")}
                 </button>
                 <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "6px 20px" }}>
-                  <button onClick={armShake} style={{ ...plain, color: shakeArmed ? "#B8862B" : T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <Ico n="bump" s={15} /> {shakeArmed ? L("Scuoti ora!", "Shake now!") : L("Scuoti per connettere", "Shake to connect")}
+                  <button onClick={armShake} style={{ ...plain, color: shakeArmed ? "#B8862B" : T.ink30, fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    {shakeArmed ? L("Scuoti ora!", "Shake now!") : L("attiva solo scuotimento", "arm shake only")}
                   </button>
                   {hasNfc() && (
                     <button onClick={readNfc} style={{ ...plain, display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -5316,7 +5316,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
               border: `1px solid ${!gs.done && mine ? T.ink : T.line}`,
             }}
           >
-            {gs.done ? "mano finita" : mine ? "tocca a te" : "aspetta"}
+            {gs.done ? L("mano finita","hand over") : mine ? L("tocca a te","your turn") : L("aspetta","wait")}
           </div>
         </div>
         <PileView room={room} gs={gs} seat={seat} label="tua pila" faceUp={!isScopa} slamId={slamId} right />
@@ -6602,7 +6602,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
   const flip = () => {
     if (mine && !gs.done) commit(camiciaFlip(gs, seat, room.opts));
   };
-  const label = gs.done ? "FINE" : !mine ? "ASPETTA" : gs.debt > 0 ? `PAGA ${gs.debt}` : "GIRA";
+  const label = gs.done ? L("FINE","DONE") : !mine ? L("ASPETTA","WAIT") : gs.debt > 0 ? `${L("PAGA","PAY")} ${gs.debt}` : L("GIRA","FLIP");
 
   // Slide the deck up to slam. Tapping still works (a near-zero swipe), and the
   // pile is collected automatically when the exchange is won — no take gesture.
@@ -6706,7 +6706,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
         }}
       >
         {/* the hint lives in normal flow — it can never sit under the deck */}
-        <Micro>{gs.done ? "mano finita" : mine ? "trascina il mazzo in su per giocare" : "tocca all’altro"}</Micro>
+        <Micro>{gs.done ? L("mano finita","hand over") : mine ? L("trascina il mazzo in su per giocare","drag the deck up to play") : L("tocca all’altro","other side to play")}</Micro>
         <div style={{ opacity: gs.decks[seat].length ? 1 : 0.4 }}>
           <DeckBox n={gs.decks[seat].length} size="xl" live={mine && !gs.done} lift={mine ? -dragY / 70 : 0} />
         </div>
@@ -6818,7 +6818,7 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
           ) : played && slamId === played.id ? (
             <Card card={played} size="lg" rot={3} slam />
           ) : (
-            <Micro>{mine ? "apri la mano" : `gioca ${who(room, gs.turn)}`}</Micro>
+            <Micro>{mine ? L("apri la mano","lead a card") : `${who(room, gs.turn)} ${L("gioca","plays")}`}</Micro>
           )}
         </div>
       </div>
@@ -6840,7 +6840,7 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
             border: `1px solid ${!gs.done && mine ? T.ink : T.line}`,
           }}
         >
-          {gs.done ? "mano finita" : mine ? (gs.lead ? "rispondi" : "gioca") : "aspetta"}
+          {gs.done ? L("mano finita","hand over") : mine ? (gs.lead ? L("rispondi","respond") : L("gioca","play")) : L("aspetta","wait")}
         </div>
       </div>
 
@@ -6848,7 +6848,7 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
       <div>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
           {nameRow(seat, true)}
-          <Micro>briscola {suitName(gs.trump, french)}</Micro>
+          <Micro>{L("briscola","trump")} {suitName(gs.trump, french)}</Micro>
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "center", minHeight: 108 }}>
           {gs.hands[seat].map((c) => (
@@ -6979,7 +6979,7 @@ function Perudo({ room, gs, seat, mine, commit }) {
                 </Button>
                 {gs.bid && (
                   <Button kind="line" onClick={() => commit(perudoDoubt(gs, seat))}>
-                    Dubito!
+                    {L("Dubito!","Liar!")}
                   </Button>
                 )}
               </div>
@@ -7154,10 +7154,10 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
           {mine && !gs.done ? (
             gs.rollsLeft > 0 ? (
               <Button full onClick={tapRoll}>
-                {gs.rolled ? `Ritira · ${gs.rollsLeft} rimasti` : "Lancia i dadi"}
+                {gs.rolled ? `${L("Ritira","Reroll")} · ${gs.rollsLeft} ${L("rimasti","left")}` : L("Lancia i dadi","Roll the dice")}
               </Button>
             ) : (
-              <Micro>segna un punteggio qui sotto</Micro>
+              <Micro>{L("segna un punteggio qui sotto","score a box below")}</Micro>
             )
           ) : (
             <Micro>tocca a {who(room, opp)}</Micro>
@@ -7566,7 +7566,7 @@ function Scala({ room, gs, seat, mine, commit }) {
       {/* your melds — your side of the deck */}
       {(myMelds.length > 0 || opened) && (
         <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 4 }}>
-          <Micro>Le tue combinazioni{target ? " · tocca per attaccare" : ""}</Micro>
+          <Micro>{L("Le tue combinazioni","Your melds")}{target ? L(" · tocca per attaccare"," · tap to lay off") : ""}</Micro>
           {meldArea(myMelds, "niente ancora")}
         </div>
       )}
@@ -7660,7 +7660,7 @@ function Scala({ room, gs, seat, mine, commit }) {
                     : !opened && staged.length > 0
                     ? `apertura ${stagedTotal}/40${stagedTotal < 40 ? " — aggiungi combinazioni" : " — puoi aprire"}`
                     : opened && sel.length === 1
-                    ? "scarta, o tocca una combinazione per attaccare"
+                    ? L("scarta, o tocca una combinazione per attaccare","discard, or tap a meld to lay off")
                     : opened
                     ? "cala una combinazione, o scarta una carta"
                     : "componi almeno 40 punti per aprire"}
