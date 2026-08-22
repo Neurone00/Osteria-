@@ -11,6 +11,7 @@ opening a shared link. One player opens a table, the other joins. No accounts, n
 - **Yahtzee** (dice) — three rolls a turn, thirteen scoring boxes, the +35 upper bonus; shake to roll
 - **Diecimila** (dice) — six-dice press-your-luck; roll on to pile up points, but a scoreless roll (a *Farkle*) burns the turn
 - **Bestiario** (board) — a 5×5 duel of two Masters and eight Students, moved by animal cards that rotate between the players
+- **Flotta** (board) — battaglia navale on an 8×8 grid, but ships can maneuver and each side has three one-shot powers
 
 Card games begin with a shuffle-and-cut ritual: one player taps the deck to shuffle (the randomness is seeded by
 the rhythm of their taps), the other drags to cut. Dice games throw on a phone shake (or a tap).
@@ -239,6 +240,30 @@ Two paths to victory:
 
 If you're ever completely blocked — no legal move with either card — you still swap one card with the spare and pass
 the turn. The spare card's colour decides who moves first, so there's no coin-flip advantage.
+
+### Flotta
+
+Battaglia navale — Battleship — with two twists that make the classic game move. The grid is a roomier **8×8**, and
+the fleet is a **corazzata (4)**, two **incrociatori (3)** and a **cacciatorpediniere (2)**. Each side lays its
+ships out in secret, then locks in; the battle opens once both fleets are down.
+
+On your turn you spend a single action:
+
+- **Fuoco** — fire at one enemy cell. Hit, miss, or *colpito e affondato* when a shot finishes a ship.
+- **Manovra** — instead of firing, slide one of your ships one cell to dodge. This is the twist: your shot pegs
+  stay stuck to the water where you fired, so when a ship moves it slips out from under the enemy's marks — while
+  the damage it has already taken travels with its hull.
+
+Plus three **powers, one use each**:
+
+- **Salva** — fire up to three shots in one turn.
+- **Sonar** — reveal whether ships sit in a 3×3 patch of enemy water (your best answer to a fleet that keeps
+  moving).
+- **Riparazione** — heal one hit on one of your ships.
+
+Sink the entire enemy fleet to win. Like the card games, the fleets live in the shared state and are hidden only in
+the interface — fine among friends, readable by a determined snoop off the wire (see *Known gaps* in `CLAUDE.md`);
+enforcing real secrecy would need the Durable Object to hand each player a redacted view.
 
 ## Layout
 

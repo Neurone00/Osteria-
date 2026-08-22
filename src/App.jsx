@@ -225,6 +225,16 @@ const GAMES = {
     opts: [],
     def: {},
   },
+  flotta: {
+    name: "Flotta",
+    tag: "battaglia navale, ma si muove",
+    line: "Schiera la flotta di nascosto su una griglia 8×8, poi a turno spara — o manovra una nave per schivare. Tre poteri: salva, sonar, riparazione. Affonda tutta la flotta nemica.",
+    en: { tag: "battleship that moves", line: "Deploy your fleet in secret on an 8×8 grid, then take turns firing — or maneuver a ship to dodge. Three powers: salvo, sonar, repair. Sink the whole enemy fleet." },
+    instant: true, // its own grid — no card deck or shuffle ritual
+    board: true,
+    opts: [],
+    def: {},
+  },
 };
 // game meta + option labels/hints in the current language
 const gtag = (g) => L(g.tag, g.en && g.en.tag);
@@ -1297,6 +1307,203 @@ function bestiarioPass(gs, seat, cardId) {
   g.last = { pass: true, cardId, seat };
   g.turn = other(seat);
   return { g, kind: "lay", nojolt: true, ev: { t: "pass" } };
+}
+
+/* ── flotta (battaglia navale, con manovra) ────────────────────
+   Battleship on a bigger grid, with two twists: on your turn you may spend the
+   turn to *move* a ship one cell instead of firing, and each side has three
+   one-shot powers — a three-shot Salva, a 3×3 Sonar sweep, and a Riparazione that
+   heals one hit. Damage rides on the ship's segments, so a moved ship carries its
+   wounds and leaves the enemy's old shot-pegs pointing at empty water. Fleets live
+   in the shared state (hidden only in the UI — the same trust model as the card
+   hands), so the firer's own client resolves each shot. Sink the whole enemy
+   fleet to win. */
+const FL_N = 8; // 8×8 grid
+const FL_FLEET = [4, 3, 3, 2]; // corazzata, due incrociatori, cacciatorpediniere
+const flXY = (i) => [i % FL_N, (i / FL_N) | 0];
+const flIdx = (x, y) => y * FL_N + x;
+const flIn = (x, y) => x >= 0 && x < FL_N && y >= 0 && y < FL_N;
+function flShipCells(x, y, size, horiz) {
+  const c = [];
+  for (let k = 0; k < size; k++) {
+    const cx = horiz ? x + k : x,
+      cy = horiz ? y : y + k;
+    if (!flIn(cx, cy)) return null;
+    c.push(flIdx(cx, cy));
+  }
+  return c;
+}
+const flOccupied = (ships) => {
+  const s = new Set();
+  for (const sh of ships) for (const c of sh.cells) s.add(c);
+  return s;
+};
+function flFleetValid(ships) {
+  if (!Array.isArray(ships) || ships.length !== FL_FLEET.length) return false;
+  const sizes = ships.map((s) => s.size).sort();
+  if (sizes.join() !== FL_FLEET.slice().sort().join()) return false;
+  const occ = new Set();
+  for (const s of ships) {
+    if (!s.cells || s.cells.length !== s.size) return false;
+    for (const c of s.cells) {
+      if (c < 0 || c >= FL_N * FL_N || occ.has(c)) return false;
+      occ.add(c);
+    }
+  }
+  return true;
+}
+// A random legal fleet — used by the "Casuale" shortcut and as a fallback.
+function flRandomFleet() {
+  const ships = [];
+  for (const size of FL_FLEET) {
+    let placed = null,
+      tries = 0;
+    while (!placed && tries++ < 800) {
+      const horiz = Math.random() < 0.5;
+      const cells = flShipCells(Math.floor(Math.random() * FL_N), Math.floor(Math.random() * FL_N), size, horiz);
+      if (cells) {
+        const occ = flOccupied(ships);
+        if (cells.every((c) => !occ.has(c))) placed = { size, cells, hits: cells.map(() => false), horiz };
+      }
+    }
+    if (!placed) return flRandomFleet(); // extremely rare — start over
+    ships.push(placed);
+  }
+  return ships;
+}
+function dealFlotta(dealer, tally) {
+  return {
+    phase: "setup",
+    ships: { A: null, B: null }, // locked fleets; null until a seat is ready
+    shots: { A: {}, B: {} }, // seat's shot pegs on the enemy grid: idx → "hit" | "miss"
+    reveals: { A: [], B: [] }, // last sonar snapshot the seat took
+    powers: { A: { salva: true, sonar: true, riparazione: true }, B: { salva: true, sonar: true, riparazione: true } },
+    sunk: { A: [], B: [] }, // sunk ships of each seat (revealed to the attacker)
+    turn: dealer,
+    last: null,
+    dealer,
+    tally: tally || { A: 0, B: 0 },
+    done: false,
+    matchDone: false,
+    win: null,
+    how: null,
+  };
+}
+function flottaOpenBattle(g) {
+  g.phase = "battle";
+  g.turn = g.dealer;
+}
+// Lock in a seat's fleet. Independent, like Condottieri — the battle opens when
+// the second seat is ready. Self-heals if both are somehow in but still in setup.
+function flottaSetup(gs, seat, ships) {
+  const g = clone(gs);
+  if (g.phase !== "setup" || g.ships[seat] != null) {
+    if (g.ships.A != null && g.ships.B != null && g.phase === "setup") {
+      flottaOpenBattle(g);
+      return { g, quiet: true, ev: { t: "ready" } };
+    }
+    return null;
+  }
+  if (!flFleetValid(ships)) return null;
+  g.ships[seat] = ships.map((s) => ({ size: s.size, cells: s.cells.slice(), hits: s.cells.map((_, k) => (s.hits ? !!s.hits[k] : false)), horiz: s.horiz }));
+  if (g.ships[other(seat)] != null) flottaOpenBattle(g);
+  return { g, quiet: true, ev: { t: "ready" } };
+}
+const flAllSunk = (ships) => ships.every((s) => s.hits.every(Boolean));
+// Fire at one cell (or up to three in-line with Salva). The firer resolves the
+// shot against the enemy fleet held in shared state.
+function flottaFire(gs, seat, idxs, salva) {
+  const g = clone(gs);
+  if (g.phase !== "battle" || g.turn !== seat || g.done) return null;
+  if (!Array.isArray(idxs) || !idxs.length) return null;
+  if (salva) {
+    if (!g.powers[seat].salva || idxs.length < 1 || idxs.length > 3) return null;
+  } else if (idxs.length !== 1) return null;
+  const foe = other(seat);
+  const ships = g.ships[foe];
+  let anyHit = false;
+  const sunkNow = [];
+  for (const idx of idxs) {
+    if (idx < 0 || idx >= FL_N * FL_N) return null;
+    if (g.shots[seat][idx]) continue; // don't waste a peg on a repeat cell
+    let hit = false;
+    for (const s of ships) {
+      const k = s.cells.indexOf(idx);
+      if (k >= 0) {
+        const wasSunk = s.hits.every(Boolean);
+        s.hits[k] = true;
+        hit = true;
+        if (!wasSunk && s.hits.every(Boolean)) sunkNow.push(s);
+        break;
+      }
+    }
+    g.shots[seat][idx] = hit ? "hit" : "miss";
+    if (hit) anyHit = true;
+  }
+  for (const s of sunkNow) g.sunk[foe].push({ size: s.size, cells: s.cells.slice() });
+  if (salva) g.powers[seat].salva = false;
+  if (flAllSunk(ships)) {
+    g.win = seat;
+    g.how = "sunk";
+    g.done = true;
+    g.matchDone = true;
+    g.tally[seat] += 1;
+  } else g.turn = foe;
+  g.last = { t: "fire", seat, idxs: idxs.slice(), hit: anyHit, sunk: sunkNow.length, salva: !!salva };
+  return { g, kind: sunkNow.length ? "scopa" : anyHit ? "take" : "lay", ev: { t: "fire", hit: anyHit, sunk: sunkNow.length } };
+}
+// Maneuver: slide one of your ships one orthogonal cell. Costs the whole turn.
+function flottaMove(gs, seat, shipIndex, dx, dy) {
+  const g = clone(gs);
+  if (g.phase !== "battle" || g.turn !== seat || g.done) return null;
+  const ships = g.ships[seat];
+  const s = ships[shipIndex];
+  if (!s || Math.abs(dx) + Math.abs(dy) !== 1) return null;
+  const moved = s.cells.map((c) => {
+    const [x, y] = flXY(c);
+    return flIn(x + dx, y + dy) ? flIdx(x + dx, y + dy) : -1;
+  });
+  if (moved.some((c) => c < 0)) return null; // would leave the grid
+  const others = new Set();
+  ships.forEach((o, i) => {
+    if (i !== shipIndex) o.cells.forEach((c) => others.add(c));
+  });
+  if (moved.some((c) => others.has(c))) return null; // would ram a friendly hull
+  s.cells = moved;
+  g.turn = other(seat);
+  g.last = { t: "move", seat };
+  return { g, kind: "lay", nojolt: true, ev: { t: "move" } };
+}
+// Sonar: reveal ship presence across a 3×3 block of enemy water. Costs the turn.
+function flottaSonar(gs, seat, center) {
+  const g = clone(gs);
+  if (g.phase !== "battle" || g.turn !== seat || g.done || !g.powers[seat].sonar) return null;
+  const occ = flOccupied(g.ships[other(seat)]);
+  const [cx, cy] = flXY(center);
+  const marks = [];
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) {
+      const x = cx + dx,
+        y = cy + dy;
+      if (flIn(x, y)) marks.push({ idx: flIdx(x, y), ship: occ.has(flIdx(x, y)) });
+    }
+  g.reveals[seat] = marks;
+  g.powers[seat].sonar = false;
+  g.turn = other(seat);
+  g.last = { t: "sonar", seat };
+  return { g, kind: "take", nojolt: true, ev: { t: "sonar" } };
+}
+// Riparazione: heal one hit segment of one of your ships (not an already-sunk one).
+function flottaRepair(gs, seat, shipIndex, seg) {
+  const g = clone(gs);
+  if (g.phase !== "battle" || g.turn !== seat || g.done || !g.powers[seat].riparazione) return null;
+  const s = g.ships[seat][shipIndex];
+  if (!s || !s.hits[seg] || s.hits.every(Boolean)) return null; // must be a wounded, unsunk ship
+  s.hits[seg] = false;
+  g.powers[seat].riparazione = false;
+  g.turn = other(seat);
+  g.last = { t: "repair", seat };
+  return { g, kind: "take", nojolt: true, ev: { t: "repair" } };
 }
 
 /* ── scala 40 ──────────────────────────────────────────────────
@@ -4522,6 +4729,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealTactics(dealer, o, cont?.tally || null)
       : game === "bestiario"
       ? dealBestiario(dealer, cont?.tally || null)
+      : game === "flotta"
+      ? dealFlotta(dealer, cont?.tally || null)
       : dealCamicia(cont?.tally || null, deck);
 
   const dealNow = (gsNew) => publish({ ...room, status: "play", gs: gsNew, log: [], ev: null, anim: null });
@@ -4880,6 +5089,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Tactics room={room} gs={gs} seat={seat} commit={commit} />
       ) : room.game === "bestiario" ? (
         <Bestiario room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+      ) : room.game === "flotta" ? (
+        <Flotta room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : (
         <Board
           room={room}
@@ -5382,6 +5593,16 @@ function GameArt({ game, size = 88 }) {
           <path d="M30 43.3h40M30 56.7h40M43.3 30v40M56.7 30v40" strokeWidth="1.4" />
           <circle cx="36.7" cy="63.3" r="4" fill={red} stroke="none" />
           <circle cx="63.3" cy="36.7" r="4" fill={ink} stroke="none" />
+        </g>
+      ); break;
+    case "flotta":
+      art = (
+        <g stroke={ink} strokeWidth="1.6" fill="none">
+          <rect x="30" y="30" width="40" height="40" rx="3" strokeWidth="2" />
+          <path d="M30 40h40M30 50h40M30 60h40M40 30v40M50 30v40M60 30v40" strokeWidth="1" opacity="0.5" />
+          <rect x="41" y="41" width="28" height="8" rx="4" fill={ink} stroke="none" />
+          <path d="M34 60l4 4 4-4" stroke={red} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="38" cy="58" r="1.6" fill={red} stroke="none" />
         </g>
       ); break;
     default:
@@ -7805,6 +8026,276 @@ function Bestiario({ room, gs, seat, mine, commit }) {
   );
 }
 
+/* ── flotta (battaglia navale) ── */
+const FL_WATER = "rgba(44,85,126,0.10)";
+// A generic 8×8 grid; `cell(i)` returns { bg, node } and `onTap(i)` handles taps.
+function FlottaGrid({ cell, onTap, dim }) {
+  return (
+    <div style={{ width: "min(92vw, 372px)", margin: "10px auto", aspectRatio: "1", display: "grid", gridTemplateColumns: `repeat(${FL_N},1fr)`, gridTemplateRows: `repeat(${FL_N},1fr)`, gap: 2, opacity: dim ? 0.55 : 1 }}>
+      {Array.from({ length: FL_N * FL_N }, (_, i) => {
+        const c = cell(i);
+        return (
+          <div key={i} onClick={() => onTap && onTap(i)} style={{ position: "relative", borderRadius: 3, background: c.bg, cursor: onTap ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}>
+            {c.node}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+const flDot = (color, size = "26%") => <span style={{ position: "absolute", inset: `calc(50% - ${size}/2)`, width: size, height: size, borderRadius: "50%", background: color }} />;
+function Flotta({ room, gs, seat, mine, commit }) {
+  const opp = other(seat);
+  const me = TSIDE[seat],
+    foe = TSIDE[opp];
+  const locked = gs.ships[seat] != null;
+
+  // ————— setup: lay out your fleet in secret —————
+  const [place, setPlace] = useState([]); // [{size, cells, horiz}]
+  const [horiz, setHoriz] = useState(true);
+  const nextSize = place.length < FL_FLEET.length ? FL_FLEET[place.length] : null;
+  const placedCells = new Set(place.flatMap((s) => s.cells));
+  const placeShip = (idx) => {
+    if (nextSize == null) return;
+    const [x, y] = flXY(idx);
+    const cells = flShipCells(x, y, nextSize, horiz);
+    if (!cells || cells.some((c) => placedCells.has(c))) return;
+    setPlace(place.concat({ size: nextSize, cells, horiz }));
+  };
+
+  // the battle opens the moment both fleets are in — nudge it along if a publish
+  // was missed while this seat sat waiting
+  const healed = useRef(false);
+  useEffect(() => {
+    if (gs.phase === "setup" && gs.ships.A != null && gs.ships.B != null && !healed.current) {
+      healed.current = true;
+      commit(flottaSetup(gs, seat, gs.ships[seat]));
+    }
+    if (gs.phase !== "setup") healed.current = false;
+  }, [gs.phase, gs.ships.A, gs.ships.B]);
+
+  // ————— battle state —————
+  const [mode, setMode] = useState("fire"); // fire | move | sonar | repair
+  const [salva, setSalva] = useState([]); // cells picked for a salvo
+  const [moveShip, setMoveShip] = useState(null); // own ship index picked to maneuver
+  const [showHelp, setShowHelp] = useState(false);
+  useEffect(() => {
+    setMode("fire");
+    setSalva([]);
+    setMoveShip(null);
+  }, [gs.turn, gs.phase]);
+  const view = mode === "move" || mode === "repair" ? "own" : "enemy";
+  const myFleet = gs.ships[seat] || [];
+  const shipAt = (i) => {
+    for (let si = 0; si < myFleet.length; si++) {
+      const k = myFleet[si].cells.indexOf(i);
+      if (k >= 0) return { si, seg: k, ship: myFleet[si] };
+    }
+    return null;
+  };
+
+  if (gs.phase === "setup") {
+    if (locked)
+      return (
+        <div style={{ paddingBottom: 40, textAlign: "center" }}>
+          <div style={{ marginTop: 30, fontFamily: BRAND, fontWeight: 700, fontSize: 20 }}>{L("Flotta schierata", "Fleet deployed")}</div>
+          <Micro style={{ marginTop: 8 }}>{L("Aspetta che l’altro schieri…", "Waiting for the other to deploy…")}</Micro>
+          <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 18 }}>
+            <span className="recdot" style={{ animationDelay: "0ms" }} />
+            <span className="recdot" style={{ animationDelay: "140ms" }} />
+            <span className="recdot" style={{ animationDelay: "280ms" }} />
+          </div>
+        </div>
+      );
+    return (
+      <div style={{ paddingBottom: 40 }}>
+        <div style={{ textAlign: "center", marginTop: 6 }}>
+          <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18, color: me }}>{L("Schiera la flotta", "Deploy your fleet")}</div>
+          <Micro style={{ marginTop: 4 }}>
+            {nextSize ? `${L("Prossima: nave da", "Next: ship of")} ${nextSize}` : L("Flotta completa", "Fleet complete")}
+          </Micro>
+        </div>
+        <FlottaGrid
+          onTap={placeShip}
+          cell={(i) => ({ bg: placedCells.has(i) ? me : FL_WATER, node: null })}
+        />
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+          <Button kind="line" onClick={() => setHoriz((h) => !h)}>
+            {horiz ? L("Orizzontale ↔", "Horizontal ↔") : L("Verticale ↕", "Vertical ↕")}
+          </Button>
+          <Button kind="line" disabled={!place.length} onClick={() => setPlace(place.slice(0, -1))}>
+            {L("Annulla", "Undo")}
+          </Button>
+          <Button kind="line" onClick={() => setPlace(flRandomFleet().map((s) => ({ size: s.size, cells: s.cells, horiz: s.horiz })))}>
+            {L("Casuale", "Random")}
+          </Button>
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <Button full disabled={nextSize != null} onClick={() => commit(flottaSetup(gs, seat, place))}>
+            {nextSize != null ? `${L("Piazza ancora", "Place")} ${FL_FLEET.length - place.length}` : L("Pronto", "Ready")}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // ————— battle —————
+  const canAct = mine && !gs.done;
+  const power = gs.powers[seat];
+  const tapEnemy = (i) => {
+    if (!canAct) return;
+    if (mode === "fire") {
+      if (!gs.shots[seat][i]) commit(flottaFire(gs, seat, [i], false));
+    } else if (mode === "salva") {
+      if (gs.shots[seat][i]) return;
+      setSalva((s) => (s.includes(i) ? s.filter((x) => x !== i) : s.length < 3 ? s.concat(i) : s));
+    } else if (mode === "sonar") {
+      commit(flottaSonar(gs, seat, i));
+    }
+  };
+  const tapOwn = (i) => {
+    if (!canAct) return;
+    const at = shipAt(i);
+    if (mode === "move") {
+      if (at) setMoveShip(at.si === moveShip ? null : at.si);
+    } else if (mode === "repair") {
+      if (at && at.ship.hits[at.seg] && !at.ship.hits.every(Boolean)) commit(flottaRepair(gs, seat, at.si, at.seg));
+    }
+  };
+
+  const enemyCell = (i) => {
+    const shot = gs.shots[seat][i];
+    const sunk = gs.sunk[opp].some((s) => s.cells.includes(i));
+    const rev = gs.reveals[seat].find((m) => m.idx === i);
+    const picked = mode === "salva" && salva.includes(i);
+    let bg = FL_WATER;
+    if (sunk) bg = foe;
+    else if (shot === "hit") bg = "rgba(178,58,46,0.20)";
+    let node = null;
+    if (sunk) node = null;
+    else if (shot === "hit") node = <span style={{ position: "absolute", inset: "22%", borderRadius: "50%", background: "#B23A2E" }} />;
+    else if (shot === "miss") node = flDot("rgba(18,18,18,0.28)");
+    else if (rev) node = rev.ship ? <span style={{ position: "absolute", inset: "20%", border: "2px solid rgba(184,134,43,0.9)", borderRadius: "50%" }} /> : flDot("rgba(184,134,43,0.35)", "18%");
+    return { bg: picked ? "rgba(184,134,43,0.5)" : bg, node };
+  };
+  const ownCell = (i) => {
+    const at = shipAt(i);
+    const enemyShot = gs.shots[opp][i];
+    let bg = FL_WATER;
+    let node = null;
+    if (at) {
+      const hit = at.ship.hits[at.seg];
+      const sel = mode === "move" && moveShip === at.si;
+      bg = hit ? "rgba(178,58,46,0.35)" : me;
+      if (sel) node = <span style={{ position: "absolute", inset: 0, border: "2px solid #B8862B", borderRadius: 3 }} />;
+      else if (mode === "repair" && hit) node = <span style={{ position: "absolute", inset: "18%", border: "2px solid #B8862B", borderRadius: "50%" }} />;
+    } else if (enemyShot === "miss") node = flDot("rgba(18,18,18,0.22)");
+    else if (enemyShot === "hit") node = flDot("rgba(178,58,46,0.5)"); // a stale peg — they hit here before you moved
+    return { bg, node };
+  };
+
+  const afloat = (s) => (s ? s.filter((sh) => !sh.hits.every(Boolean)).length : 0);
+  const last = gs.last;
+  const lastMsg =
+    !last || gs.done
+      ? ""
+      : last.t === "fire"
+      ? last.sunk
+        ? L("Colpito e affondato!", "Hit and sunk!")
+        : last.hit
+        ? L("Colpito!", "Hit!")
+        : L("Acqua", "Miss")
+      : last.t === "move"
+      ? L("Manovra", "Maneuver")
+      : last.t === "sonar"
+      ? L("Sonar", "Sonar")
+      : last.t === "repair"
+      ? L("Riparazione", "Repair")
+      : "";
+
+  const modeBtn = (m, label, on) => (
+    <button
+      onClick={() => canAct && on && setMode(m)}
+      disabled={!canAct || !on}
+      style={{ ...plain, flex: "1 1 auto", padding: "8px 6px", borderRadius: 9, fontFamily: BRAND, fontWeight: 600, fontSize: 12.5, border: `1.5px solid ${mode === m ? T.ink : T.line}`, background: mode === m ? T.ink : "transparent", color: !on ? T.ink30 : mode === m ? T.bg : T.ink, textDecoration: !on ? "line-through" : "none", cursor: canAct && on ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div style={{ paddingBottom: 44 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
+          <span style={{ color: foe }}>{who(room, opp)}</span> · {L("navi", "ships")} {afloat(gs.ships[opp])}/{FL_FLEET.length}
+        </div>
+        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <Ico n="help" s={15} /> {L("come si gioca", "how to play")}
+        </button>
+      </div>
+
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
+            <p style={{ margin: "0 0 10px" }}>{L("A turno fai una sola cosa: spari a una casella nemica, oppure manovri una nave di un passo per schivare.", "Each turn you do one thing: fire at an enemy cell, or maneuver one ship a step to dodge.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("I colpi restano segnati dove hai sparato: se il nemico sposta una nave, i tuoi segni non la seguono. I danni invece restano sulla nave.", "Your shots stay pegged where you fired: if the enemy moves a ship, your marks don't follow it. Damage, though, stays on the ship.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Tre poteri, una volta ciascuno: Salva spara fino a 3 colpi; Sonar rivela un’area 3×3; Ripara cura un colpo su una tua nave.", "Three powers, once each: Salvo fires up to 3 shots; Sonar reveals a 3×3 area; Repair heals one hit on your ship.")}</p>
+            <p style={{ margin: 0 }}>{L("Affonda tutta la flotta nemica per vincere.", "Sink the whole enemy fleet to win.")}</p>
+          </div>
+        </Sheet>
+      )}
+
+      {/* action modes */}
+      <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+        {modeBtn("fire", L("Fuoco", "Fire"), true)}
+        {modeBtn("move", L("Manovra", "Maneuver"), true)}
+        {modeBtn("salva", L("Salva", "Salvo"), power.salva)}
+        {modeBtn("sonar", L("Sonar", "Sonar"), power.sonar)}
+        {modeBtn("repair", L("Ripara", "Repair"), power.riparazione)}
+      </div>
+
+      <div style={{ textAlign: "center", minHeight: 20, marginTop: 8 }}>
+        <div key={`${gs.turn}-${lastMsg}`} className="swap" style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: canAct ? T.ink : T.ink60 }}>
+          {gs.done ? "" : canAct ? (view === "enemy" ? L("Acque nemiche", "Enemy waters") : L("La tua flotta", "Your fleet")) : `${L("tocca a", "over to")} ${who(room, opp)}`}
+          {lastMsg ? ` · ${lastMsg}` : ""}
+        </div>
+      </div>
+
+      {view === "enemy" ? <FlottaGrid cell={enemyCell} onTap={canAct ? tapEnemy : undefined} dim={!canAct} /> : <FlottaGrid cell={ownCell} onTap={canAct ? tapOwn : undefined} />}
+
+      {/* per-mode controls */}
+      {canAct && mode === "salva" && (
+        <div style={{ textAlign: "center" }}>
+          <Button full disabled={!salva.length} onClick={() => commit(flottaFire(gs, seat, salva, true))}>
+            {L("Spara la salva", "Fire the salvo")} ({salva.length}/3)
+          </Button>
+        </div>
+      )}
+      {canAct && mode === "sonar" && <Micro style={{ textAlign: "center", display: "block" }}>{L("Tocca il centro dell’area da scandagliare", "Tap the centre of the area to sweep")}</Micro>}
+      {canAct && mode === "move" && (
+        moveShip == null ? (
+          <Micro style={{ textAlign: "center", display: "block" }}>{L("Tocca una nave da spostare", "Tap a ship to move")}</Micro>
+        ) : (
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
+            {[["↑", 0, -1], ["↓", 0, 1], ["←", -1, 0], ["→", 1, 0]].map(([g, dx, dy]) => (
+              <button key={g} onClick={() => commit(flottaMove(gs, seat, moveShip, dx, dy))} style={{ ...plain, width: 46, height: 46, borderRadius: 10, border: `1.5px solid ${T.ink}`, fontSize: 20, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                {g}
+              </button>
+            ))}
+          </div>
+        )
+      )}
+      {canAct && mode === "repair" && <Micro style={{ textAlign: "center", display: "block" }}>{L("Tocca un segmento colpito da riparare", "Tap a hit segment to repair")}</Micro>}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 14 }}>
+        <span style={{ width: 10, height: 10, borderRadius: "50%", background: me }} />
+        <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14, color: me }}>{who(room, seat)}</span>
+        <Micro style={{ marginLeft: 6 }}>{L("navi", "ships")} {afloat(gs.ships[seat])}/{FL_FLEET.length}</Micro>
+      </div>
+    </div>
+  );
+}
+
 /* ── scala 40 ── */
 const S40_SUIT = { H: { g: "♥", c: "#B23A2E" }, D: { g: "♦", c: "#B23A2E" }, C: { g: "♣", c: "#1A1A1A" }, S: { g: "♠", c: "#1A1A1A" } };
 const s40lbl = (v) => ({ 1: "A", 11: "J", 12: "Q", 13: "K" }[v] || String(v));
@@ -8633,6 +9124,13 @@ function Summary({ room, gs }) {
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18 }}>
           {gs.how === "temple" ? L("Tempio raggiunto", "Temple reached") : L("Maestro catturato", "Master captured")}
         </div>
+        <Micro style={{ marginTop: 4 }}>{L("partite", "games")} {gs.tally.A}–{gs.tally.B}</Micro>
+      </div>
+    );
+  if (room.game === "flotta")
+    return (
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18 }}>{L("Flotta affondata", "Fleet sunk")}</div>
         <Micro style={{ marginTop: 4 }}>{L("partite", "games")} {gs.tally.A}–{gs.tally.B}</Micro>
       </div>
     );

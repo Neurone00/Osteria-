@@ -43,6 +43,7 @@ const EXPORTS = [
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
+  "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
@@ -683,6 +684,116 @@ function bestiarioRuleTests() {
   if (R.bestiarioPass(g2, "A", "cavallo") != null) fail("bestiario rules", "pass should be refused while a move exists");
 }
 
+/* ── flotta (battaglia navale) ──────────────────────────────── */
+function flFleetAt() {
+  return [
+    { size: 4, cells: [0, 1, 2, 3] },
+    { size: 3, cells: [16, 17, 18] },
+    { size: 3, cells: [32, 33, 34] },
+    { size: 2, cells: [48, 49] },
+  ];
+}
+// Static-fleet sweep: fire every cell in turn (plus a one-off sonar and the
+// salvo), so the game is guaranteed to end. Movement/repair break the sweep
+// guarantee, so they're exercised in the unit tests, not this loop.
+function playFlotta() {
+  let g = R.dealFlotta("A", { A: 0, B: 0 });
+  for (const s of ["A", "B"]) {
+    const res = R.flottaSetup(g, s, R.flRandomFleet());
+    if (!res) return fail("flotta", "setup refused a valid fleet");
+    g = res.g;
+  }
+  if (g.phase !== "battle") return fail("flotta", "battle didn't open after both deployed");
+  const cur = { A: 0, B: 0 };
+  const usedSonar = { A: false, B: false };
+  let steps = 0;
+  const MAX = 400;
+  while (!g.done) {
+    if (++steps > MAX) return fail("flotta", `no end after ${MAX} steps`);
+    const seat = g.turn;
+    const r = Math.random();
+    if (!usedSonar[seat] && g.powers[seat].sonar && r < 0.05) {
+      usedSonar[seat] = true;
+      const res = R.flottaSonar(g, seat, Math.floor(Math.random() * 64));
+      if (res) {
+        g = res.g;
+        continue;
+      }
+    }
+    while (cur[seat] < 64 && g.shots[seat][cur[seat]]) cur[seat]++;
+    if (cur[seat] >= 64) return fail("flotta", "swept every cell without a win");
+    if (g.powers[seat].salva && r > 0.9) {
+      const cells = [];
+      let c = cur[seat];
+      while (cells.length < 3 && c < 64) {
+        if (!g.shots[seat][c]) cells.push(c);
+        c++;
+      }
+      const res = R.flottaFire(g, seat, cells, true);
+      if (res) {
+        g = res.g;
+        continue;
+      }
+    }
+    const res = R.flottaFire(g, seat, [cur[seat]], false);
+    if (!res) return fail("flotta", "fire refused a fresh cell");
+    g = res.g;
+  }
+  if (g.win == null) return fail("flotta", "ended without a winner");
+  return steps;
+}
+function flottaRuleTests() {
+  if (!R.flFleetValid(R.flRandomFleet())) fail("flotta rules", "a random fleet should validate");
+  if (!R.flFleetValid(flFleetAt())) fail("flotta rules", "hand-built fleet should validate");
+  if (R.flFleetValid([{ size: 4, cells: [0, 1, 2, 3] }, { size: 3, cells: [3, 4, 5] }, { size: 3, cells: [16, 17, 18] }, { size: 2, cells: [48, 49] }]))
+    fail("flotta rules", "an overlapping fleet should be rejected");
+
+  let g = R.dealFlotta("A", { A: 0, B: 0 });
+  if (g.phase !== "setup") fail("flotta rules", "should start in setup");
+  g = R.flottaSetup(g, "A", flFleetAt()).g;
+  if (g.phase !== "setup" || g.ships.A == null) fail("flotta rules", "one fleet in shouldn't open battle");
+  g = R.flottaSetup(g, "B", flFleetAt()).g;
+  if (g.phase !== "battle") fail("flotta rules", "both fleets in should open battle");
+
+  g.turn = "A";
+  let res = R.flottaFire(g, "A", [0], false);
+  if (!res || res.g.shots.A[0] !== "hit") fail("flotta rules", "firing on a ship should read hit");
+  g = res.g;
+  g.turn = "A";
+  res = R.flottaFire(g, "A", [10], false);
+  if (!res || res.g.shots.A[10] !== "miss") fail("flotta rules", "firing on water should read miss");
+  g = res.g;
+
+  for (const c of [0, 1, 2, 3, 16, 17, 18, 32, 33, 34, 48, 49]) {
+    if (g.done) break;
+    g.turn = "A";
+    const r = R.flottaFire(g, "A", [c], false);
+    if (r) g = r.g;
+  }
+  if (!g.done || g.win !== "A" || g.how !== "sunk") fail("flotta rules", "sinking every enemy ship should win");
+  if (!g.sunk.B.length) fail("flotta rules", "sunk ships should be recorded for the reveal");
+
+  // maneuver keeps damage and shifts the hull
+  let g2 = R.dealFlotta("A", { A: 0, B: 0 });
+  g2 = R.flottaSetup(g2, "A", flFleetAt()).g;
+  g2 = R.flottaSetup(g2, "B", flFleetAt()).g;
+  g2.turn = "A";
+  g2.ships.A[3].hits[0] = true;
+  const mv = R.flottaMove(g2, "A", 3, 0, 1); // down one row: 48→56, 49→57
+  if (!mv || mv.g.ships.A[3].cells[0] !== 56 || !mv.g.ships.A[3].hits[0]) fail("flotta rules", "a moved ship should shift and keep its wounds");
+  g2.turn = "A";
+  if (R.flottaMove(g2, "A", 0, 0, -1) != null) fail("flotta rules", "moving off the grid should be refused");
+
+  // repair heals a wounded ship once
+  let g3 = R.dealFlotta("A", { A: 0, B: 0 });
+  g3 = R.flottaSetup(g3, "A", flFleetAt()).g;
+  g3 = R.flottaSetup(g3, "B", flFleetAt()).g;
+  g3.turn = "A";
+  g3.ships.A[1].hits[1] = true;
+  const rp = R.flottaRepair(g3, "A", 1, 1);
+  if (!rp || rp.g.ships.A[1].hits[1] !== false || rp.g.powers.A.riparazione !== false) fail("flotta rules", "repair should heal a hit and spend the power");
+}
+
 /* ── scala 40 ───────────────────────────────────────────────── */
 function scalaCensus(g, label) {
   const ids = [];
@@ -882,6 +993,7 @@ const runs = [
   ["diecimila (farkle)", () => playFarkle({ target: 2000 })],
   ["diecimila, no last round + entry 500", () => playFarkle({ target: 2000, entry: true, lastRound: false })],
   ["bestiario (onitama)", () => playBestiario()],
+  ["flotta (battaglia navale)", () => playFlotta()],
   ["scala 40", () => playScala()],
 ];
 
@@ -927,6 +1039,11 @@ for (const [label, run] of runs) {
   const before = failures;
   bestiarioRuleTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"bestiario rules".padEnd(44)} deal, mirroring, capture/temple wins, pass`);
+}
+{
+  const before = failures;
+  flottaRuleTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"flotta rules".padEnd(44)} fleet, setup, fire/sink/win, move, repair`);
 }
 
 console.log(failures ? `\n${failures} failure(s)` : "\nAll invariants held: 40 cards accounted for throughout, no stuck seats, every hand terminated.");
