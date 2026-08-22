@@ -3042,7 +3042,7 @@ function Scoreboard({ board, names }) {
   const nameStyle = (align) => ({ flex: 1, textAlign: align, fontFamily: BRAND, fontWeight: 600, fontSize: 16, color: T.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
   return (
     <div>
-      <Micro style={{ textAlign: "center" }}>Testa a testa</Micro>
+      <Micro style={{ textAlign: "center" }}>{L("Testa a testa", "Head to head")}</Micro>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginTop: 6 }}>
         <div style={nameStyle("right")}>{nA}</div>
         {big(wA, wA > wB)}
@@ -3052,7 +3052,7 @@ function Scoreboard({ board, names }) {
       </div>
       {games.length ? (
         <div style={{ marginTop: 10 }}>
-          <Accordion label="Per gioco">
+          <Accordion label={L("Per gioco", "By game")}>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               {games.map((g) => {
                 const a = rec.byGame[g][kA] || 0,
@@ -3072,7 +3072,7 @@ function Scoreboard({ board, names }) {
           </Accordion>
         </div>
       ) : (
-        <Micro style={{ textAlign: "center", marginTop: 8 }}>prima sfida — che vinca il migliore</Micro>
+        <Micro style={{ textAlign: "center", marginTop: 8 }}>{L("prima sfida — che vinca il migliore", "first match — may the best win")}</Micro>
       )}
     </div>
   );
@@ -3086,7 +3086,7 @@ function SoloBar({ seat, names, onFlip }) {
       onClick={onFlip}
       style={{ width: "100%", background: "rgba(18,18,18,0.05)", border: `1px dashed ${T.ink30}`, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontFamily: BRAND, fontWeight: 600, fontSize: 13, color: T.ink, cursor: "pointer", display: "flex", justifyContent: "center", gap: 8, alignItems: "center", WebkitTapHighlightColor: "transparent" }}
     >
-      <Ico n="flask" s={14} /> Solo · sei {names[seat] || seat} — tocca per passare all’altro
+      <Ico n="flask" s={14} /> {L("Solo · sei", "Solo · you are")} {names[seat] || seat} — {L("tocca per passare all’altro", "tap to switch sides")}
     </button>
   );
 }
@@ -3099,7 +3099,7 @@ function Sheet({ title, onClose, children }) {
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 19, color: T.ink, marginBottom: 12 }}>{title}</div>
         {children}
         <button onClick={onClose} style={{ ...plain, color: T.ink, fontWeight: 600, marginTop: 14, display: "block", width: "100%", textAlign: "center", padding: "8px 0" }}>
-          Chiudi
+          {L("Chiudi", "Close")}
         </button>
       </div>
     </div>
@@ -7865,7 +7865,7 @@ function Summary({ room, gs }) {
             (s) =>
               (gs.scopeCards[s] || []).length > 0 && (
                 <div key={s} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", flexWrap: "wrap" }}>
-                  <Micro style={{ minWidth: 54 }}>Scope {who(room, s)}</Micro>
+                  <Micro style={{ minWidth: 54 }}>{L("Scope", "Sweeps")} {who(room, s)}</Micro>
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     {gs.scopeCards[s].map((cards, i) => (
                       <div key={i} style={{ display: "flex" }}>
@@ -7909,16 +7909,16 @@ function Summary({ room, gs }) {
         </div>
         <Micro style={{ marginTop: 4 }}>
           {who(room, "A")} · {who(room, "B")}
-          {room.game === "briscola" ? " · punti su 120" : room.game === "yahtzee" ? " · punti totali" : ""} · mani {gs.tally.A}–{gs.tally.B}
+          {room.game === "briscola" ? L(" · punti su 120", " · points out of 120") : room.game === "yahtzee" ? L(" · punti totali", " · total points") : ""} · {L("mani", "hands")} {gs.tally.A}–{gs.tally.B}
         </Micro>
       </div>
     );
   if (room.game === "scala" && gs.penalty != null)
     return (
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18 }}>{gs.penalty} di penalità</div>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18 }}>{gs.penalty} {L("di penalità", "penalty")}</div>
         <Micro style={{ marginTop: 4 }}>
-          a {who(room, other(gs.win))} · mani {gs.tally.A}–{gs.tally.B}
+          {L("a", "to")} {who(room, other(gs.win))} · {L("mani", "hands")} {gs.tally.A}–{gs.tally.B}
         </Micro>
       </div>
     );
@@ -7927,23 +7927,23 @@ function Summary({ room, gs }) {
       <div style={{ textAlign: "center" }}>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
           {gs.how === "castle" ? (
-            <>Castello espugnato <Ico n="castle" s={16} /></>
+            <>{L("Castello espugnato", "Castle taken")} <Ico n="castle" s={16} /></>
           ) : gs.how === "flags" ? (
-            <>Stendardi conquistati <Ico n="flag" s={16} /></>
+            <>{L("Stendardi conquistati", "Banners taken")} <Ico n="flag" s={16} /></>
           ) : gs.how === "timeout" ? (
-            "Mosse esaurite"
+            L("Mosse esaurite", "Out of moves")
           ) : gs.win ? (
-            <>Campo sterminato <Ico n="sword" s={16} /></>
+            <>{L("Campo sterminato", "Army wiped out")} <Ico n="sword" s={16} /></>
           ) : (
-            "Pareggio"
+            L("Pareggio", "Draw")
           )}
         </div>
-        <Micro style={{ marginTop: 4 }}>battaglie {gs.tally.A}–{gs.tally.B}</Micro>
+        <Micro style={{ marginTop: 4 }}>{L("battaglie", "battles")} {gs.tally.A}–{gs.tally.B}</Micro>
       </div>
     );
   return (
     <Micro style={{ textAlign: "center" }}>
-      mani {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
+      {L("mani", "hands")} {who(room, "A")} {gs.tally.A} — {who(room, "B")} {gs.tally.B}
     </Micro>
   );
 }
