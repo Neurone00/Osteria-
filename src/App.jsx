@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, createContext, useContext } from "react";
 
 /* ═══════════════════════════ tokens ═══════════════════════════ */
 const T = {
@@ -5136,14 +5136,71 @@ const nowMs = () => (typeof performance !== "undefined" && performance.now ? per
 function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
   const N = gkeys.length;
   const wrapRef = useRef(null);
+  const outerRefs = useRef([]); // per-card positioned layer (translate lives here)
+  const innerRefs = useRef([]); // per-card scale/opacity layer
   const [w, setW] = useState(360);
-  const [pos, setPos] = useState(index); // continuous index; round(pos) is the middle card
   const [flip, setFlip] = useState(false);
-  const posRef = useRef(index);
-  posRef.current = pos;
+  const [midIdx, setMidIdx] = useState(((index % N) + N) % N); // which card index is in the middle (for the back face)
+  const posRef = useRef(index); // continuous index — the single source of truth, NOT React state
   const raf = useRef(0);
   const drag = useRef(null);
+  const gest = useRef({ blocked: false });
   const mod = (i) => ((i % N) + N) % N;
+  const cardW = Math.round(w * 0.72); // wider cards…
+  const step = Math.round(cardW * 0.9); // …sitting closer to the middle one
+  const stepRef = useRef(step);
+  stepRef.current = step;
+
+  // Paint every card straight to the DOM from posRef — no React render per frame,
+  // so the spin stays on the compositor and never stutters. Circular: each card
+  // shows at whichever copy of itself is nearest the current position.
+  const paint = () => {
+    const pos = posRef.current;
+    const st = stepRef.current;
+    for (let i = 0; i < N; i++) {
+      const outer = outerRefs.current[i];
+      const inner = innerRefs.current[i];
+      if (!outer) continue;
+      let d = i - pos;
+      d -= N * Math.round(d / N);
+      const ad = Math.abs(d);
+      const near = ad <= 2.4;
+      outer.style.transform = `translate3d(calc(-50% + ${d * st}px), 0, 0)`;
+      outer.style.zIndex = String(ad < 0.5 ? 30 : Math.max(1, 10 - Math.round(ad)));
+      outer.style.visibility = near ? "visible" : "hidden";
+      outer.style.pointerEvents = near ? "auto" : "none";
+      if (inner) {
+        const t = Math.min(1, ad);
+        inner.style.transform = `scale(${1 - 0.14 * t})`;
+        inner.style.opacity = String(1 - 0.55 * t);
+      }
+    }
+  };
+  useLayoutEffect(paint); // repaint after any render (mount, resize, flip)
+
+  const commitMid = () => {
+    const m = mod(Math.round(posRef.current));
+    setMidIdx((cur) => (cur === m ? cur : m));
+  };
+
+  const animateTo = (target, done) => {
+    cancelAnimationFrame(raf.current);
+    const tick = () => {
+      const cur = posRef.current;
+      const diff = target - cur;
+      if (Math.abs(diff) < 0.001) {
+        posRef.current = target;
+        paint();
+        commitMid();
+        done && done();
+        return;
+      }
+      posRef.current = cur + diff * 0.16; // gentle ease
+      paint();
+      raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
+  };
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -5154,24 +5211,6 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     return () => window.removeEventListener("resize", set);
   }, []);
 
-  const animateTo = (target) => {
-    cancelAnimationFrame(raf.current);
-    const tick = () => {
-      const cur = posRef.current;
-      const diff = target - cur;
-      if (Math.abs(diff) < 0.0015) {
-        posRef.current = target;
-        setPos(target);
-        return;
-      }
-      const np = cur + diff * 0.16; // gentle ease toward the target
-      posRef.current = np;
-      setPos(np);
-      raf.current = requestAnimationFrame(tick);
-    };
-    raf.current = requestAnimationFrame(tick);
-  };
-
   // follow the shared choice (guest sees the host pick; reconnect re-centres)
   useEffect(() => {
     if (mod(Math.round(posRef.current)) === mod(index)) return;
@@ -5181,23 +5220,13 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     for (let k = -2; k <= 2; k++) {
       const cand = index + k * N;
       const d = Math.abs(cand - posRef.current);
-      if (d < bestD) {
-        bestD = d;
-        best = cand;
-      }
+      if (d < bestD) (bestD = d), (best = cand);
     }
     animateTo(best);
   }, [index]); // eslint-disable-line
 
-  const cardW = Math.round(w * 0.72); // wider cards…
-  const step = Math.round(cardW * 0.9); // …sitting closer to the middle one
+  const settle = (target) => animateTo(target, () => host && onSettle && onSettle(mod(target)));
 
-  const settle = (target) => {
-    animateTo(target);
-    if (host && onSettle) onSettle(mod(target));
-  };
-
-  const gest = useRef({ blocked: false }); // a real drag/scroll happened → the release is not a tap
   const onDown = (e) => {
     if (flip) return; // flipped: let the card back scroll freely, no carousel drag
     cancelAnimationFrame(raf.current);
@@ -5216,10 +5245,8 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     gest.current.blocked = true;
     d.moved = Math.max(d.moved, Math.abs(dx));
     if (host) {
-      const np = d.pos0 - dx / step;
-      posRef.current = np;
-      setPos(np);
-      setFlip(false);
+      posRef.current = d.pos0 - dx / stepRef.current;
+      paint(); // direct DOM — no setState while dragging
     }
     const t = nowMs();
     const dt = t - d.lastT || 16;
@@ -5231,15 +5258,13 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     const d = drag.current;
     drag.current = null;
     if (!d || d.axis !== "x" || d.moved < 6 || !host) return; // taps are handled per-card
-    // inertia in index-space, then snap to the nearest card
-    let v = (-d.vel / step) * 16;
+    let v = (-d.vel / stepRef.current) * 16;
     v = Math.max(-1.3, Math.min(1.3, v));
     cancelAnimationFrame(raf.current);
     const glide = () => {
       v *= 0.92; // a little more roll before it settles
-      const np = posRef.current + v;
-      posRef.current = np;
-      setPos(np);
+      posRef.current += v;
+      paint();
       if (Math.abs(v) > 0.01) raf.current = requestAnimationFrame(glide);
       else settle(Math.round(posRef.current));
     };
@@ -5249,51 +5274,22 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
   // a tap on a card's FRONT: the middle one flips to its back; a neighbour is
   // brought to the middle (never rotating). The back never flips on a stray tap —
   // only its own ↺ button turns it over — so its toggles and scroll work freely.
-  const onFace = (j) => {
+  const onFace = (i) => {
     if (gest.current.blocked) return;
-    const mid = Math.round(posRef.current);
-    if (j === mid) setFlip(true);
+    if (i === mod(Math.round(posRef.current))) setFlip(true);
     else if (host) {
       setFlip(false);
-      settle(j);
+      // spin to the nearest copy of card i
+      let best = i,
+        bestD = Infinity;
+      for (let k = -2; k <= 2; k++) {
+        const cand = i + k * N;
+        const dd = Math.abs(cand - posRef.current);
+        if (dd < bestD) (bestD = dd), (best = cand);
+      }
+      settle(best);
     }
   };
-
-  const center = Math.round(pos);
-  const cards = [];
-  for (let j = center - 2; j <= center + 2; j++) {
-    const delta = j - pos;
-    if (Math.abs(delta) > 2.4) continue;
-    const key = gkeys[mod(j)];
-    const isMid = j === center;
-    const x = delta * step;
-    const scale = isMid ? 1 : 0.86;
-    const fld = isMid && flip;
-    cards.push(
-      <div key={j} style={{ position: "absolute", left: "50%", top: 0, width: cardW, height: "100%", transform: `translateX(-50%) translateX(${x}px)`, zIndex: isMid ? 3 : 1, WebkitTapHighlightColor: "transparent" }}>
-        {/* scale + fade animate smoothly on their own; translate is driven per-frame */}
-        <div style={{ width: "100%", height: "100%", transform: `scale(${scale})`, opacity: isMid ? 1 : 0.48, transition: "transform 300ms cubic-bezier(.2,.8,.2,1), opacity 300ms ease" }}>
-          <div className="deck3d" style={{ width: "100%", height: "100%" }}>
-            <div className={`deckcard${fld ? " flip" : ""}`} style={{ width: "100%", height: "100%" }}>
-              <div className="deckface" style={{ ...deckShell, pointerEvents: fld ? "none" : "auto", cursor: "pointer" }} onClick={() => onFace(j)}>
-                {front(key, isMid)}
-              </div>
-              <div className="deckface deckback" style={{ ...deckShell, pointerEvents: fld ? "auto" : "none" }}>
-                {isMid && (
-                  <>
-                    {back(key)}
-                    <button onClick={() => setFlip(false)} title="gira" style={{ ...plain, position: "absolute", top: 12, right: 12, width: 30, height: 30, borderRadius: 9, border: `1px solid ${T.line}`, background: T.bg, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-                      <Ico n="rotateL" s={15} />
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
@@ -5307,7 +5303,37 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
       onMouseLeave={onUp}
       style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(52vh, 430px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "hidden" }}
     >
-      {cards}
+      {gkeys.map((key, i) => {
+        const isMid = i === midIdx;
+        const fld = isMid && flip;
+        return (
+          <div
+            key={key}
+            ref={(el) => (outerRefs.current[i] = el)}
+            style={{ position: "absolute", left: "50%", top: 0, width: cardW, height: "100%", willChange: "transform", WebkitTapHighlightColor: "transparent" }}
+          >
+            <div ref={(el) => (innerRefs.current[i] = el)} style={{ width: "100%", height: "100%", willChange: "transform, opacity" }}>
+              <div className="deck3d" style={{ width: "100%", height: "100%" }}>
+                <div className={`deckcard${fld ? " flip" : ""}`} style={{ width: "100%", height: "100%" }}>
+                  <div className="deckface" style={{ ...deckShell, pointerEvents: fld ? "none" : "auto", cursor: "pointer" }} onClick={() => onFace(i)}>
+                    {front(key, isMid)}
+                  </div>
+                  <div className="deckface deckback" style={{ ...deckShell, pointerEvents: fld ? "auto" : "none" }}>
+                    {isMid && (
+                      <>
+                        {back(key)}
+                        <button onClick={() => setFlip(false)} title="gira" style={{ ...plain, position: "absolute", top: 12, right: 12, width: 30, height: 30, borderRadius: 9, border: `1px solid ${T.line}`, background: T.bg, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                          <Ico n="rotateL" s={15} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
