@@ -3116,8 +3116,11 @@ function CaptureReveal({ room, seat }) {
     const ev = room?.ev;
     if (!a || a.id === seen.current) return;
     seen.current = a.id;
-    if (ev && (ev.t === "take" || ev.t === "scopa") && ev.card) {
-      setShot({ id: a.id, by: a.seat, scopa: ev.t === "scopa", card: ev.card, got: ev.got || [] });
+    // a scopa carries the played card in ev.card; a plain take carries it in
+    // ev.s/ev.v — either way, reveal the captured cards plus the card from hand
+    const played = ev && (ev.t === "scopa" ? ev.card : ev.s != null ? { s: ev.s, v: ev.v } : null);
+    if (ev && (ev.t === "take" || ev.t === "scopa") && played) {
+      setShot({ id: a.id, by: a.seat, scopa: ev.t === "scopa", card: played, got: ev.got || [] });
     }
   }, [room?.anim?.id]);
   useEffect(() => {
@@ -3145,8 +3148,8 @@ function CaptureReveal({ room, seat }) {
           Scopa<span style={{ color: T.ink }}>!</span>
         </div>
       )}
-      {!shot.scopa && phase === "hold" && (
-        <div style={{ fontFamily: "ui-monospace, monospace", fontSize: 13, letterSpacing: "0.3em", textTransform: "uppercase", color: T.ink60, fontWeight: 700 }}>Presa</div>
+      {!shot.scopa && (
+        <div key={`p${shot.id}`} className="pop" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(44px, 15vw, 96px)", color: "#2E785A", letterSpacing: "-0.02em", lineHeight: 1, textShadow: "0 5px 0 rgba(18,18,18,0.08)" }}>Presa</div>
       )}
       <div
         key={`c${shot.id}-${phase}`}
