@@ -14,7 +14,12 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    const room = url.pathname.match(/^\/room\/([a-zA-Z]{4})$/);
+    // /room/CODE  → the live WebSocket relay
+    // /room/CODE/state → a read-only JSON dump of what the table currently holds
+    //   (scores, whose turn, version). A debug hatch: open it in a browser to see
+    //   why two phones disagree. Same data the clients already exchange over the
+    //   wire, so it exposes nothing new — delete the route to close it off.
+    const room = url.pathname.match(/^\/room\/([a-zA-Z]{4})(\/state)?$/);
     if (room) {
       const id = env.TABLE.idFromName(room[1].toUpperCase());
       return env.TABLE.get(id).fetch(request);
@@ -130,6 +135,15 @@ export class Table {
   }
 
   async fetch(request) {
+    // Read-only debug hatch: GET /room/CODE/state returns the stored room as
+    // JSON so you can inspect the live scores/turn/version without a WebSocket.
+    if (new URL(request.url).pathname.endsWith("/state")) {
+      const room = await this.ctx.storage.get("room");
+      return new Response(JSON.stringify(room ?? null, null, 2), {
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
     if (request.headers.get("Upgrade") !== "websocket")
       return new Response("This endpoint expects a WebSocket.", { status: 426 });
 
