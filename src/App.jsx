@@ -235,6 +235,18 @@ const GAMES = {
     opts: [],
     def: {},
   },
+  flotta2: {
+    name: "Flotta 2",
+    tag: "duello di flotte",
+    line: "Mare aperto, niente griglia: pianifica rotte e colpi, poi il turno si risolve per entrambi. Ogni nave spara diverso; ogni 3 turni il radar svela tutti.",
+    en: { tag: "fleet duel", line: "Open sea, no grid: plan routes and shots, then the round resolves for both. Each ship fires differently; every 3rd round radar reveals all." },
+    instant: true, // its own sea — no card deck or shuffle ritual
+    board: true,
+    cat: "tavolo",
+    cta: { it: "Salpa!", en: "Set sail!" },
+    opts: [],
+    def: {},
+  },
   paroliere: {
     name: "Il Paroliere",
     tag: "parole in tre minuti",
@@ -3717,6 +3729,23 @@ function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
         {dot(12, 17)}
       </>
     ),
+    check: <path {...P} d="M5 13l4 4L19 7" />,
+    close: <path {...P} d="M6 6l12 12M18 6L6 18" />,
+    target: (
+      <>
+        <circle {...P} cx="12" cy="12" r="8" />
+        <circle {...P} cx="12" cy="12" r="3" />
+        <path {...P} d="M12 1v4M12 19v4M1 12h4M19 12h4" />
+      </>
+    ),
+    radar: (
+      <>
+        <path {...P} d="M12 12 19 5" />
+        <path {...P} d="M12 3a9 9 0 1 0 9 9" />
+        <path {...P} d="M12 7a5 5 0 1 0 5 5" />
+        {dot(12, 12)}
+      </>
+    ),
   };
   return (
     <svg width={s} height={s} viewBox="0 0 24 24" className={cls} aria-hidden="true" style={{ display: "inline-block", verticalAlign: "-0.15em", flexShrink: 0, ...style }}>
@@ -5180,6 +5209,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealBestiario(dealer, cont?.tally || null)
       : game === "flotta"
       ? dealFlotta(dealer, cont?.tally || null)
+      : game === "flotta2"
+      ? dealFlotta2(dealer, cont?.tally || null)
       : game === "paroliere"
       ? dealParoliere(dealer, cont?.tally || null, o)
       : dealCamicia(cont?.tally || null, deck);
@@ -5587,6 +5618,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Bestiario room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "flotta" ? (
         <Flotta room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+      ) : room.game === "flotta2" ? (
+        <Flotta2 room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "paroliere" ? (
         <Paroliere room={room} gs={gs} seat={seat} commit={commit} />
       ) : (
@@ -8826,6 +8859,486 @@ function Flotta({ room, gs, seat, mine, commit }) {
         <span style={{ width: 10, height: 10, borderRadius: "50%", background: me }} />
         <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14, color: me }}>{who(room, seat)}</span>
         <Micro style={{ marginLeft: 6 }}>{L("navi", "ships")} {afloat(gs.ships[seat])}/{FL_FLEET.length}</Micro>
+      </div>
+    </div>
+  );
+}
+
+/* ── flotta 2 (gridless fleet duel) ── */
+// Canvas-first and gesture-driven: tap your ship for two icon buttons (move /
+// action), then draw a route or drag to aim. One action per round; both sides
+// plan in secret and the round resolves together. Icon-only controls, long-press
+// for a tooltip, no grid — the sea IS the interface.
+function fl2UnitName(t) {
+  return { warship: L("Corazzata", "Warship"), frigate: L("Fregata", "Frigate"), sub: L("Sommergibile", "Submarine"), recon: L("Ricognitore", "Recon") }[t] || t;
+}
+const fl2Hp = (f) => (f > 0.6 ? "#2C7A4B" : f > 0.3 ? "#B8862B" : "#B23A2E");
+// A round icon button that reveals a tooltip on long-press.
+function Fl2Btn({ icon, label, onTap, tone, size = 46 }) {
+  const [tip, setTip] = useState(false);
+  const t = useRef(null);
+  const arm = () => (t.current = setTimeout(() => setTip(true), 380));
+  const clear = () => clearTimeout(t.current);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        onPointerDown={arm}
+        onPointerUp={clear}
+        onPointerLeave={() => (clear(), setTip(false))}
+        onClick={() => (clear(), setTip(false), onTap && onTap())}
+        aria-label={label}
+        style={{ width: size, height: size, borderRadius: 999, border: `1.5px solid ${tone || T.ink}`, background: T.bg, color: tone || T.ink, display: "grid", placeItems: "center", cursor: "pointer", boxShadow: "0 2px 8px rgba(18,18,18,0.2)", WebkitTapHighlightColor: "transparent" }}
+      >
+        <Ico n={icon} s={Math.round(size * 0.48)} />
+      </button>
+      {tip && <div style={{ position: "absolute", bottom: "114%", left: "50%", transform: "translateX(-50%)", whiteSpace: "nowrap", background: T.ink, color: T.bg, fontSize: 11, fontFamily: BRAND, fontWeight: 600, padding: "3px 8px", borderRadius: 6, pointerEvents: "none", zIndex: 5 }}>{label}</div>}
+    </div>
+  );
+}
+function Flotta2({ room, gs, seat, mine, commit }) {
+  const opp = other(seat);
+  const me = TSIDE[seat],
+    foe = TSIDE[opp];
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [box, setBox] = useState({ w: 360, h: 360 });
+  const [sel, setSel] = useState(null); // selected own ship id
+  const [mode, setMode] = useState(null); // null | "menu" | "move" | "fire" | "recon"
+  const [draft, setDraft] = useState(null); // staged order preview
+  const [showHelp, setShowHelp] = useState(false);
+  const drawing = useRef(null);
+  const roundAt = useRef(0); // when the last round resolved, for blast/radar flashes
+  const [, force] = useState(0);
+
+  const myShips = gs.ships[seat];
+  const seen = flotta2Seen(gs, seat);
+  const submitted = !!gs.orders[seat];
+  const canAct = !submitted && !gs.done;
+  const selShip = sel ? myShips.find((s) => s.id === sel) : null;
+
+  useEffect(() => {
+    const measure = () => {
+      const el = wrapRef.current;
+      if (el) setBox({ w: el.clientWidth, h: el.clientHeight });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  // a fresh round arrived → clear my staging and flash the resolution briefly
+  useEffect(() => {
+    setSel(null);
+    setMode(null);
+    setDraft(null);
+    drawing.current = null;
+    roundAt.current = nowMs();
+    let raf,
+      t0 = nowMs();
+    const tick = () => {
+      force((n) => n + 1);
+      if (nowMs() - t0 < 1100) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [gs.turn, gs.done]);
+
+  // resolve the round once both plans are in — guarded so each client fires once
+  const resolvedFor = useRef(-1);
+  useEffect(() => {
+    if (flotta2Ready(gs) && resolvedFor.current !== gs.turn) {
+      resolvedFor.current = gs.turn;
+      const r = flotta2Resolve(gs);
+      if (r) commit(r);
+    }
+  }, [gs.orders.A, gs.orders.B, gs.turn]); // eslint-disable-line
+
+  // Both sides submit into one shared object over a last-write-wins transport, so
+  // two truly-simultaneous submits can clobber each other. Keep my own order and
+  // re-send it if the shared state comes back without it — the two converge.
+  const myOrderRef = useRef(null);
+  useEffect(() => {
+    myOrderRef.current = null;
+  }, [gs.turn]);
+  useEffect(() => {
+    if (!gs.done && myOrderRef.current && !gs.orders[seat]) {
+      const r = flotta2Order(gs, seat, myOrderRef.current);
+      if (r) commit(r);
+    }
+  }, [gs.orders.A, gs.orders.B]); // eslint-disable-line
+
+  const scale = (Math.min(box.w, box.h) * 0.47) / gs.R;
+  const cX = box.w / 2,
+    cY = box.h / 2;
+  const w2s = (p) => ({ x: cX + p.x * scale, y: cY + p.y * scale });
+  const s2w = (sx, sy) => ({ x: (sx - cX) / scale, y: (sy - cY) / scale });
+  const shipPx = (t) => Math.max(11, FL2_UNITS[t].size * scale);
+
+  const local = (e) => {
+    const r = wrapRef.current.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  const hitShip = (sx, sy) => {
+    let best = null,
+      bd = Infinity;
+    for (const s of myShips) {
+      const p = w2s(s);
+      const d = Math.hypot(p.x - sx, p.y - sy);
+      if (d < bd && d <= shipPx(s.type) + 16) (bd = d), (best = s);
+    }
+    return best;
+  };
+
+  const down = (e) => {
+    if (!canAct) return;
+    const { x, y } = local(e);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+    if (mode === "move" && selShip) {
+      drawing.current = { kind: "move", pts: [s2w(x, y)] };
+      setDraft(null);
+    } else if (mode === "fire" && selShip) {
+      drawing.current = { kind: "fire", aim: s2w(x, y) };
+      setDraft({ kind: "fire", aim: s2w(x, y) });
+    } else if (mode === "recon" && selShip) {
+      setDraft({ kind: "recon", at: s2w(x, y) });
+    } else {
+      const s = hitShip(x, y);
+      if (s) {
+        setSel(s.id);
+        setMode("menu");
+        setDraft(null);
+      } else {
+        setSel(null);
+        setMode(null);
+        setDraft(null);
+      }
+    }
+    force((n) => n + 1);
+  };
+  const move = (e) => {
+    if (!drawing.current) return;
+    const { x, y } = local(e);
+    if (drawing.current.kind === "move") {
+      const pts = drawing.current.pts;
+      const last = pts[pts.length - 1];
+      const wp = s2w(x, y);
+      if (Math.hypot(wp.x - last.x, wp.y - last.y) >= gs.R * 0.02) pts.push(wp);
+    } else if (drawing.current.kind === "fire") {
+      drawing.current.aim = s2w(x, y);
+      setDraft({ kind: "fire", aim: drawing.current.aim });
+    }
+    force((n) => n + 1);
+  };
+  const up = () => {
+    const d = drawing.current;
+    drawing.current = null;
+    if (!d) return;
+    if (d.kind === "move" && selShip) {
+      // route starts at the ship; cap the plan to ~3 turns of travel
+      let path = [{ x: selShip.x, y: selShip.y }, ...d.pts];
+      const maxLen = 3 * FL2_UNITS[selShip.type].speed;
+      let acc = 0;
+      const trimmed = [path[0]];
+      for (let i = 1; i < path.length; i++) {
+        const seg = Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+        if (acc + seg > maxLen) {
+          const k = (maxLen - acc) / seg;
+          trimmed.push({ x: path[i - 1].x + (path[i].x - path[i - 1].x) * k, y: path[i - 1].y + (path[i].y - path[i - 1].y) * k });
+          break;
+        }
+        acc += seg;
+        trimmed.push(path[i]);
+      }
+      if (trimmed.length >= 2) setDraft({ kind: "move", path: trimmed });
+    }
+    force((n) => n + 1);
+  };
+
+  const confirm = () => {
+    if (!draft || !selShip) return;
+    const order = { ship: sel, ...draft };
+    const r = flotta2Order(gs, seat, order);
+    if (r) {
+      myOrderRef.current = order; // remember it in case a concurrent submit clobbers the shared state
+      commit(r);
+    }
+    setSel(null);
+    setMode(null);
+    setDraft(null);
+  };
+  const cancel = () => {
+    setDraft(null);
+    drawing.current = null;
+    setMode("menu");
+    force((n) => n + 1);
+  };
+
+  /* ── paint ── */
+  useLayoutEffect(() => {
+    const cv = canvasRef.current;
+    if (!cv) return;
+    const dpr = Math.min(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
+    const W = box.w,
+      H = box.h;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+      cv.width = Math.round(W * dpr);
+      cv.height = Math.round(H * dpr);
+    }
+    const ctx = cv.getContext("2d");
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
+    const c0 = w2s({ x: 0, y: 0 });
+    const rpx = gs.R * scale;
+    // sea
+    ctx.beginPath();
+    ctx.arc(c0.x, c0.y, rpx, 0, 2 * Math.PI);
+    ctx.fillStyle = FL_WATER;
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = T.line;
+    ctx.stroke();
+    // own vision (soft) so the fog reads
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(c0.x, c0.y, rpx, 0, 2 * Math.PI);
+    ctx.clip();
+    for (const s of myShips) {
+      const p = w2s(s);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, FL2_UNITS[s.type].vision * scale, 0, 2 * Math.PI);
+      ctx.fillStyle = "rgba(44,85,126,0.05)";
+      ctx.fill();
+    }
+    ctx.restore();
+    // radar sweep flash
+    const since = nowMs() - roundAt.current;
+    if (gs.radar && since < 1000) {
+      const k = since / 1000;
+      ctx.beginPath();
+      ctx.arc(c0.x, c0.y, rpx * k, 0, 2 * Math.PI);
+      ctx.strokeStyle = `rgba(184,134,43,${0.6 * (1 - k)})`;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+    // ships
+    const drawShip = (s, mineShip) => {
+      const p = w2s(s);
+      const size = shipPx(s.type);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(s.heading || 0);
+      ctx.globalAlpha = mineShip ? 1 : 0.92;
+      const Ln = size * 2.2,
+        Wd = size * 1.3;
+      ctx.beginPath();
+      ctx.moveTo(Ln * 0.5, 0);
+      ctx.lineTo(Ln * 0.1, -Wd * 0.5);
+      ctx.lineTo(-Ln * 0.5, -Wd * 0.42);
+      ctx.lineTo(-Ln * 0.5, Wd * 0.42);
+      ctx.lineTo(Ln * 0.1, Wd * 0.5);
+      ctx.closePath();
+      ctx.fillStyle = mineShip ? me : foe;
+      ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = "rgba(18,18,18,0.45)";
+      ctx.stroke();
+      ctx.restore();
+      // health ring
+      const frac = Math.max(0, s.hp / s.maxhp);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, size * 1.55, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI);
+      ctx.strokeStyle = fl2Hp(frac);
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      if (mineShip && s.id === sel) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, size * 1.9, 0, 2 * Math.PI);
+        ctx.strokeStyle = "#B8862B";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      // standing plan (faint)
+      if (mineShip && s.path && s.path.length) {
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        for (const q of s.path) {
+          const sp = w2s(q);
+          ctx.lineTo(sp.x, sp.y);
+        }
+        ctx.strokeStyle = "rgba(18,18,18,0.18)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    };
+    for (const s of gs.ships[opp]) if (seen.has(s.id)) drawShip(s, false);
+    for (const s of myShips) drawShip(s, true);
+    // projectiles (own always; enemy only within your vision)
+    for (const pr of gs.proj) {
+      const visible = pr.owner === seat || myShips.some((o) => Math.hypot(o.x - pr.x, o.y - pr.y) <= FL2_UNITS[o.type].vision);
+      if (!visible) continue;
+      const p = w2s(pr);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = pr.owner === seat ? me : foe;
+      ctx.fill();
+    }
+    // blasts from the round just resolved
+    if (since < 700) {
+      for (const b of gs.boom || []) {
+        const p = w2s(b);
+        const k = since / 700;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, b.r * scale * (0.4 + 0.6 * k), 0, 2 * Math.PI);
+        ctx.strokeStyle = `rgba(178,58,46,${0.7 * (1 - k)})`;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+    }
+    // draft preview
+    if (draft && selShip) {
+      const sp = w2s(selShip);
+      if (draft.kind === "move" && draft.path) {
+        ctx.beginPath();
+        ctx.moveTo(w2s(draft.path[0]).x, w2s(draft.path[0]).y);
+        for (const q of draft.path) {
+          const s = w2s(q);
+          ctx.lineTo(s.x, s.y);
+        }
+        ctx.strokeStyle = me;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+      } else if (draft.kind === "fire" && draft.aim) {
+        const a = w2s(draft.aim);
+        const w = FL2_WEAPON[FL2_UNITS[selShip.type].weapon];
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y);
+        ctx.lineTo(a.x, a.y);
+        ctx.strokeStyle = me;
+        ctx.setLineDash([5, 4]);
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(a.x, a.y, w.aoe * scale, 0, 2 * Math.PI);
+        ctx.strokeStyle = "rgba(178,58,46,0.7)";
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+      } else if (draft.kind === "recon" && draft.at) {
+        const a = w2s(draft.at);
+        ctx.beginPath();
+        ctx.arc(a.x, a.y, FL2_UNITS[selShip.type].vision * scale, 0, 2 * Math.PI);
+        ctx.strokeStyle = "#B8862B";
+        ctx.setLineDash([5, 4]);
+        ctx.lineWidth = 1.6;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    // in-progress freehand route
+    if (drawing.current && drawing.current.kind === "move" && selShip) {
+      ctx.beginPath();
+      const sp = w2s(selShip);
+      ctx.moveTo(sp.x, sp.y);
+      for (const q of drawing.current.pts) {
+        const s = w2s(q);
+        ctx.lineTo(s.x, s.y);
+      }
+      ctx.strokeStyle = me;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
+    ctx.restore();
+  });
+
+  // floating controls near the selected ship
+  const selScreen = selShip ? w2s(selShip) : null;
+  const isRecon = selShip && !FL2_UNITS[selShip.type].weapon;
+  const status = gs.done
+    ? gs.win === seat
+      ? L("Vittoria!", "Victory!")
+      : gs.win
+      ? L("Sconfitta", "Defeated")
+      : L("Pari", "Draw")
+    : submitted
+    ? L("Ordine dato — aspetta l'avversario", "Order set — waiting for the other player")
+    : sel
+    ? mode === "move"
+      ? L("Disegna la rotta", "Draw the route")
+      : mode === "fire"
+      ? L("Trascina per mirare", "Drag to aim")
+      : mode === "recon"
+      ? L("Tocca dove esplorare", "Tap where to scout")
+      : L("Muovi o agisci", "Move or act")
+    : L("Tocca una tua nave", "Tap one of your ships");
+
+  return (
+    <div style={{ paddingBottom: 12 }}>
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
+            <p style={{ margin: "0 0 10px" }}>{L("Mare aperto, niente griglia. A ogni turno pianifichi UNA azione con UNA nave; poi il turno si risolve per entrambi insieme.", "Open sea, no grid. Each round you plan ONE action with ONE ship; then the round resolves for both at once.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Tocca una tua nave, poi scegli muovi (disegna la rotta) o agisci (trascina per mirare). Le navi seguono la rotta ogni turno.", "Tap your ship, then pick move (draw the route) or act (drag to aim). Ships follow their route every turn.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Ogni nave spara diverso; i colpi viaggiano nel tempo e fanno danno ad area — più sei al centro, più fa male.", "Each ship fires differently; shots travel over turns and deal area damage — the closer to the centre, the harder it hits.")}</p>
+            <p style={{ margin: 0 }}>{L("Vedi i nemici solo se vicini a una tua nave. Ogni 3 turni il radar li svela tutti. Affonda la flotta avversaria.", "You see enemies only near your ships. Every 3rd turn radar reveals them all. Sink the enemy fleet.")}</p>
+          </div>
+        </Sheet>
+      )}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
+          {L("Turno", "Round")} {gs.turn} {gs.radar && <Ico n="radar" s={15} c="#B8862B" />}
+        </div>
+        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <Ico n="help" s={15} /> {L("come si gioca", "how to play")}
+        </button>
+      </div>
+      <div style={{ textAlign: "center", minHeight: 18, marginBottom: 4 }}>
+        <Micro style={{ color: gs.done ? me : T.ink60 }}>{status}</Micro>
+      </div>
+      <div
+        ref={wrapRef}
+        onPointerDown={down}
+        onPointerMove={move}
+        onPointerUp={up}
+        onPointerCancel={up}
+        style={{ position: "relative", width: "100%", height: "min(64vh, 520px)", touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}
+      >
+        <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
+        {/* per-ship controls */}
+        {selScreen && canAct && (
+          <div
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerMove={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            style={{ position: "absolute", left: Math.max(30, Math.min(box.w - 30, selScreen.x)), top: Math.max(6, selScreen.y - shipPx(selShip.type) * 2 - 54), transform: "translateX(-50%)", display: "flex", gap: 10 }}
+          >
+            {mode === "menu" && (
+              <>
+                <Fl2Btn icon="compass" label={L("Muovi", "Move")} onTap={() => (setMode("move"), setDraft(null))} />
+                <Fl2Btn icon={isRecon ? "eagle" : "crossbow"} label={isRecon ? L("Esplora", "Scout") : L("Spara", "Fire")} tone="#B23A2E" onTap={() => setMode(isRecon ? "recon" : "fire")} />
+              </>
+            )}
+            {mode !== "menu" && !draft && <Fl2Btn icon="close" label={L("Annulla", "Cancel")} onTap={() => (setSel(null), setMode(null))} />}
+            {draft && (
+              <>
+                <Fl2Btn icon="check" label={L("Conferma", "Confirm")} tone="#2C7A4B" onTap={confirm} />
+                <Fl2Btn icon="close" label={L("Rifai", "Redo")} onTap={cancel} />
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+        <Micro>
+          <span style={{ color: me }}>{who(room, seat)}</span> {myShips.length}
+        </Micro>
+        <Micro>
+          <span style={{ color: foe }}>{who(room, opp)}</span> {gs.radar ? gs.ships[opp].length : `${seen.size}?`}
+        </Micro>
       </div>
     </div>
   );
