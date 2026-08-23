@@ -5736,16 +5736,27 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
   // a tap on a card's FRONT: the middle one flips to its back; a neighbour is
   // brought to the middle (never rotating). The back never flips on a stray tap —
   // only its own ↺ button turns it over — so its toggles and scroll work freely.
-  const onFace = (i) => {
+  const onFace = (i, e) => {
     if (gest.current.blocked) return;
-    if (i === mod(Math.round(posRef.current))) setFlip(true);
+    // The cards overlap (they sit `step` apart but are `cardW` wide) and the
+    // middle one has the highest z-index, so it catches taps meant for a peeking
+    // neighbour. Resolve the intended card from the tap's X position instead of
+    // trusting whichever overlapping element received the click.
+    let target = i;
+    const el = wrapRef.current;
+    if (el && e && typeof e.clientX === "number") {
+      const r = el.getBoundingClientRect();
+      const dx = e.clientX - (r.left + r.width / 2);
+      target = mod(Math.round(posRef.current + dx / stepRef.current));
+    }
+    if (target === mod(Math.round(posRef.current))) setFlip(true);
     else if (host) {
       setFlip(false);
-      // spin to the nearest copy of card i
-      let best = i,
+      // spin to the nearest copy of the tapped card
+      let best = target,
         bestD = Infinity;
       for (let k = -2; k <= 2; k++) {
-        const cand = i + k * N;
+        const cand = target + k * N;
         const dd = Math.abs(cand - posRef.current);
         if (dd < bestD) (bestD = dd), (best = cand);
       }
@@ -5777,7 +5788,7 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
             <div ref={(el) => (innerRefs.current[i] = el)} style={{ width: "100%", height: "100%", willChange: "transform, opacity" }}>
               <div className="deck3d" style={{ width: "100%", height: "100%" }}>
                 <div className={`deckcard${fld ? " flip" : ""}`} style={{ width: "100%", height: "100%" }}>
-                  <div className="deckface" style={{ ...deckShell, pointerEvents: fld ? "none" : "auto", cursor: "pointer" }} onClick={() => onFace(i)}>
+                  <div className="deckface" style={{ ...deckShell, pointerEvents: fld ? "none" : "auto", cursor: "pointer" }} onClick={(e) => onFace(i, e)}>
                     {front(key, isMid)}
                   </div>
                   <div className="deckface deckback" style={{ ...deckShell, pointerEvents: fld ? "auto" : "none" }}>
