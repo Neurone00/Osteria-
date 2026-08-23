@@ -8373,12 +8373,13 @@ function Flotta({ room, gs, seat, mine, commit }) {
   const [salva, setSalva] = useState([]); // cells picked for a salvo
   const [moveShip, setMoveShip] = useState(null); // own ship index picked to maneuver
   const [showHelp, setShowHelp] = useState(false);
+  const [view, setView] = useState("enemy"); // "enemy" = shooting map, "own" = your fleet — toggle any time
   useEffect(() => {
     setMode("fire");
     setSalva([]);
     setMoveShip(null);
+    setView("enemy");
   }, [gs.turn, gs.phase]);
-  const view = mode === "move" || mode === "repair" ? "own" : "enemy";
   const myFleet = gs.ships[seat] || [];
   const shipAt = (i) => {
     for (let si = 0; si < myFleet.length; si++) {
@@ -8511,7 +8512,7 @@ function Flotta({ room, gs, seat, mine, commit }) {
 
   const modeBtn = (m, label, on) => (
     <button
-      onClick={() => canAct && on && setMode(m)}
+      onClick={() => canAct && on && (setMode(m), setView(m === "move" || m === "repair" ? "own" : "enemy"))}
       disabled={!canAct || !on}
       style={{ ...plain, flex: "1 1 auto", padding: "8px 6px", borderRadius: 9, fontFamily: BRAND, fontWeight: 600, fontSize: 12.5, border: `1.5px solid ${mode === m ? T.ink : T.line}`, background: mode === m ? T.ink : "transparent", color: !on ? T.ink30 : mode === m ? T.bg : T.ink, textDecoration: !on ? "line-through" : "none", cursor: canAct && on ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}
     >
@@ -8558,6 +8559,18 @@ function Flotta({ room, gs, seat, mine, commit }) {
         </div>
       </div>
 
+      {/* view toggle — flip between the shooting map and your own fleet any time */}
+      <div style={{ display: "flex", gap: 6, margin: "4px auto 0", maxWidth: 300 }}>
+        {[["enemy", L("Acque nemiche", "Enemy waters")], ["own", L("Le tue navi", "Your fleet")]].map(([v, label]) => (
+          <button
+            key={v}
+            onClick={() => setView(v)}
+            style={{ ...plain, flex: 1, padding: "6px 8px", borderRadius: 8, fontFamily: BRAND, fontWeight: 600, fontSize: 12, border: `1px solid ${view === v ? T.ink : T.line}`, background: view === v ? T.ink : "transparent", color: view === v ? T.bg : T.ink60, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       {view === "enemy" ? <FlottaGrid cell={enemyCell} onTap={canAct ? tapEnemy : undefined} dim={!canAct} /> : <FlottaGrid cell={ownCell} onTap={canAct ? tapOwn : undefined} />}
 
       {/* per-mode controls */}
