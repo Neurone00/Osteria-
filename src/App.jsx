@@ -242,10 +242,17 @@ const GAMES = {
     en: { tag: "words in three minutes", line: "Sixteen letters, three minutes. Find as many words as you can by linking neighbouring letters. Words you both find cancel out — the rarest finds win." },
     instant: true, // letter-dice grid — no card deck or shuffle ritual
     cat: "dadi",
+    // Temporarily off the lobby while the dictionary check and tap/drag tracing
+    // are rebuilt. Flip `disabled` back off once those land.
+    disabled: true,
     opts: [{ k: "secs", label: "Durata", cycle: [120, 180, 240], hint: "Secondi per ogni partita", le: "Round length", he: "Seconds per round" }],
     def: { secs: 180 },
   },
 };
+// The games actually offered in the lobby. A game can be shelved (e.g. mid-rebuild)
+// with `disabled: true` on its entry without ripping the engine out — history and
+// any in-flight table that still names it keep working.
+const PLAYABLE = Object.keys(GAMES).filter((k) => !GAMES[k].disabled);
 // game meta + option labels/hints in the current language
 const gtag = (g) => L(g.tag, g.en && g.en.tag);
 const gline = (g) => L(g.line, g.en && g.en.line);
@@ -2814,10 +2821,9 @@ function mostPlayedGame(board) {
       tally[g] = (tally[g] || 0) + n;
     }
   }
-  const played = Object.keys(tally);
+  const played = Object.keys(tally).filter((g) => PLAYABLE.includes(g));
   if (!played.length) {
-    const all = Object.keys(GAMES);
-    return all[Math.floor(Math.random() * all.length)];
+    return PLAYABLE[Math.floor(Math.random() * PLAYABLE.length)];
   }
   return played.reduce((best, g) => (tally[g] > tally[best] ? g : best), played[0]);
 }
@@ -5100,7 +5106,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   if (room.status === "lobby") {
     const host = seat === "A";
     const g = GAMES[room.game];
-    const allKeys = Object.keys(GAMES);
+    const allKeys = PLAYABLE;
     // Only the host browses/filters; the guest always follows the host's pick.
     const gkeys = host && cat ? allKeys.filter((k) => gameCat(k) === cat) : allKeys;
     const gIndex = Math.max(0, gkeys.indexOf(room.game));
