@@ -44,7 +44,7 @@ const EXPORTS = [
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
-  "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
+  "dealParoliere", "parolReady", "parolSubmit", "parolTrace", "parolBoard", "parolPoints", "PAROL_N",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
@@ -828,17 +828,7 @@ function parolWalk(board) {
 }
 function playParoliere() {
   let g = R.dealParoliere("A", { A: 0, B: 0 }, { secs: 180 });
-  if (g.phase !== "shake") return fail("paroliere", "should start in the shake ritual");
-  // both players shake their share, in turn
-  let guard = 0;
-  while (g.phase === "shake") {
-    if (++guard > 50) return fail("paroliere", "shake ritual never ended");
-    const r = R.parolShake(g, g.shaker, (guard * 2654435761) >>> 0);
-    if (!r) return fail("paroliere", "shake refused on the shaker's turn");
-    g = r.g;
-  }
-  if (g.phase !== "ready") return fail("paroliere", "shaking should lead to ready");
-  if (g.shakes.A < R.PAROL_SHAKES || g.shakes.B < R.PAROL_SHAKES) fail("paroliere", "both should have shaken their share");
+  if (g.phase !== "ready") return fail("paroliere", "should start in ready");
   g = R.parolReady(g, "A").g;
   if (g.phase !== "ready") return fail("paroliere", "one ready shouldn't start the round");
   g = R.parolReady(g, "B").g;
@@ -894,23 +884,6 @@ function parolRuleTests() {
     const v = b.filter((c) => /[AEIOU]/.test(c)).length;
     if (v < 5 || v > 10) fail("paroliere rules", `board vowel count out of range: ${v}`);
   }
-  // Italian keeps H and Z, never J/K/W/X/Y (the covered-tray shake seeds it)
-  for (let i = 0; i < 100; i++) {
-    const b = R.parolBoard("IT").join("");
-    if (/[JKWXY]/.test(b)) fail("paroliere rules", "Italian board should not carry J/K/W/X/Y");
-  }
-  // the seeded board is a pure function of the seed — both phones must match
-  for (const seed of [1, 42, 999999, 2654435761]) {
-    const a = R.parolBoardSeeded("IT", seed).join(",");
-    const b = R.parolBoardSeeded("IT", seed).join(",");
-    if (a !== b) fail("paroliere rules", "seeded board should be deterministic");
-  }
-  // the shake ritual: only the current shaker may shake, and it ends at ready
-  let g = R.dealParoliere("A", { A: 0, B: 0 }, {});
-  if (R.parolShake(g, "B", 7) != null) fail("paroliere rules", "the wrong seat should not be able to shake");
-  const before = g.board.join(",");
-  g = R.parolShake(g, "A", 12345).g;
-  if (g.board.join(",") === before && g.seed === undefined) fail("paroliere rules", "a shake should be able to restir the tray");
 }
 
 /* ── scala 40 ───────────────────────────────────────────────── */

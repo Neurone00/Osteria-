@@ -242,11 +242,8 @@ const GAMES = {
     en: { tag: "words in three minutes", line: "Sixteen letters, three minutes. Find as many words as you can by linking neighbouring letters. Words you both find cancel out — the rarest finds win." },
     instant: true, // letter-dice grid — no card deck or shuffle ritual
     cat: "dadi",
-    opts: [
-      { k: "secs", label: "Durata", cycle: [120, 180, 240], hint: "Secondi per ogni partita", le: "Round length", he: "Seconds per round" },
-      { k: "lingua", label: "Lingua", cycle: ["IT", "EN"], hint: "Lingua delle parole e del dizionario", le: "Language", he: "Language of the words and the dictionary" },
-    ],
-    def: { secs: 180, lingua: "IT" },
+    opts: [{ k: "secs", label: "Durata", cycle: [120, 180, 240], hint: "Secondi per ogni partita", le: "Round length", he: "Seconds per round" }],
+    def: { secs: 180 },
   },
 };
 // game meta + option labels/hints in the current language
@@ -1545,55 +1542,26 @@ function flottaRepair(gs, seat, shipIndex, seg) {
    never race. */
 const PAROL_N = 4;
 const PAROL_SECS = 180;
-// The keyboard letters per language. Italian drops J/K/W/X/Y; both keep the "QU"
-// die (Q always rides with u) and no accents.
-const PAROL_KEYS = {
-  IT: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "L", "M", "N", "O", "P", "QU", "R", "S", "T", "U", "V", "Z"],
-  EN: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "QU", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"],
-};
-const buildBag = (w) => {
+const PAROL_KEYS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "L", "M", "N", "O", "P", "QU", "R", "S", "T", "U", "V", "Z"];
+// Weighted Italian letter bag (no accents, no J/K/W/X/Y). Q is drawn then shown
+// as the "QU" die.
+const PAROL_BAG = (() => {
+  const w = { A: 12, E: 12, I: 11, O: 10, U: 4, N: 7, L: 7, R: 7, T: 6, S: 6, C: 5, D: 4, M: 4, P: 3, B: 2, G: 2, V: 2, F: 2, H: 2, Z: 2, Q: 2 };
   const bag = [];
   for (const k in w) for (let i = 0; i < w[k]; i++) bag.push(k);
   return bag;
-};
-// Weighted letter bags. Q is drawn then shown as the "QU" die.
-const PAROL_BAG = {
-  IT: buildBag({ A: 12, E: 12, I: 11, O: 10, U: 4, N: 7, L: 7, R: 7, T: 6, S: 6, C: 5, D: 4, M: 4, P: 3, B: 2, G: 2, V: 2, F: 2, H: 2, Z: 2, Q: 2 }),
-  EN: buildBag({ E: 12, A: 9, I: 9, O: 8, U: 4, N: 6, R: 6, T: 6, L: 4, S: 4, D: 4, G: 3, B: 2, C: 2, M: 2, P: 2, F: 2, H: 2, V: 2, W: 2, Y: 2, K: 1, J: 1, X: 1, Q: 1, Z: 1 }),
-};
-const parolLang = (l) => (l === "EN" ? "EN" : "IT");
-function parolBoard(lang) {
-  const bag = PAROL_BAG[parolLang(lang)];
+})();
+function parolBoard() {
   for (let tries = 0; tries < 60; tries++) {
     const cells = [];
     for (let i = 0; i < PAROL_N * PAROL_N; i++) {
-      const c = bag[Math.floor(Math.random() * bag.length)];
+      const c = PAROL_BAG[Math.floor(Math.random() * PAROL_BAG.length)];
       cells.push(c === "Q" ? "QU" : c);
     }
     const vowels = cells.filter((c) => /[AEIOU]/.test(c)).length; // QU counts (has U)
     if (vowels >= 5 && vowels <= 10) return cells;
   }
-  return bag.slice(0, 16).map((c) => (c === "Q" ? "QU" : c));
-}
-const PAROL_SHAKES = 3; // shakes each player takes in the pre-game ritual
-// Mix a fresh scrap of entropy into the shared seed (both players stir the pot).
-const parolMix = (seed, entropy) => (((seed ^ (entropy >>> 0)) * 2654435761) >>> 0);
-// The board as a pure function of the seed, so both phones churn to the same
-// letters as they shake. A small LCG keeps it deterministic.
-function parolBoardSeeded(lang, seed) {
-  const bag = PAROL_BAG[parolLang(lang)];
-  let s = seed >>> 0;
-  const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
-  for (let tries = 0; tries < 60; tries++) {
-    const cells = [];
-    for (let i = 0; i < PAROL_N * PAROL_N; i++) {
-      const c = bag[Math.floor(rnd() * bag.length)];
-      cells.push(c === "Q" ? "QU" : c);
-    }
-    const vowels = cells.filter((c) => /[AEIOU]/.test(c)).length;
-    if (vowels >= 5 && vowels <= 10) return cells;
-  }
-  return bag.slice(0, 16).map((c) => (c === "Q" ? "QU" : c));
+  return PAROL_BAG.slice(0, 16).map((c) => (c === "Q" ? "QU" : c));
 }
 const parolNeighbors = (cell) => {
   const x = cell % PAROL_N,
@@ -1629,15 +1597,9 @@ function parolTrace(board, word) {
 }
 const parolPoints = (w) => (w.length <= 4 ? 1 : w.length === 5 ? 2 : w.length === 6 ? 3 : w.length === 7 ? 5 : 11);
 function dealParoliere(dealer, tally, opts) {
-  const lang = parolLang(opts?.lingua);
-  const seed = Math.floor(Math.random() * 0xffffffff) >>> 0;
   return {
-    phase: "shake", // shake → ready → play → done
-    lang, // "IT" | "EN" — picks the board's letters, the keyboard and the dictionary
-    seed,
-    board: parolBoardSeeded(lang, seed),
-    shaker: dealer, // whose turn it is to shake the tray
-    shakes: { A: 0, B: 0 },
+    phase: "ready", // ready → play → done
+    board: parolBoard(),
     secs: opts?.secs || PAROL_SECS,
     ready: { A: false, B: false },
     startedAt: null, // wall-clock epoch when play began — a fallback for a mid-game reload only
@@ -1652,21 +1614,6 @@ function dealParoliere(dealer, tally, opts) {
     matchDone: false,
     win: null,
   };
-}
-// The pre-game ritual: each player shakes the covered tray in turn, every shake
-// stirring the shared seed so both phones churn to the very same hidden letters.
-// A then B; once both have shaken their share, the tray is set and it's ready.
-function parolShake(gs, seat, entropy) {
-  const g = clone(gs);
-  if (g.phase !== "shake" || g.shaker !== seat) return null;
-  g.seed = parolMix(g.seed, entropy | 0);
-  g.board = parolBoardSeeded(g.lang, g.seed);
-  g.shakes[seat] += 1;
-  if (g.shakes[seat] >= PAROL_SHAKES) {
-    if (g.shakes[other(seat)] >= PAROL_SHAKES) g.phase = "ready";
-    else g.shaker = other(seat);
-  }
-  return { g, quiet: true, ev: { t: "shake" } };
 }
 function parolReady(gs, seat) {
   const g = clone(gs);
@@ -4245,19 +4192,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   roomRef.current = room;
   soundRef.current = sound;
   seatRef.current = seat;
-
-  // Let the service worker know when a hand is in progress, so a pending
-  // version-update reload waits for a safe moment instead of interrupting play.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const inGame = !!(room && room.status !== "lobby") && !solo; // play or the deal ritual
-    window.__osteriaInGame = inGame;
-    if (!inGame && window.__osteriaReloadPending) {
-      const go = window.__osteriaReloadPending;
-      window.__osteriaReloadPending = null;
-      go();
-    }
-  }, [room && room.status, solo]);
 
   /* ── incoming state ── */
   const receive = useCallback((r) => {
@@ -8579,75 +8513,26 @@ function Flotta({ room, gs, seat, mine, commit }) {
 }
 
 /* ── il paroliere (boggle) ── */
-// Open-source wordlists, fetched from a CDN the first time a language is played
-// (not bundled — kept out of the one-file app). We only check a word is real; a
-// tampered client could still cheat, same friends-not-tournaments trust as the
-// hidden hands. Accents are stripped so they match the accent-free board.
-const PAROL_DICT_URL = {
-  IT: "https://cdn.jsdelivr.net/npm/an-array-of-italian-words@1.2.0/words.json",
-  EN: "https://cdn.jsdelivr.net/npm/an-array-of-english-words@2.0.0/index.json",
-};
-const parolDictCache = {}; // lang → Set (kept for the whole session once loaded)
-async function parolLoadDict(lang) {
-  lang = parolLang(lang);
-  if (parolDictCache[lang]) return parolDictCache[lang];
-  const res = await fetch(PAROL_DICT_URL[lang]);
-  if (!res.ok) throw new Error("dict " + res.status);
-  const list = await res.json(); // a JSON array of lowercase words
-  const set = new Set();
-  for (const raw of list) {
-    const w = String(raw)
-      .toUpperCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^A-Z]/g, "");
-    if (w.length >= 3) set.add(w);
-  }
-  parolDictCache[lang] = set;
-  return set;
-}
-// Chunk a language's keys into keyboard rows of seven.
-const parolRows = (lang) => {
-  const keys = PAROL_KEYS[parolLang(lang)];
-  const rows = [];
-  for (let i = 0; i < keys.length; i += 7) rows.push(keys.slice(i, i + 7));
-  return rows;
-};
+const PAROL_KB = [
+  ["A", "B", "C", "D", "E", "F", "G"],
+  ["H", "I", "L", "M", "N", "O", "P"],
+  ["QU", "R", "S", "T", "U", "V", "Z"],
+];
 function Paroliere({ room, gs, seat, commit }) {
   const opp = other(seat);
   const me = TSIDE[seat];
-  const lang = parolLang(gs.lang);
-  const [path, setPath] = useState([]); // the traced cell indices of the current word
+  const [buf, setBuf] = useState("");
   const [words, setWords] = useState([]); // my finds — LOCAL until time's up
   const [flash, setFlash] = useState(null); // { kind, id }
   const [now, setNow] = useState(() => nowMs()); // this device's monotonic clock
   const [showHelp, setShowHelp] = useState(false);
-  const [dict, setDict] = useState(null); // the loaded word Set
-  const [dictState, setDictState] = useState(hasStore() ? "off" : "loading"); // loading | ready | error | off
   const submitted = useRef(false);
   const startRef = useRef(null); // monotonic mark for when THIS device started the round
-  const active = useRef(false); // a trace gesture is in progress
-  const moved = useRef(false); // the gesture dragged across cells (vs. a single tap)
 
-  // Pull the dictionary for this language up front, so words are checked the
-  // moment play starts. In the artifact (no network) we skip it and don't verify.
+  // fresh round → clear my local state
   useEffect(() => {
-    if (dictState === "off") return;
-    let live = true;
-    setDictState("loading");
-    parolLoadDict(lang).then(
-      (set) => live && (setDict(set), setDictState("ready")),
-      () => live && setDictState("error")
-    );
-    return () => {
-      live = false;
-    };
-  }, [lang]);
-
-  // fresh round (starts at the shake) → clear my local state
-  useEffect(() => {
-    if (gs.phase === "shake") {
-      setPath([]);
+    if (gs.phase === "ready") {
+      setBuf("");
       setWords([]);
       submitted.current = false;
     }
@@ -8678,36 +8563,6 @@ function Paroliere({ room, gs, seat, commit }) {
     return () => clearTimeout(t);
   }, [flash]);
 
-  // shake ritual: a tap (or a phone shake) stirs the shared seed on your turn
-  const motionAsked = useRef(false);
-  const doShake = () => {
-    if (gs.phase !== "shake" || gs.shaker !== seat) return;
-    if (!motionAsked.current) {
-      motionAsked.current = true;
-      try {
-        if (typeof DeviceMotionEvent !== "undefined" && DeviceMotionEvent.requestPermission) DeviceMotionEvent.requestPermission().catch(() => {});
-      } catch {}
-    }
-    const entropy = (Math.floor(Math.random() * 0xffffffff) ^ Math.floor(nowMs() * 1000)) >>> 0;
-    commit(parolShake(gs, seat, entropy));
-  };
-  useEffect(() => {
-    if (gs.phase !== "shake" || gs.shaker !== seat || typeof window === "undefined") return;
-    let last = 0;
-    const onMotion = (e) => {
-      const a = e.accelerationIncludingGravity || e.acceleration;
-      if (!a) return;
-      const m = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
-      const t = nowMs();
-      if (m > 22 && t - last > 350) {
-        last = t;
-        doShake();
-      }
-    };
-    window.addEventListener("devicemotion", onMotion);
-    return () => window.removeEventListener("devicemotion", onMotion);
-  }, [gs.phase, gs.shaker, gs.seed]); // eslint-disable-line
-
   const remainMs = gs.phase === "play" && startRef.current != null ? Math.max(0, gs.secs * 1000 - (now - startRef.current)) : gs.secs * 1000;
   const timeUp = gs.phase === "play" && startRef.current != null && remainMs <= 0;
 
@@ -8719,80 +8574,23 @@ function Paroliere({ room, gs, seat, commit }) {
     }
   }, [timeUp, gs.submitTurn, gs.phase]);
 
-  // A word is built by tracing a path across the grid — tap letter to letter, or
-  // drag through them android-unlock style. Only cells adjacent to the last one
-  // (and not already used) can extend the path.
-  const pathWord = path.map((i) => gs.board[i]).join("");
-  const nextSet = new Set(path.length ? parolNeighbors(path[path.length - 1]).filter((n) => !path.includes(n)) : []);
-  const addWord = (w) => {
-    w = (w || "").toUpperCase();
-    if (w.length < 3) return void setFlash({ kind: "short", id: uid() });
-    if (words.includes(w)) return void setFlash({ kind: "dup", id: uid() });
-    if (!parolTrace(gs.board, w)) return void setFlash({ kind: "no", id: uid() });
-    if (dictState === "ready" && !dict.has(w)) return void setFlash({ kind: "notword", id: uid() });
-    setWords((ws) => [w, ...ws]);
-    setFlash({ kind: "ok", id: uid() });
-    return true;
-  };
-  const cellAt = (x, y) => {
-    if (typeof document === "undefined") return -1;
-    const el = document.elementFromPoint(x, y);
-    const c = el && el.closest ? el.closest("[data-pi]") : null;
-    return c ? +c.dataset.pi : -1;
-  };
-  const extendTo = (i) => {
-    if (i < 0) return;
-    setPath((p) => {
-      if (!p.length) return [i];
-      const last = p[p.length - 1];
-      if (i === last) return p;
-      if (p.length >= 2 && i === p[p.length - 2]) {
-        moved.current = true;
-        return p.slice(0, -1); // drag back to undo
-      }
-      if (p.includes(i)) return p;
-      if (parolNeighbors(last).includes(i)) {
-        moved.current = true;
-        return [...p, i];
-      }
-      return p;
-    });
-  };
-  const traceDown = (e) => {
+  const boardLetters = new Set(gs.board.join("").split(""));
+  const keyOk = (k) => (k === "QU" ? gs.board.includes("QU") : boardLetters.has(k));
+
+  const append = (ch) => {
     if (timeUp) return;
-    const i = cellAt(e.clientX, e.clientY);
-    if (i < 0) return;
-    e.preventDefault();
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
-    active.current = true;
-    moved.current = false;
-    // extend the word if you tapped a valid next cell; otherwise start a fresh one
-    setPath((p) => {
-      if (!p.length) return [i];
-      const last = p[p.length - 1];
-      if (i !== last && !p.includes(i) && parolNeighbors(last).includes(i)) return [...p, i];
-      return [i];
-    });
+    setBuf((b) => b + ch);
   };
-  const traceMove = (e) => {
-    if (!active.current) return;
-    extendTo(cellAt(e.clientX, e.clientY));
+  const backspace = () => setBuf((b) => (b.endsWith("QU") ? b.slice(0, -2) : b.slice(0, -1)));
+  const enter = () => {
+    const w = buf.toUpperCase();
+    if (w.length < 3) return setFlash({ kind: "short", id: uid() });
+    if (words.includes(w)) return setFlash({ kind: "dup", id: uid() });
+    if (!parolTrace(gs.board, w)) return setFlash({ kind: "no", id: uid() });
+    setWords((ws) => [w, ...ws]);
+    setBuf("");
+    setFlash({ kind: "ok", id: uid() });
   };
-  const traceUp = () => {
-    if (!active.current) return;
-    active.current = false;
-    if (moved.current) {
-      addWord(pathWord); // a real drag submits on release
-      setPath([]);
-    }
-    // a plain tap keeps the path open, to tap on or press ✓
-  };
-  const submitPath = () => {
-    if (addWord(pathWord)) setPath([]);
-  };
-  const undoCell = () => setPath((p) => p.slice(0, -1));
 
   const mm = Math.floor(remainMs / 1000 / 60);
   const ss = Math.floor((remainMs / 1000) % 60);
@@ -8802,76 +8600,27 @@ function Paroliere({ room, gs, seat, commit }) {
   const HelpSheet = showHelp && (
     <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
       <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
-        <p style={{ margin: "0 0 10px" }}>{L("Prima si mescola: a turno scuotete (o toccate) il tabellone coperto, e le vostre scosse decidono le lettere.", "First you shake: take turns shaking (or tapping) the covered tray — your shakes decide the letters.")}</p>
         <p style={{ margin: "0 0 10px" }}>{L("In tre minuti trova più parole che puoi. Ogni lettera si unisce a una vicina — anche in diagonale — senza riusare lo stesso dado.", "In three minutes find as many words as you can. Each letter links to a neighbour — diagonals too — without reusing the same die.")}</p>
-        <p style={{ margin: "0 0 10px" }}>
-          {L("Parole di almeno 3 lettere, in", "Words of at least 3 letters, in")} {lang === "EN" ? L("inglese", "English") : L("italiano", "Italian")}.{" "}
-          {dictState === "error" || dictState === "off" ? L("Il dizionario non è disponibile: valgono le parole vere per accordo tra voi.", "The dictionary isn't available: real words are on your honour.") : L("Le parole vengono controllate su un dizionario.", "Words are checked against a dictionary.")}
-        </p>
+        <p style={{ margin: "0 0 10px" }}>{L("Parole di almeno 3 lettere. L’app controlla solo che la parola sia sul tabellone: se è una parola vera lo decidete voi.", "Words of at least 3 letters. The app only checks the word is on the board — whether it's a real word is up to you.")}</p>
         <p style={{ margin: "0 0 10px" }}>{L("Punti per lunghezza: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Le parole trovate da entrambi si annullano.", "Points by length: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Words you both find cancel out.")}</p>
         <p style={{ margin: 0 }}>{L("«Qu» è un dado solo e vale due lettere.", "“Qu” is a single die and counts as two letters.")}</p>
       </div>
     </Sheet>
   );
 
-  // A static tray, letters shown or hidden (used for shake / ready / time's-up).
-  const boardEl = (_tappable, hidden) => (
+  const boardEl = (tappable, hidden) => (
     <div style={{ width: "min(78vw, 300px)", margin: "10px auto", aspectRatio: "1", display: "grid", gridTemplateColumns: `repeat(${PAROL_N},1fr)`, gridTemplateRows: `repeat(${PAROL_N},1fr)`, gap: 6 }}>
       {gs.board.map((ch, i) => (
         <div
           key={i}
-          style={{ display: "grid", placeItems: "center", borderRadius: 8, background: T.paper, border: `1px solid ${T.line}`, boxShadow: "0 1px 3px rgba(18,18,18,0.12)", fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(18px, 6vw, 30px)", color: T.ink, userSelect: "none", WebkitTapHighlightColor: "transparent" }}
+          onClick={tappable ? () => append(ch) : undefined}
+          style={{ display: "grid", placeItems: "center", borderRadius: 8, background: T.paper, border: `1px solid ${T.line}`, boxShadow: "0 1px 3px rgba(18,18,18,0.12)", fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(18px, 6vw, 30px)", color: T.ink, cursor: tappable ? "pointer" : "default", userSelect: "none", WebkitTapHighlightColor: "transparent" }}
         >
           {hidden ? "·" : ch === "QU" ? "Qu" : ch}
         </div>
       ))}
     </div>
   );
-
-  // —— shake ritual ——
-  if (gs.phase === "shake") {
-    const myTurn = gs.shaker === seat;
-    const dots = (n) =>
-      Array.from({ length: PAROL_SHAKES }, (_, i) => (
-        <span key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: i < n ? me : T.line }} />
-      ));
-    return (
-      <div style={{ paddingBottom: 30, textAlign: "center" }}>
-        {HelpSheet}
-        <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}>
-          <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Ico n="help" s={15} /> {L("come si gioca", "how to play")}
-          </button>
-        </div>
-        <div style={{ marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: myTurn ? me : T.ink60 }}>
-          {myTurn ? L("Scuoti le lettere", "Shake the letters") : `${who(room, opp)} ${L("mescola…", "is shaking…")}`}
-        </div>
-        <Micro style={{ marginTop: 6 }}>{L("A turno mescolate il tabellone coperto: scuoti o tocca.", "Take turns shaking the covered tray: shake or tap.")}</Micro>
-        <div key={gs.seed} className="critshake" onClick={myTurn ? doShake : undefined} style={{ cursor: myTurn ? "pointer" : "default" }}>
-          {boardEl(false, true)}
-        </div>
-        <div style={{ display: "flex", justifyContent: "center", gap: 20, marginTop: 4 }}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 12, color: TSIDE.A }}>{who(room, "A")}</span>
-            <span style={{ display: "inline-flex", gap: 4 }}>{dots(gs.shakes.A)}</span>
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 12, color: TSIDE.B }}>{who(room, "B")}</span>
-            <span style={{ display: "inline-flex", gap: 4 }}>{dots(gs.shakes.B)}</span>
-          </span>
-        </div>
-        <div style={{ marginTop: 10 }}>
-          {myTurn ? (
-            <Button full onClick={doShake}>
-              {L("Scuoti", "Shake")} · {gs.shakes[seat]}/{PAROL_SHAKES}
-            </Button>
-          ) : (
-            <Micro>{L("Aspetta il tuo turno", "Wait your turn")}</Micro>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   // —— ready ——
   if (gs.phase === "ready") {
@@ -8885,16 +8634,11 @@ function Paroliere({ room, gs, seat, commit }) {
           </button>
         </div>
         <div style={{ marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: me }}>{L("Pronti a cercare parole?", "Ready to hunt words?")}</div>
-        <Micro style={{ marginTop: 6 }}>
-          {L("Parole in", "Words in")} {lang === "EN" ? L("inglese", "English") : L("italiano", "Italian")}
-          {dictState === "error" ? L(" · dizionario non disponibile", " · dictionary unavailable") : dictState === "off" ? "" : ` · ${L("con dizionario", "checked against a dictionary")}`}
-        </Micro>
+        <Micro style={{ marginTop: 6 }}>{L("Il tabellone si scopre quando siete pronti entrambi.", "The board is revealed once you're both ready.")}</Micro>
         {boardEl(false, true)}
         <div style={{ marginTop: 6 }}>
           {iReady ? (
             <Micro>{gs.ready[opp] ? L("Si comincia…", "Starting…") : `${L("Pronto — aspetti", "Ready — waiting for")} ${who(room, opp)}`}</Micro>
-          ) : dictState === "loading" ? (
-            <Micro>{L("Carico il dizionario…", "Loading the dictionary…")}</Micro>
           ) : (
             <Button full onClick={() => commit(parolReady(gs, seat))}>
               {L("Via!", "Go!")}
@@ -8923,55 +8667,20 @@ function Paroliere({ room, gs, seat, commit }) {
       {HelpSheet}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 26, letterSpacing: "0.02em", color: low ? "#B23A2E" : T.ink }}>{clock}</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: T.ink60, border: `1px solid ${T.line}`, borderRadius: 6, padding: "2px 6px" }}>{lang}</span>
-          <Micro>{L("parole", "words")}: {words.length}</Micro>
-        </div>
+        <Micro>{L("parole", "words")}: {words.length}</Micro>
       </div>
 
-      {/* the tray — tap letter to letter, or drag through them (only cells next
-          to the last one light up), with an unlock-style line through the path */}
-      <div
-        onPointerDown={traceDown}
-        onPointerMove={traceMove}
-        onPointerUp={traceUp}
-        onPointerCancel={traceUp}
-        style={{ position: "relative", width: "min(78vw, 300px)", margin: "10px auto", touchAction: "none" }}
-      >
-        <div style={{ aspectRatio: "1", display: "grid", gridTemplateColumns: `repeat(${PAROL_N},1fr)`, gridTemplateRows: `repeat(${PAROL_N},1fr)`, gap: 6 }}>
-          {gs.board.map((ch, i) => {
-            const on = path.includes(i);
-            const isNext = nextSet.has(i);
-            return (
-              <div
-                key={i}
-                data-pi={i}
-                style={{ display: "grid", placeItems: "center", borderRadius: 8, background: on ? me : T.paper, border: `2px solid ${on ? me : isNext ? "#B8862B" : T.line}`, color: on ? "#fff" : T.ink, boxShadow: "0 1px 3px rgba(18,18,18,0.12)", fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(18px, 6vw, 30px)", userSelect: "none", WebkitUserSelect: "none", touchAction: "none", WebkitTapHighlightColor: "transparent", transition: "background 90ms ease, border-color 90ms ease" }}
-              >
-                {ch === "QU" ? "Qu" : ch}
-              </div>
-            );
-          })}
-        </div>
-        {path.length > 1 && (
-          <svg viewBox="0 0 4 4" preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-            <polyline points={path.map((i) => `${(i % PAROL_N) + 0.5},${((i / PAROL_N) | 0) + 0.5}`).join(" ")} fill="none" stroke={me} strokeWidth="0.1" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />
-            {path.map((i, k) => (
-              <circle key={k} cx={(i % PAROL_N) + 0.5} cy={((i / PAROL_N) | 0) + 0.5} r="0.07" fill={me} />
-            ))}
-          </svg>
-        )}
-      </div>
+      {boardEl(true, false)}
 
-      {/* current word + feedback */}
-      <div style={{ minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, letterSpacing: "0.04em", color: flash && flash.kind !== "ok" ? "#B23A2E" : T.ink }}>
-          {pathWord ? pathWord.replace(/QU/g, "Qu") : <span style={{ color: T.ink30 }}>·</span>}
+      {/* current word */}
+      <div style={{ minHeight: 40, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, letterSpacing: "0.04em", color: flash && flash.kind !== "ok" ? "#B23A2E" : T.ink, minHeight: 30 }}>
+          {buf ? (buf === buf.toUpperCase() ? buf.replace(/QU/g, "Qu") : buf) : <span style={{ color: T.ink30 }}>·</span>}
         </div>
       </div>
       <div style={{ textAlign: "center", minHeight: 16 }}>
-        <Micro style={{ color: flash && flash.kind === "ok" ? "#2C7A4B" : flash ? "#B23A2E" : T.ink30 }}>
-          {flash ? (flash.kind === "ok" ? L("presa!", "got it!") : flash.kind === "dup" ? L("già trovata", "already found") : flash.kind === "short" ? L("almeno 3 lettere", "at least 3 letters") : flash.kind === "notword" ? L("non è una parola", "not a word") : L("non è sul tabellone", "not on the board")) : L("tocca o trascina le lettere", "tap or drag the letters")}
+        <Micro style={{ color: flash && flash.kind === "ok" ? "#2C7A4B" : "#B23A2E" }}>
+          {flash ? (flash.kind === "ok" ? L("presa!", "got it!") : flash.kind === "dup" ? L("già trovata", "already found") : flash.kind === "short" ? L("almeno 3 lettere", "at least 3 letters") : L("non è sul tabellone", "not on the board")) : ""}
         </Micro>
       </div>
 
@@ -8982,14 +8691,33 @@ function Paroliere({ room, gs, seat, commit }) {
         ))}
       </div>
 
-      {/* undo the last letter · submit the traced word (a drag submits on release) */}
-      <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-        <button onClick={undoCell} disabled={!path.length} style={{ ...plain, flex: "1 1 0", maxWidth: 110, padding: "13px 0", borderRadius: 10, fontSize: 18, border: `1px solid ${T.line}`, background: T.paper, color: path.length ? T.ink : T.ink30, cursor: path.length ? "pointer" : "default" }}>
-          ⌫
-        </button>
-        <button onClick={submitPath} disabled={pathWord.length < 3} style={{ ...plain, flex: "2 1 0", padding: "13px 0", borderRadius: 10, fontFamily: BRAND, fontWeight: 700, fontSize: 16, background: pathWord.length >= 3 ? T.ink : "rgba(18,18,18,0.12)", color: pathWord.length >= 3 ? T.bg : T.ink30, cursor: pathWord.length >= 3 ? "pointer" : "default" }}>
-          {L("Invia", "Enter")}
-        </button>
+      {/* the simplified keyboard */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {PAROL_KB.map((row, r) => (
+          <div key={r} style={{ display: "flex", gap: 5, justifyContent: "center" }}>
+            {row.map((k) => {
+              const ok = keyOk(k);
+              return (
+                <button
+                  key={k}
+                  onClick={() => ok && append(k)}
+                  disabled={!ok}
+                  style={{ ...plain, flex: "1 1 0", maxWidth: 52, padding: "12px 0", borderRadius: 8, fontFamily: BRAND, fontWeight: 700, fontSize: 16, background: ok ? T.paper : "transparent", color: ok ? T.ink : T.ink30, border: `1px solid ${ok ? T.line : "transparent"}`, cursor: ok ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}
+                >
+                  {k === "QU" ? "Qu" : k}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 5, justifyContent: "center" }}>
+          <button onClick={backspace} disabled={!buf} style={{ ...plain, flex: "1 1 0", maxWidth: 90, padding: "12px 0", borderRadius: 8, fontSize: 18, border: `1px solid ${T.line}`, background: T.paper, color: buf ? T.ink : T.ink30, cursor: buf ? "pointer" : "default" }}>
+            ⌫
+          </button>
+          <button onClick={enter} disabled={buf.length < 3} style={{ ...plain, flex: "2 1 0", padding: "12px 0", borderRadius: 8, fontFamily: BRAND, fontWeight: 700, fontSize: 16, background: buf.length >= 3 ? T.ink : "rgba(18,18,18,0.12)", color: buf.length >= 3 ? T.bg : T.ink30, cursor: buf.length >= 3 ? "pointer" : "default" }}>
+            {L("Invia", "Enter")}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -29,40 +29,8 @@
       // capture Chrome's install prompt so the home screen can offer it in-app.
       (function () {
         if ("serviceWorker" in navigator) {
-          // Keep both phones on the SAME build. Without this an open PWA runs
-          // whatever it cached at first launch, so after a deploy two devices can
-          // drift onto different versions and their game state stops matching. We
-          // poll for a new build and, when one takes over, reload — but never in
-          // the middle of a hand (the app flags that via window.__osteriaInGame).
-          var hadController = !!navigator.serviceWorker.controller;
-          var reloading = false;
-          // The reload loop guard has to survive the reload: `reloading` and
-          // `hadController` reset on every load, so on their own they can't tell
-          // a one-off update from a build that keeps re-triggering. If the last
-          // auto-reload was only seconds ago, the builds aren't converging (two
-          // versions live at the edge, a flapping deploy) — stop, don't loop. A
-          // genuine update later still gets its single reload.
-          var LOOP_KEY = "osteria-swreload";
-          var lastReload = 0;
-          try { lastReload = +sessionStorage.getItem(LOOP_KEY) || 0; } catch (e) {}
-          navigator.serviceWorker.addEventListener("controllerchange", function () {
-            if (reloading || !hadController) return; // ignore the first-ever install
-            var t = 0;
-            try { t = Date.now(); } catch (e) {}
-            if (t && lastReload && t - lastReload < 10000) return; // reload loop — bail
-            lastReload = t;
-            try { sessionStorage.setItem(LOOP_KEY, String(t)); } catch (e) {}
-            reloading = true;
-            var go = function () { try { location.reload(); } catch (e) {} };
-            if (window.__osteriaInGame) window.__osteriaReloadPending = go;
-            else go();
-          });
           window.addEventListener("load", function () {
-            navigator.serviceWorker.register("/sw.js").then(function (reg) {
-              var check = function () { try { reg.update(); } catch (e) {} };
-              setInterval(check, 60000);
-              document.addEventListener("visibilitychange", function () { if (!document.hidden) check(); });
-            }).catch(function () {});
+            navigator.serviceWorker.register("/sw.js").catch(function () {});
           });
         }
         window.__osteriaBIP = null;
