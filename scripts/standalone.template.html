@@ -29,8 +29,26 @@
       // capture Chrome's install prompt so the home screen can offer it in-app.
       (function () {
         if ("serviceWorker" in navigator) {
+          // Keep both phones on the SAME build. Without this an open PWA runs
+          // whatever it cached at first launch, so after a deploy two devices can
+          // drift onto different versions and their game state stops matching. We
+          // poll for a new build and, when one takes over, reload — but never in
+          // the middle of a hand (the app flags that via window.__osteriaInGame).
+          var hadController = !!navigator.serviceWorker.controller;
+          var reloading = false;
+          navigator.serviceWorker.addEventListener("controllerchange", function () {
+            if (reloading || !hadController) return; // ignore the first-ever install
+            reloading = true;
+            var go = function () { try { location.reload(); } catch (e) {} };
+            if (window.__osteriaInGame) window.__osteriaReloadPending = go;
+            else go();
+          });
           window.addEventListener("load", function () {
-            navigator.serviceWorker.register("/sw.js").catch(function () {});
+            navigator.serviceWorker.register("/sw.js").then(function (reg) {
+              var check = function () { try { reg.update(); } catch (e) {} };
+              setInterval(check, 60000);
+              document.addEventListener("visibilitychange", function () { if (!document.hidden) check(); });
+            }).catch(function () {});
           });
         }
         window.__osteriaBIP = null;

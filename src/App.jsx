@@ -4246,6 +4246,19 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   soundRef.current = sound;
   seatRef.current = seat;
 
+  // Let the service worker know when a hand is in progress, so a pending
+  // version-update reload waits for a safe moment instead of interrupting play.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const inGame = !!(room && room.status !== "lobby") && !solo; // play or the deal ritual
+    window.__osteriaInGame = inGame;
+    if (!inGame && window.__osteriaReloadPending) {
+      const go = window.__osteriaReloadPending;
+      window.__osteriaReloadPending = null;
+      go();
+    }
+  }, [room && room.status, solo]);
+
   /* ── incoming state ── */
   const receive = useCallback((r) => {
     if (!r || !r.code) return;
@@ -8604,7 +8617,7 @@ function Paroliere({ room, gs, seat, commit }) {
   const opp = other(seat);
   const me = TSIDE[seat];
   const lang = parolLang(gs.lang);
-  const [buf, setBuf] = useState("");
+  const [path, setPath] = useState([]); // the traced cell indices of the current word
   const [words, setWords] = useState([]); // my finds — LOCAL until time's up
   const [flash, setFlash] = useState(null); // { kind, id }
   const [now, setNow] = useState(() => nowMs()); // this device's monotonic clock
@@ -8613,6 +8626,8 @@ function Paroliere({ room, gs, seat, commit }) {
   const [dictState, setDictState] = useState(hasStore() ? "off" : "loading"); // loading | ready | error | off
   const submitted = useRef(false);
   const startRef = useRef(null); // monotonic mark for when THIS device started the round
+  const active = useRef(false); // a trace gesture is in progress
+  const moved = useRef(false); // the gesture dragged across cells (vs. a single tap)
 
   // Pull the dictionary for this language up front, so words are checked the
   // moment play starts. In the artifact (no network) we skip it and don't verify.
@@ -8632,7 +8647,7 @@ function Paroliere({ room, gs, seat, commit }) {
   // fresh round (starts at the shake) → clear my local state
   useEffect(() => {
     if (gs.phase === "shake") {
-      setBuf("");
+      setPath([]);
       setWords([]);
       submitted.current = false;
     }
@@ -8704,24 +8719,80 @@ function Paroliere({ room, gs, seat, commit }) {
     }
   }, [timeUp, gs.submitTurn, gs.phase]);
 
-  const boardLetters = new Set(gs.board.join("").split(""));
-  const keyOk = (k) => (k === "QU" ? gs.board.includes("QU") : boardLetters.has(k));
-
-  const append = (ch) => {
-    if (timeUp) return;
-    setBuf((b) => b + ch);
-  };
-  const backspace = () => setBuf((b) => (b.endsWith("QU") ? b.slice(0, -2) : b.slice(0, -1)));
-  const enter = () => {
-    const w = buf.toUpperCase();
-    if (w.length < 3) return setFlash({ kind: "short", id: uid() });
-    if (words.includes(w)) return setFlash({ kind: "dup", id: uid() });
-    if (!parolTrace(gs.board, w)) return setFlash({ kind: "no", id: uid() });
-    if (dictState === "ready" && !dict.has(w)) return setFlash({ kind: "notword", id: uid() }); // real-word check
+  // A word is built by tracing a path across the grid — tap letter to letter, or
+  // drag through them android-unlock style. Only cells adjacent to the last one
+  // (and not already used) can extend the path.
+  const pathWord = path.map((i) => gs.board[i]).join("");
+  const nextSet = new Set(path.length ? parolNeighbors(path[path.length - 1]).filter((n) => !path.includes(n)) : []);
+  const addWord = (w) => {
+    w = (w || "").toUpperCase();
+    if (w.length < 3) return void setFlash({ kind: "short", id: uid() });
+    if (words.includes(w)) return void setFlash({ kind: "dup", id: uid() });
+    if (!parolTrace(gs.board, w)) return void setFlash({ kind: "no", id: uid() });
+    if (dictState === "ready" && !dict.has(w)) return void setFlash({ kind: "notword", id: uid() });
     setWords((ws) => [w, ...ws]);
-    setBuf("");
     setFlash({ kind: "ok", id: uid() });
+    return true;
   };
+  const cellAt = (x, y) => {
+    if (typeof document === "undefined") return -1;
+    const el = document.elementFromPoint(x, y);
+    const c = el && el.closest ? el.closest("[data-pi]") : null;
+    return c ? +c.dataset.pi : -1;
+  };
+  const extendTo = (i) => {
+    if (i < 0) return;
+    setPath((p) => {
+      if (!p.length) return [i];
+      const last = p[p.length - 1];
+      if (i === last) return p;
+      if (p.length >= 2 && i === p[p.length - 2]) {
+        moved.current = true;
+        return p.slice(0, -1); // drag back to undo
+      }
+      if (p.includes(i)) return p;
+      if (parolNeighbors(last).includes(i)) {
+        moved.current = true;
+        return [...p, i];
+      }
+      return p;
+    });
+  };
+  const traceDown = (e) => {
+    if (timeUp) return;
+    const i = cellAt(e.clientX, e.clientY);
+    if (i < 0) return;
+    e.preventDefault();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+    active.current = true;
+    moved.current = false;
+    // extend the word if you tapped a valid next cell; otherwise start a fresh one
+    setPath((p) => {
+      if (!p.length) return [i];
+      const last = p[p.length - 1];
+      if (i !== last && !p.includes(i) && parolNeighbors(last).includes(i)) return [...p, i];
+      return [i];
+    });
+  };
+  const traceMove = (e) => {
+    if (!active.current) return;
+    extendTo(cellAt(e.clientX, e.clientY));
+  };
+  const traceUp = () => {
+    if (!active.current) return;
+    active.current = false;
+    if (moved.current) {
+      addWord(pathWord); // a real drag submits on release
+      setPath([]);
+    }
+    // a plain tap keeps the path open, to tap on or press ✓
+  };
+  const submitPath = () => {
+    if (addWord(pathWord)) setPath([]);
+  };
+  const undoCell = () => setPath((p) => p.slice(0, -1));
 
   const mm = Math.floor(remainMs / 1000 / 60);
   const ss = Math.floor((remainMs / 1000) % 60);
@@ -8743,13 +8814,13 @@ function Paroliere({ room, gs, seat, commit }) {
     </Sheet>
   );
 
-  const boardEl = (tappable, hidden) => (
+  // A static tray, letters shown or hidden (used for shake / ready / time's-up).
+  const boardEl = (_tappable, hidden) => (
     <div style={{ width: "min(78vw, 300px)", margin: "10px auto", aspectRatio: "1", display: "grid", gridTemplateColumns: `repeat(${PAROL_N},1fr)`, gridTemplateRows: `repeat(${PAROL_N},1fr)`, gap: 6 }}>
       {gs.board.map((ch, i) => (
         <div
           key={i}
-          onClick={tappable ? () => append(ch) : undefined}
-          style={{ display: "grid", placeItems: "center", borderRadius: 8, background: T.paper, border: `1px solid ${T.line}`, boxShadow: "0 1px 3px rgba(18,18,18,0.12)", fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(18px, 6vw, 30px)", color: T.ink, cursor: tappable ? "pointer" : "default", userSelect: "none", WebkitTapHighlightColor: "transparent" }}
+          style={{ display: "grid", placeItems: "center", borderRadius: 8, background: T.paper, border: `1px solid ${T.line}`, boxShadow: "0 1px 3px rgba(18,18,18,0.12)", fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(18px, 6vw, 30px)", color: T.ink, userSelect: "none", WebkitTapHighlightColor: "transparent" }}
         >
           {hidden ? "·" : ch === "QU" ? "Qu" : ch}
         </div>
@@ -8858,17 +8929,49 @@ function Paroliere({ room, gs, seat, commit }) {
         </div>
       </div>
 
-      {boardEl(true, false)}
+      {/* the tray — tap letter to letter, or drag through them (only cells next
+          to the last one light up), with an unlock-style line through the path */}
+      <div
+        onPointerDown={traceDown}
+        onPointerMove={traceMove}
+        onPointerUp={traceUp}
+        onPointerCancel={traceUp}
+        style={{ position: "relative", width: "min(78vw, 300px)", margin: "10px auto", touchAction: "none" }}
+      >
+        <div style={{ aspectRatio: "1", display: "grid", gridTemplateColumns: `repeat(${PAROL_N},1fr)`, gridTemplateRows: `repeat(${PAROL_N},1fr)`, gap: 6 }}>
+          {gs.board.map((ch, i) => {
+            const on = path.includes(i);
+            const isNext = nextSet.has(i);
+            return (
+              <div
+                key={i}
+                data-pi={i}
+                style={{ display: "grid", placeItems: "center", borderRadius: 8, background: on ? me : T.paper, border: `2px solid ${on ? me : isNext ? "#B8862B" : T.line}`, color: on ? "#fff" : T.ink, boxShadow: "0 1px 3px rgba(18,18,18,0.12)", fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(18px, 6vw, 30px)", userSelect: "none", WebkitUserSelect: "none", touchAction: "none", WebkitTapHighlightColor: "transparent", transition: "background 90ms ease, border-color 90ms ease" }}
+              >
+                {ch === "QU" ? "Qu" : ch}
+              </div>
+            );
+          })}
+        </div>
+        {path.length > 1 && (
+          <svg viewBox="0 0 4 4" preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+            <polyline points={path.map((i) => `${(i % PAROL_N) + 0.5},${((i / PAROL_N) | 0) + 0.5}`).join(" ")} fill="none" stroke={me} strokeWidth="0.1" strokeLinejoin="round" strokeLinecap="round" opacity="0.8" />
+            {path.map((i, k) => (
+              <circle key={k} cx={(i % PAROL_N) + 0.5} cy={((i / PAROL_N) | 0) + 0.5} r="0.07" fill={me} />
+            ))}
+          </svg>
+        )}
+      </div>
 
-      {/* current word */}
-      <div style={{ minHeight: 40, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, letterSpacing: "0.04em", color: flash && flash.kind !== "ok" ? "#B23A2E" : T.ink, minHeight: 30 }}>
-          {buf ? (buf === buf.toUpperCase() ? buf.replace(/QU/g, "Qu") : buf) : <span style={{ color: T.ink30 }}>·</span>}
+      {/* current word + feedback */}
+      <div style={{ minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, letterSpacing: "0.04em", color: flash && flash.kind !== "ok" ? "#B23A2E" : T.ink }}>
+          {pathWord ? pathWord.replace(/QU/g, "Qu") : <span style={{ color: T.ink30 }}>·</span>}
         </div>
       </div>
       <div style={{ textAlign: "center", minHeight: 16 }}>
-        <Micro style={{ color: flash && flash.kind === "ok" ? "#2C7A4B" : "#B23A2E" }}>
-          {flash ? (flash.kind === "ok" ? L("presa!", "got it!") : flash.kind === "dup" ? L("già trovata", "already found") : flash.kind === "short" ? L("almeno 3 lettere", "at least 3 letters") : flash.kind === "notword" ? L("non è una parola", "not a word") : L("non è sul tabellone", "not on the board")) : ""}
+        <Micro style={{ color: flash && flash.kind === "ok" ? "#2C7A4B" : flash ? "#B23A2E" : T.ink30 }}>
+          {flash ? (flash.kind === "ok" ? L("presa!", "got it!") : flash.kind === "dup" ? L("già trovata", "already found") : flash.kind === "short" ? L("almeno 3 lettere", "at least 3 letters") : flash.kind === "notword" ? L("non è una parola", "not a word") : L("non è sul tabellone", "not on the board")) : L("tocca o trascina le lettere", "tap or drag the letters")}
         </Micro>
       </div>
 
@@ -8879,33 +8982,14 @@ function Paroliere({ room, gs, seat, commit }) {
         ))}
       </div>
 
-      {/* the simplified keyboard */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {parolRows(lang).map((row, r) => (
-          <div key={r} style={{ display: "flex", gap: 5, justifyContent: "center" }}>
-            {row.map((k) => {
-              const ok = keyOk(k);
-              return (
-                <button
-                  key={k}
-                  onClick={() => ok && append(k)}
-                  disabled={!ok}
-                  style={{ ...plain, flex: "1 1 0", maxWidth: 52, padding: "12px 0", borderRadius: 8, fontFamily: BRAND, fontWeight: 700, fontSize: 16, background: ok ? T.paper : "transparent", color: ok ? T.ink : T.ink30, border: `1px solid ${ok ? T.line : "transparent"}`, cursor: ok ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}
-                >
-                  {k === "QU" ? "Qu" : k}
-                </button>
-              );
-            })}
-          </div>
-        ))}
-        <div style={{ display: "flex", gap: 5, justifyContent: "center" }}>
-          <button onClick={backspace} disabled={!buf} style={{ ...plain, flex: "1 1 0", maxWidth: 90, padding: "12px 0", borderRadius: 8, fontSize: 18, border: `1px solid ${T.line}`, background: T.paper, color: buf ? T.ink : T.ink30, cursor: buf ? "pointer" : "default" }}>
-            ⌫
-          </button>
-          <button onClick={enter} disabled={buf.length < 3} style={{ ...plain, flex: "2 1 0", padding: "12px 0", borderRadius: 8, fontFamily: BRAND, fontWeight: 700, fontSize: 16, background: buf.length >= 3 ? T.ink : "rgba(18,18,18,0.12)", color: buf.length >= 3 ? T.bg : T.ink30, cursor: buf.length >= 3 ? "pointer" : "default" }}>
-            {L("Invia", "Enter")}
-          </button>
-        </div>
+      {/* undo the last letter · submit the traced word (a drag submits on release) */}
+      <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+        <button onClick={undoCell} disabled={!path.length} style={{ ...plain, flex: "1 1 0", maxWidth: 110, padding: "13px 0", borderRadius: 10, fontSize: 18, border: `1px solid ${T.line}`, background: T.paper, color: path.length ? T.ink : T.ink30, cursor: path.length ? "pointer" : "default" }}>
+          ⌫
+        </button>
+        <button onClick={submitPath} disabled={pathWord.length < 3} style={{ ...plain, flex: "2 1 0", padding: "13px 0", borderRadius: 10, fontFamily: BRAND, fontWeight: 700, fontSize: 16, background: pathWord.length >= 3 ? T.ink : "rgba(18,18,18,0.12)", color: pathWord.length >= 3 ? T.bg : T.ink30, cursor: pathWord.length >= 3 ? "pointer" : "default" }}>
+          {L("Invia", "Enter")}
+        </button>
       </div>
     </div>
   );
