@@ -1576,11 +1576,15 @@ const FL2_WEAPON = {
   // life = turns before the shot fizzles; aoe = blast radius. Damage scales with
   // how deeply the ship sits in the blast: a dead-centre hit deals dmgMax, a
   // glancing edge deals dmgMin. Heavier units hit harder (warship > frigate).
-  torpedo: { kind: "straight", speed: 150, aoe: 55, dmgMin: 1, dmgMax: 3, life: 8, range: 900 },
-  missile: { kind: "point", speed: 105, aoe: 95, dmgMin: 1.5, dmgMax: 4, life: 14, range: 700 }, // lobbed to a chosen point
-  barrage: { kind: "spread", speed: 125, aoe: 40, dmgMin: 0.4, dmgMax: 1.2, life: 6, range: 520, shots: 3, spread: 0.26 },
+  torpedo: { kind: "straight", speed: 150, aoe: 55, dmgMin: 1, dmgMax: 3, life: 8 },
+  missile: { kind: "point", speed: 105, aoe: 95, dmgMin: 1.5, dmgMax: 4, life: 14 }, // lobbed to a chosen point
+  barrage: { kind: "spread", speed: 125, aoe: 40, dmgMin: 0.4, dmgMax: 1.2, life: 6, shots: 3, spread: 0.26 },
 };
 const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals all ships to both
+// A unit's reach is proportional to how far it can move: fast movers (sub, ~950)
+// out-range slow bruisers (warship, ~550). Range is set from the firing ship's
+// speed at launch, so it travels this far before the shot fizzles.
+const FL2_RANGE_K = 10;
 
 const fl2Len = (x, y) => Math.hypot(x, y);
 const fl2Dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -1671,9 +1675,10 @@ function fl2Spawn(g, ship, aim) {
   const dx = aim.x - ship.x,
     dy = aim.y - ship.y;
   const base = Math.atan2(dy, dx);
+  const range = FL2_UNITS[ship.type].speed * FL2_RANGE_K; // reach scales with the ship's movement
   const mk = (ang) => {
     const id = `p${g.seq++}`;
-    return { id, owner: ship.owner, weapon: FL2_UNITS[ship.type].weapon, x: ship.x, y: ship.y, ang, life: w.life, kind: w.kind, target: w.kind === "point" ? { x: aim.x, y: aim.y } : null, travelled: 0 };
+    return { id, owner: ship.owner, weapon: FL2_UNITS[ship.type].weapon, x: ship.x, y: ship.y, ang, life: w.life, kind: w.kind, target: w.kind === "point" ? { x: aim.x, y: aim.y } : null, travelled: 0, range };
   };
   if (w.kind === "spread") for (let i = 0; i < w.shots; i++) g.proj.push(mk(base + (i - (w.shots - 1) / 2) * w.spread));
   else g.proj.push(mk(base));
@@ -1697,17 +1702,23 @@ function flotta2Resolve(gs) {
   const g = clone(gs);
   g.boom = [];
   g.ping = { A: null, B: null };
-  // 1) apply both orders
+  // 1) apply move + recon orders (firing waits until ships have moved)
   for (const seat of ["A", "B"]) {
     const o = g.orders[seat];
     const ship = fl2ShipById(g, o.ship);
     if (!ship || ship.hp <= 0) continue;
     if (o.kind === "move") ship.path = (o.path || []).map((p) => fl2Clamp(p.x, p.y));
-    else if (o.kind === "fire" && o.aim) fl2Spawn(g, ship, o.aim);
     else if (o.kind === "recon" && o.at) g.ping[seat] = { x: o.at.x, y: o.at.y, r: FL2_UNITS[ship.type].vision };
   }
   // 2) ships slide along their standing plans
   for (const s of g.ships.A.concat(g.ships.B)) if (s.hp > 0) fl2Advance(s, FL2_UNITS[s.type].speed);
+  // 2b) now fire — from where the ship ended up, not where it started the round
+  for (const seat of ["A", "B"]) {
+    const o = g.orders[seat];
+    if (o.kind !== "fire" || !o.aim) continue;
+    const ship = fl2ShipById(g, o.ship);
+    if (ship && ship.hp > 0) fl2Spawn(g, ship, o.aim);
+  }
   // 3) shots advance, then detonate on contact / arrival / expiry
   const survivors = [];
   for (const p of g.proj) {
@@ -1740,7 +1751,7 @@ function flotta2Resolve(gs) {
       }
     }
     p.life -= 1;
-    if (!detonated && p.life > 0 && p.travelled < w.range) survivors.push(p);
+    if (!detonated && p.life > 0 && p.travelled < p.range) survivors.push(p);
   }
   g.proj = survivors;
   // 4) clear the dead
@@ -9035,6 +9046,13 @@ function Flotta2({ room, gs, seat, mine, commit }) {
   const w2s = (p) => ({ x: cX + p.x * scale, y: cY + p.y * scale });
   const s2w = (sx, sy) => ({ x: (sx - cX) / scale, y: (sy - cY) / scale });
   const shipPx = (t) => Math.max(11, FL2_UNITS[t].size * scale);
+  // where a ship will be after it advances along its standing plan this round —
+  // shots launch from there, so the aim preview should too
+  const futurePos = (ship) => {
+    const c = { x: ship.x, y: ship.y, path: (ship.path || []).slice(), heading: ship.heading };
+    fl2Advance(c, FL2_UNITS[ship.type].speed);
+    return c;
+  };
 
   const local = (e) => {
     const r = wrapRef.current.getBoundingClientRect();
@@ -9313,9 +9331,13 @@ function Flotta2({ room, gs, seat, mine, commit }) {
         ctx.stroke();
       } else if (draft.kind === "fire" && draft.aim) {
         const a = w2s(draft.aim);
+        const from = w2s(futurePos(selShip)); // the shot launches from where the ship will be
         const w = FL2_WEAPON[FL2_UNITS[selShip.type].weapon];
         ctx.beginPath();
-        ctx.moveTo(sp.x, sp.y);
+        ctx.arc(from.x, from.y, 4, 0, 2 * Math.PI); // marks the future launch point
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
         ctx.lineTo(a.x, a.y);
         ctx.setLineDash([5, 4]);
         ctx.lineWidth = 2;
