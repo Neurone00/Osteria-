@@ -36,8 +36,22 @@
           // the middle of a hand (the app flags that via window.__osteriaInGame).
           var hadController = !!navigator.serviceWorker.controller;
           var reloading = false;
+          // The reload loop guard has to survive the reload: `reloading` and
+          // `hadController` reset on every load, so on their own they can't tell
+          // a one-off update from a build that keeps re-triggering. If the last
+          // auto-reload was only seconds ago, the builds aren't converging (two
+          // versions live at the edge, a flapping deploy) — stop, don't loop. A
+          // genuine update later still gets its single reload.
+          var LOOP_KEY = "osteria-swreload";
+          var lastReload = 0;
+          try { lastReload = +sessionStorage.getItem(LOOP_KEY) || 0; } catch (e) {}
           navigator.serviceWorker.addEventListener("controllerchange", function () {
             if (reloading || !hadController) return; // ignore the first-ever install
+            var t = 0;
+            try { t = Date.now(); } catch (e) {}
+            if (t && lastReload && t - lastReload < 10000) return; // reload loop — bail
+            lastReload = t;
+            try { sessionStorage.setItem(LOOP_KEY, String(t)); } catch (e) {}
             reloading = true;
             var go = function () { try { location.reload(); } catch (e) {} };
             if (window.__osteriaInGame) window.__osteriaReloadPending = go;
