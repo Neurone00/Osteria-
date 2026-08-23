@@ -1574,14 +1574,17 @@ const FL2_UNITS = {
 };
 const FL2_FLEET = ["warship", "frigate", "sub", "recon"]; // one of each per side
 const FL2_WEAPON = {
-  // life = turns before the shot fizzles; aoe = blast radius; range = how far the
-  // shot travels before it dies. Damage scales with how deeply the ship sits in
-  // the blast: dead-centre → dmgMax, glancing edge → dmgMin. Heavier units hit
-  // harder. Reach: warship long (½ the field), frigate mid, torpedo short.
-  missile: { kind: "point", speed: 105, aoe: 95, dmgMin: 1.5, dmgMax: 4, life: 14, range: FL2_R / 2 }, // lobbed; long reach
-  barrage: { kind: "spread", speed: 125, aoe: 40, dmgMin: 0.4, dmgMax: 1.2, life: 6, range: 330, shots: 3, spread: 0.26 }, // mid
-  torpedo: { kind: "straight", speed: 150, aoe: 30, dmgMin: 1, dmgMax: 3, life: 6, range: 210, hitR: 1 }, // small blast, tight hit box, short
-  probe: { kind: "straight", speed: 130, aoe: 15, dmgMin: 0.3, dmgMax: 0.6, life: 5, range: 150, hitR: 1 }, // recon's pop-gun; 2 hits down a recon, useless on hulls
+  // speed = distance a shot travels per round. Every shot outruns the fastest
+  // ship (recon, 140) so hits are possible, but none is instant — a nimble ship
+  // can still slip a slow torpedo. Speed is per weapon: the missile screams, the
+  // torpedo runs slow. life = rounds before it fizzles; aoe = blast radius;
+  // range = how far it travels before dying. Damage scales with how deeply the
+  // ship sits in the blast (dead-centre → dmgMax, glancing → dmgMin); heavier
+  // units hit harder. Reach: warship long (½ the field), frigate mid, torpedo short.
+  missile: { kind: "point", speed: 260, aoe: 95, dmgMin: 1.5, dmgMax: 4, life: 14, range: FL2_R / 2 }, // lobbed; fast + long reach
+  barrage: { kind: "spread", speed: 230, aoe: 40, dmgMin: 0.4, dmgMax: 1.2, life: 6, range: 330, shots: 3, spread: 0.26 }, // quick shells, mid
+  torpedo: { kind: "straight", speed: 180, aoe: 30, dmgMin: 1, dmgMax: 3, life: 6, range: 210, hitR: 1 }, // slow runner, small blast, short
+  probe: { kind: "straight", speed: 200, aoe: 15, dmgMin: 0.3, dmgMax: 0.6, life: 5, range: 150, hitR: 1 }, // recon's pop-gun; 2 hits down a recon, useless on hulls
 };
 const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals all ships to both
 // Deployment: the sea is split into 8 octants (45° each, from +x). Each side owns
