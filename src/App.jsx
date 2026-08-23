@@ -1663,6 +1663,18 @@ function fl2Advance(ship, dist) {
   ship.vx = ship.x - ox; // this round's travel — its heading + speed, for scouting
   ship.vy = ship.y - oy;
 }
+// Clip a drawn poly-line to a maximum length (a ship's reach over a few turns),
+// interpolating the final segment so the route ends exactly at the limit.
+function fl2TrimPath(pts, maxLen) {
+  let acc = 0;
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (acc + seg > maxLen) { const k = (maxLen - acc) / seg; out.push({ x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * k, y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * k }); break; }
+    acc += seg; out.push(pts[i]);
+  }
+  return out;
+}
 function fl2Ship(type, owner, id, x, y, heading) {
   const u = FL2_UNITS[type];
   return { id, type, owner, x, y, heading, hp: u.hp, maxhp: u.hp, path: [], vx: 0, vy: 0, cd: 0 };
@@ -9099,6 +9111,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
   // deployment working state (local until Ready)
   const [dzone, setDzone] = useState(null);
   const [dpos, setDpos] = useState({}); // id → {x,y}
+  const [dpath, setDpath] = useState({}); // id → initial route drawn during deploy
   const selShip = sel ? myShips.find((s) => s.id === sel) : null;
 
   useEffect(() => {
@@ -9127,6 +9140,9 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
       const z = FL2_ZONES[seat][1];
       setDzone(z);
       setDpos(autoPlace(z));
+      setDpath({});
+      setSel(null);
+      setMode(null);
     }
   }, [deploying, seat]); // eslint-disable-line
 
@@ -9225,8 +9241,9 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
     const { x, y } = l;
     if (!canAct) { gest.current = { kind: "pan", sx: x, sy: y, ox: pan.x, oy: pan.y }; force((n) => n + 1); return; }
     if (deploying) {
+      if (mode === "droute" && selShip) { gest.current = { kind: "droute", pts: [s2w(x, y)] }; return; }
       const s = hitShip(x, y);
-      if (s) { setSel(s.id); gest.current = { kind: "place", id: s.id, type: s.type }; return; }
+      if (s) { setSel(s.id); gest.current = { kind: "place", id: s.id, type: s.type, sx: x, sy: y, moved: false }; return; }
       gest.current = { kind: "tapPan", sx: x, sy: y, ox: pan.x, oy: pan.y, moved: false };
       return;
     }
@@ -9260,8 +9277,15 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
       return;
     }
     if (g.kind === "tapShip") { if (Math.hypot(x - g.sx, y - g.sy) >= 8) g.moved = true; return; }
-    if (g.kind === "place") { setDpos((p) => ({ ...p, [g.id]: clampDeploy(g.type, s2w(x, y)) })); force((n) => n + 1); return; }
-    if (g.kind === "draw") { const wp = s2w(x, y); const last = g.pts[g.pts.length - 1]; if (Math.hypot(wp.x - last.x, wp.y - last.y) >= gs.R * 0.02) g.pts.push(wp); force((n) => n + 1); return; }
+    if (g.kind === "place") {
+      if (!g.moved && Math.hypot(x - g.sx, y - g.sy) < 8) return; // a tap, not a drag
+      g.moved = true;
+      setDpos((p) => ({ ...p, [g.id]: clampDeploy(g.type, s2w(x, y)) }));
+      setDpath((p) => { if (!p[g.id]) return p; const n = { ...p }; delete n[g.id]; return n; }); // moving invalidates its route
+      force((n) => n + 1);
+      return;
+    }
+    if (g.kind === "droute" || g.kind === "draw") { const wp = s2w(x, y); const last = g.pts[g.pts.length - 1]; if (Math.hypot(wp.x - last.x, wp.y - last.y) >= gs.R * 0.02) g.pts.push(wp); force((n) => n + 1); return; }
     if (g.kind === "aim") { setDraft({ kind: "fire", aim: s2w(x, y) }); force((n) => n + 1); return; }
   };
   const onUp = (e) => {
@@ -9275,20 +9299,21 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
       if (deploying) {
         const wp = s2w(x, y);
         const oct = fl2Octant(wp.x, wp.y);
-        if (FL2_ZONES[seat].includes(oct)) { setDzone(oct); setDpos(autoPlace(oct)); }
+        if (FL2_ZONES[seat].includes(oct)) { setDzone(oct); setDpos(autoPlace(oct)); setDpath({}); setSel(null); setMode(null); }
       } else { setSel(null); setMode(null); setDraft(null); }
+    } else if (g.kind === "place" && !g.moved) {
+      setSel(g.id); setMode("dmenu"); // tapped a placed ship → deploy options (draw its route)
     } else if (g.kind === "tapShip" && !g.moved) {
       setSel(g.id); setMode("menu");
     } else if (g.kind === "draw" && selShip) {
-      let path = [{ x: selShip.x, y: selShip.y }, ...g.pts];
-      const maxLen = 3 * FL2_UNITS[selShip.type].speed;
-      let acc = 0; const trimmed = [path[0]];
-      for (let i = 1; i < path.length; i++) {
-        const seg = Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
-        if (acc + seg > maxLen) { const k = (maxLen - acc) / seg; trimmed.push({ x: path[i - 1].x + (path[i].x - path[i - 1].x) * k, y: path[i - 1].y + (path[i].y - path[i - 1].y) * k }); break; }
-        acc += seg; trimmed.push(path[i]);
-      }
+      const trimmed = fl2TrimPath([{ x: selShip.x, y: selShip.y }, ...g.pts], 3 * FL2_UNITS[selShip.type].speed);
       if (trimmed.length >= 2) setDraft({ kind: "move", path: trimmed });
+    } else if (g.kind === "droute" && selShip) {
+      const start = dpos[selShip.id] || shipPos(selShip);
+      const trimmed = fl2TrimPath([start, ...g.pts], 3 * FL2_UNITS[selShip.type].speed);
+      // store just the waypoints (drop the start point) so the initial heading is well-defined
+      setDpath((p) => ({ ...p, [selShip.id]: trimmed.length >= 2 ? trimmed.slice(1) : [] }));
+      setMode("dmenu");
     }
     force((n) => n + 1);
   };
@@ -9305,7 +9330,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
   const submitDeploy = () => {
     if (dzone == null) return;
     const ships = {};
-    for (const s of myShips) { const p = dpos[s.id] || shipPos(s); ships[s.id] = { x: p.x, y: p.y, path: [] }; }
+    for (const s of myShips) { const p = dpos[s.id] || shipPos(s); ships[s.id] = { x: p.x, y: p.y, path: dpath[s.id] || [] }; }
     const placement = { zone: dzone, ships };
     const r = flotta2Deploy(gs, seat, placement);
     if (r) { mineRef.current = placement; commit(r); }
@@ -9428,9 +9453,10 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
           ctx.closePath(); ctx.fill(); ctx.restore();
         }
       }
-      if (mineShip && !deploying && s.path && s.path.length) {
+      const route = mineShip && (deploying ? dpath[s.id] : s.path);
+      if (route && route.length) {
         ctx.beginPath(); ctx.moveTo(p.x, p.y);
-        for (const q of s.path) { const sp = w2s(q); ctx.lineTo(sp.x, sp.y); }
+        for (const q of route) { const sp = w2s(q); ctx.lineTo(sp.x, sp.y); }
         ctx.strokeStyle = SON.grid; ctx.lineWidth = 1.3; ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([]);
       }
     };
@@ -9467,6 +9493,11 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
       for (const q of gest.current.pts) ctx.lineTo(w2s(q).x, w2s(q).y);
       ctx.lineWidth = 2.4; ctx.stroke();
     }
+    if (deploying && gest.current && gest.current.kind === "droute" && selShip) {
+      const sp = w2s(dpos[selShip.id] || shipPos(selShip)); ctx.beginPath(); ctx.moveTo(sp.x, sp.y);
+      for (const q of gest.current.pts) ctx.lineTo(w2s(q).x, w2s(q).y);
+      ctx.lineWidth = 2.4; ctx.stroke();
+    }
     ctx.restore();
     ctx.restore(); // clip
     ctx.beginPath(); ctx.arc(c0.x, c0.y, rpx, 0, 2 * Math.PI); ctx.strokeStyle = SON.faint; ctx.lineWidth = 2; ctx.stroke();
@@ -9480,7 +9511,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
   const status = gs.done
     ? gs.win === seat ? L("Vittoria!", "Victory!") : gs.win ? L("Sconfitta", "Defeated") : L("Pari", "Draw")
     : deploying
-    ? submittedDeploy ? L("Schierato — aspetta l'avversario", "Deployed — waiting for the other player") : dzone == null ? L("Tocca un settore per schierare", "Tap a sector to deploy") : L("Trascina le navi · poi Pronto", "Drag your ships · then Ready")
+    ? submittedDeploy ? L("Schierato — aspetta l'avversario", "Deployed — waiting for the other player") : dzone == null ? L("Tocca un settore per schierare", "Tap a sector to deploy") : mode === "droute" ? L("Disegna la rotta iniziale", "Draw the initial route") : mode === "dmenu" ? L("Rotta iniziale · o trascina la nave", "Initial route · or drag the ship") : L("Trascina le navi · tocca per la rotta · poi Pronto", "Drag ships · tap for a route · then Ready")
     : submittedOrder ? L("Ordine dato — aspetta l'avversario", "Order set — waiting")
     : sel ? (mode === "move" ? L("Disegna la rotta", "Draw the route") : mode === "fire" ? L("Trascina per mirare", "Drag to aim") : L("Muovi o spara", "Move or fire"))
     : L("Tocca una tua nave", "Tap one of your ships");
@@ -9491,7 +9522,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
       {showHelp && (
         <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
           <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
-            <p style={{ margin: "0 0 10px" }}>{L("Schieramento: scegli un settore della tua metà e trascina lì le navi (il ricognitore va ovunque). Nessuno schiera nel cerchio centrale.", "Deploy: pick a sector of your half and drag your ships there (the recon goes anywhere). No one deploys in the central circle.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Schieramento: scegli un settore della tua metà e trascina lì le navi (il ricognitore va ovunque). Tocca una nave per disegnarne la rotta di partenza. Nessuno schiera nel cerchio centrale.", "Deploy: pick a sector of your half and drag your ships there (the recon goes anywhere). Tap a ship to draw its opening route. No one deploys in the central circle.")}</p>
             <p style={{ margin: "0 0 10px" }}>{L("A ogni turno UNA azione con UNA nave: muovi (disegna la rotta) o spara (trascina per mirare). Poi il turno si risolve per entrambi.", "Each round ONE action with ONE ship: move (draw a route) or fire (drag to aim). Then the round resolves for both.")}</p>
             <p style={{ margin: "0 0 10px" }}>{L("I colpi partono da dove sarà la nave e viaggiano nel tempo. Portata: corazzata lunga, fregata media, siluro corta.", "Shots leave from where the ship will be and travel over time. Reach: warship long, frigate mid, torpedo short.")}</p>
             <p style={{ margin: 0 }}>{L("I sommergibili li vedono solo sommergibili e fregate. Ogni 3 turni il radar svela le navi di superficie. Pizzica per zoomare, trascina per spostare.", "Submarines are seen only by subs and frigates. Every 3rd round radar reveals surface ships. Pinch to zoom, drag to pan.")}</p>
@@ -9537,6 +9568,19 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
                 <Fl2Btn icon="close" label={L("Rifai", "Redo")} tone={SON.foe} bg={SON.sea} onTap={() => (setDraft(null), setMode("menu"))} />
               </>
             )}
+          </div>
+        )}
+        {/* per-ship menu (deploy): draw / clear an initial route */}
+        {deploying && selScreen && canAct && (mode === "dmenu" || mode === "droute") && (
+          <div className="pop" onPointerDown={(e) => e.stopPropagation()} onPointerMove={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}
+            style={{ position: "absolute", left: Math.max(30, Math.min(box.w - 30, selScreen.x)), top: Math.max(6, selScreen.y - shipPx(selShip.type) * 2 - 56), transform: "translateX(-50%)", display: "flex", gap: 10 }}>
+            {mode === "dmenu" && (
+              <>
+                <Fl2Btn icon="compass" label={L("Rotta", "Route")} tone={SON.green} bg={SON.sea} onTap={() => setMode("droute")} />
+                {dpath[sel] && dpath[sel].length > 0 && <Fl2Btn icon="close" label={L("Cancella rotta", "Clear route")} tone={SON.foe} bg={SON.sea} onTap={() => setDpath((p) => { const n = { ...p }; delete n[sel]; return n; })} />}
+              </>
+            )}
+            {mode === "droute" && <Fl2Btn icon="close" label={L("Fine", "Done")} tone={SON.faint} bg={SON.sea} onTap={() => setMode("dmenu")} />}
           </div>
         )}
         {/* zoom hint / reset */}
