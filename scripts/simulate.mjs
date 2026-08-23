@@ -45,6 +45,7 @@ const EXPORTS = [
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
+  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1121,9 +1122,28 @@ function fl2SubmitRandom(g, seat) {
   if (!r) return fail("flotta2", "could not submit any order for a live ship"), g;
   return r.g;
 }
-function playFlotta2() {
+// build a legal deployment for one side (ships spread in an octant of its half)
+function fl2Deploy(g, seat) {
+  const zone = R.FL2_ZONES[seat][1];
+  const a0 = zone * (Math.PI / 4);
+  const ships = {};
+  g.ships[seat].forEach((s, i) => {
+    const a = a0 + (Math.PI / 4) * ((i + 1) / (g.ships[seat].length + 1));
+    const rr = R.FL2_R * 0.75;
+    ships[s.id] = { x: Math.cos(a) * rr, y: Math.sin(a) * rr, path: [] };
+  });
+  return R.flotta2Deploy(g, seat, { zone, ships }).g;
+}
+// a game past deployment, in the planning phase
+function fl2Begun() {
   let g = R.dealFlotta2("A", { A: 0, B: 0 });
-  fl2Census(g, "flotta2 deal");
+  g = fl2Deploy(g, "A");
+  g = fl2Deploy(g, "B");
+  return R.flotta2Begin(g).g;
+}
+function playFlotta2() {
+  let g = fl2Begun();
+  fl2Census(g, "flotta2 begin");
   let rounds = 0;
   while (!g.done && rounds < 300) {
     g = fl2SubmitRandom(g, "A");
@@ -1139,11 +1159,34 @@ function playFlotta2() {
   return rounds;
 }
 function flotta2RuleTests() {
-  // deal: one of each unit per side
+  // deal opens the deployment phase with one of each unit per side
   let g = R.dealFlotta2("A", { A: 0, B: 0 });
+  if (g.phase !== "deploy") fail("flotta2 rules", "should open in the deploy phase");
   if (g.ships.A.length !== R.FL2_FLEET.length || g.ships.B.length !== R.FL2_FLEET.length) fail("flotta2 rules", "each side should get the full fleet");
   if (g.ships.A.map((s) => s.type).sort().join() !== R.FL2_FLEET.slice().sort().join()) fail("flotta2 rules", "fleet should be one of each unit");
-  // order validation
+
+  // deployment: own half only; central no-deploy circle; recon may go anywhere
+  if (R.flotta2Deploy(g, "A", { zone: R.FL2_ZONES.B[0], ships: {} }) != null) fail("flotta2 rules", "can't deploy in the other half's octant");
+  const zA = R.FL2_ZONES.A[0];
+  const mid = zA * (Math.PI / 4) + Math.PI / 8;
+  if (!R.fl2InZone("A", "warship", zA, Math.cos(mid) * R.FL2_R * 0.75, Math.sin(mid) * R.FL2_R * 0.75)) fail("flotta2 rules", "a warship in its octant ring should be legal");
+  if (R.fl2InZone("A", "warship", zA, Math.cos(mid) * R.FL2_R * 0.3, Math.sin(mid) * R.FL2_R * 0.3)) fail("flotta2 rules", "the central no-deploy circle should be illegal");
+  const eOct = R.FL2_ZONES.B[0], em = eOct * (Math.PI / 4) + Math.PI / 8;
+  if (!R.fl2InZone("A", "recon", zA, Math.cos(em) * R.FL2_R * 0.75, Math.sin(em) * R.FL2_R * 0.75)) fail("flotta2 rules", "the recon may deploy in any octant");
+  // begin lifts an illegal (centre) placement into bounds and opens play
+  let d = R.dealFlotta2("A", { A: 0, B: 0 });
+  d = fl2Deploy(d, "A");
+  const badId = Object.keys(d.deploy.A.ships)[0];
+  d.deploy.A.ships[badId] = { x: 0, y: 0, path: [] };
+  d = fl2Deploy(d, "B");
+  if (!R.flotta2DeployReady(d)) fail("flotta2 rules", "both deploys should be ready");
+  const begun = R.flotta2Begin(d).g;
+  if (begun.phase !== "plan") fail("flotta2 rules", "both deployed should open play");
+  const snapped = begun.ships.A.find((s) => s.id === badId);
+  if (Math.hypot(snapped.x, snapped.y) < R.FL2_NODEPLOY - 1) fail("flotta2 rules", "begin should lift a ship out of the no-deploy circle");
+
+  // order validation (in the planning phase)
+  g = fl2Begun();
   const recon = g.ships.A.find((s) => s.type === "recon");
   if (R.flotta2Order(g, "A", { kind: "fire", ship: recon.id, aim: { x: 0, y: 0 } }) != null) fail("flotta2 rules", "recon has no weapon and can't fire");
   if (R.flotta2Order(g, "A", { kind: "move", ship: g.ships.B[0].id, path: [] }) != null) fail("flotta2 rules", "can't order the enemy's ship");
@@ -1152,7 +1195,7 @@ function flotta2RuleTests() {
   if (R.flotta2Order(g, "A", { kind: "move", ship: sub0.id, path: [] }) != null) fail("flotta2 rules", "only one action per side per round");
 
   // a directed torpedo damages, then sinks, a held target — and wins the match
-  let h = R.dealFlotta2("A", { A: 0, B: 0 });
+  let h = fl2Begun();
   const sub = h.ships.A.find((s) => s.type === "sub");
   const tgt = h.ships.B.find((s) => s.type === "warship");
   h.ships.A = [sub];
@@ -1173,7 +1216,7 @@ function flotta2RuleTests() {
   if (h.done && h.tally.A !== 1) fail("flotta2 rules", "the win should bump the tally");
 
   // radar sweep flag lands every third round
-  let r2 = R.dealFlotta2("A", { A: 0, B: 0 });
+  let r2 = fl2Begun();
   const nudge = () => {
     r2 = R.flotta2Order(r2, "A", { kind: "recon", ship: r2.ships.A[0].id, at: { x: 0, y: 0 } }).g;
     r2 = R.flotta2Order(r2, "B", { kind: "recon", ship: r2.ships.B[0].id, at: { x: 0, y: 0 } }).g;
@@ -1182,13 +1225,33 @@ function flotta2RuleTests() {
   nudge(); if (r2.radar) fail("flotta2 rules", "no sweep on round 2");
   nudge(); if (!r2.radar) fail("flotta2 rules", "a radar sweep should land on round 3");
 
-  // fog of war: distant enemies unseen; a near one seen; radar reveals all
-  let v = R.dealFlotta2("A", { A: 0, B: 0 });
+  // fog of war: a nearby surface enemy shows; radar reveals surface ships
+  let v = fl2Begun();
   if (R.flotta2Seen(v, "A").size !== 0) fail("flotta2 rules", "the far enemy fleet should start unseen");
-  v.ships.B[0].x = v.ships.A[0].x + 40; v.ships.B[0].y = v.ships.A[0].y;
-  if (!R.flotta2Seen(v, "A").has(v.ships.B[0].id)) fail("flotta2 rules", "an enemy inside vision should be seen");
+  const eWar = v.ships.B.find((s) => s.type === "warship");
+  const myWar = v.ships.A.find((s) => s.type === "warship");
+  eWar.x = myWar.x + 40; eWar.y = myWar.y;
+  if (!R.flotta2Seen(v, "A").has(eWar.id)) fail("flotta2 rules", "a nearby surface enemy should be seen");
   v.radar = true;
-  if (R.flotta2Seen(v, "A").size !== v.ships.B.length) fail("flotta2 rules", "a radar sweep should reveal the whole enemy fleet");
+  const surface = v.ships.B.filter((s) => s.type !== "sub");
+  const seenSurface = [...R.flotta2Seen(v, "A")].filter((id) => v.ships.B.find((s) => s.id === id).type !== "sub");
+  if (seenSurface.length !== surface.length) fail("flotta2 rules", "a radar sweep should reveal every surface ship");
+
+  // submarines are stealthy: only your subs and frigates detect them, never a
+  // warship, and not even the radar sweep
+  let z = fl2Begun();
+  const eSub = z.ships.B.find((s) => s.type === "sub");
+  const wA = z.ships.A.find((s) => s.type === "warship");
+  const fA = z.ships.A.find((s) => s.type === "frigate");
+  const subA = z.ships.A.find((s) => s.type === "sub");
+  wA.x = 0; wA.y = 0; eSub.x = 30; eSub.y = 0; // sub right next to my warship
+  fA.x = 900; fA.y = 0; subA.x = 900; subA.y = 200; // my sonar ships far away
+  if (R.flotta2Seen(z, "A").has(eSub.id)) fail("flotta2 rules", "a warship must not detect an enemy submarine");
+  z.radar = true;
+  if (R.flotta2Seen(z, "A").has(eSub.id)) fail("flotta2 rules", "radar must not reveal a submarine");
+  z.radar = false;
+  fA.x = 30; fA.y = 0; // bring my frigate onto it
+  if (!R.flotta2Seen(z, "A").has(eSub.id)) fail("flotta2 rules", "a frigate should detect an enemy submarine");
 }
 
 /* ── run ────────────────────────────────────────────────────── */

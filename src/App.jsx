@@ -244,6 +244,7 @@ const GAMES = {
     board: true,
     cat: "tavolo",
     cta: { it: "Salpa!", en: "Set sail!" },
+    disabled: true, // hidden while the deploy screen + pan/zoom camera + full-screen sonar UI are rebuilt
     opts: [],
     def: {},
   },
@@ -1585,6 +1586,37 @@ const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals all ships to both
 // out-range slow bruisers (warship, ~550). Range is set from the firing ship's
 // speed at launch, so it travels this far before the shot fizzles.
 const FL2_RANGE_K = 10;
+// Deployment: the sea is split into 8 octants (45° each, from +x). Each side owns
+// a half — B the east octants, A the west — and picks ONE to place its fleet in.
+// The recon/helo may deploy in ANY octant. Nobody may deploy inside the central
+// no-deploy circle (radius R/2); ships go in the outer ring.
+const FL2_ZONES = { A: [2, 3, 4, 5], B: [6, 7, 0, 1] };
+const FL2_NODEPLOY = FL2_R / 2;
+const fl2Octant = (x, y) => {
+  let a = Math.atan2(y, x);
+  if (a < 0) a += 2 * Math.PI;
+  return Math.floor(a / (Math.PI / 4)) % 8;
+};
+// Can `type` (of `seat`) legally sit at (x,y)? Outer ring only; own octant unless
+// it's the recon, which may go in any octant.
+function fl2InZone(seat, type, octant, x, y) {
+  const r = fl2Len(x, y);
+  if (r < FL2_NODEPLOY || r > FL2_R) return false;
+  if (type === "recon") return true; // the helo deploys anywhere in the ring
+  return fl2Octant(x, y) === octant && FL2_ZONES[seat].includes(octant);
+}
+// Spread n ships across an octant at ~0.75R, for the opening auto-layout.
+function fl2PlaceInOctant(octant, n) {
+  const a0 = octant * (Math.PI / 4);
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const t = (i + 1) / (n + 1);
+    const a = a0 + (Math.PI / 4) * t;
+    const rr = FL2_R * 0.75;
+    pts.push({ x: Math.cos(a) * rr, y: Math.sin(a) * rr });
+  }
+  return pts;
+}
 
 const fl2Len = (x, y) => Math.hypot(x, y);
 const fl2Dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -1630,30 +1662,72 @@ function fl2Ship(type, owner, id, x, y, heading) {
 }
 function dealFlotta2(dealer, tally) {
   const ships = { A: [], B: [] };
-  const spread = FL2_R * 0.5; // fan the fleet across an arc on each side
-  FL2_FLEET.forEach((type, i) => {
-    const t = FL2_FLEET.length > 1 ? i / (FL2_FLEET.length - 1) - 0.5 : 0; // -0.5..0.5
-    const y = t * spread;
-    ships.A.push(fl2Ship(type, "A", `A${i}`, -FL2_R * 0.6, y, 0)); // A on the left, facing right
-    ships.B.push(fl2Ship(type, "B", `B${i}`, FL2_R * 0.6, y, Math.PI)); // B on the right, facing left
+  const defZone = { A: 3, B: 7 }; // a default octant per side, until the player picks
+  ["A", "B"].forEach((seat) => {
+    const pts = fl2PlaceInOctant(defZone[seat], FL2_FLEET.length);
+    FL2_FLEET.forEach((type, i) => {
+      const p = pts[i];
+      ships[seat].push(fl2Ship(type, seat, `${seat}${i}`, p.x, p.y, Math.atan2(-p.y, -p.x)));
+    });
   });
   return {
     R: FL2_R,
-    phase: "plan", // plan → (resolve) → plan …
+    phase: "deploy", // deploy → plan → (resolve) → plan …
     turn: 1,
     ships,
-    proj: [], // in-flight shots
-    orders: { A: null, B: null }, // this round's one-ship action per side (secret until resolve)
-    ping: { A: null, B: null }, // an active recon ping this round, per side
-    radar: false, // a sweep reveals all ships this round
-    boom: [], // detonations resolved this round, for the slam/fx
-    seq: 0, // deterministic id counter for shots
+    proj: [],
+    deploy: { A: null, B: null }, // each side's placement submission (zone + ship positions/paths)
+    orders: { A: null, B: null }, // once playing, this round's one-ship action per side
+    ping: { A: null, B: null },
+    radar: false,
+    boom: [],
+    seq: 0,
     tally: tally || { A: 0, B: 0 },
     win: null,
     done: false,
     matchDone: false,
     last: null,
   };
+}
+// Submit a whole fleet deployment: a chosen octant + a position (and optional
+// initial route) per ship. Positions are clamped legal on apply, so a bad submit
+// can't put a ship out of bounds. Held until both sides are in.
+function flotta2Deploy(gs, seat, placement) {
+  if (gs.phase !== "deploy" || gs.deploy[seat]) return null;
+  if (!placement || !FL2_ZONES[seat].includes(placement.zone)) return null;
+  const g = clone(gs);
+  g.deploy[seat] = placement;
+  return { g, quiet: true, ev: { t: "deploy" } };
+}
+const flotta2DeployReady = (gs) => !!(gs.deploy && gs.deploy.A && gs.deploy.B) && gs.phase === "deploy";
+// Both are in — plant the fleets and open play. Positions are validated per ship;
+// an illegal spot is nudged to the ring/octant so the board is always well-formed.
+function flotta2Begin(gs) {
+  if (!flotta2DeployReady(gs)) return null;
+  const g = clone(gs);
+  for (const seat of ["A", "B"]) {
+    const pl = g.deploy[seat];
+    for (const s of g.ships[seat]) {
+      const sp = (pl.ships && pl.ships[s.id]) || {};
+      let x = typeof sp.x === "number" ? sp.x : s.x;
+      let y = typeof sp.y === "number" ? sp.y : s.y;
+      if (!fl2InZone(seat, s.type, pl.zone, x, y)) {
+        // snap to a safe spot: mid-ring at the octant's centre (recon → own zone)
+        const oct = s.type === "recon" ? pl.zone : pl.zone;
+        const a = oct * (Math.PI / 4) + Math.PI / 8;
+        x = Math.cos(a) * FL2_R * 0.75;
+        y = Math.sin(a) * FL2_R * 0.75;
+      }
+      s.x = x;
+      s.y = y;
+      s.path = Array.isArray(sp.path) ? sp.path.map((p) => fl2Clamp(p.x, p.y)) : [];
+      if (s.path.length) s.heading = Math.atan2(s.path[0].y - y, s.path[0].x - x);
+    }
+  }
+  g.phase = "plan";
+  g.turn = 1;
+  g.last = { t: "begin" };
+  return { g, kind: "lay", ev: { t: "begin" } };
 }
 const fl2ShipById = (g, id) => g.ships.A.concat(g.ships.B).find((s) => s.id === id) || null;
 // Submit one side's single action for the round. No resolution here — that waits
@@ -1774,18 +1848,23 @@ function flotta2Resolve(gs) {
   const hit = g.boom.length > 0;
   return { g, kind: g.done ? "scopa" : hit ? "take" : "lay", ev: { t: "round", hit, radar: g.radar } };
 }
-// Which enemy ships this seat can see: within any of your ships' vision, inside
-// your active recon ping, or during a radar sweep. Your own are always visible.
+// Which enemy ships this seat can see. Surface contacts show within any of your
+// ships' vision, your active recon ping, or a radar sweep. Submarines are stealthy:
+// only your own subs and frigates (sonar) pick them up — never a warship, recon,
+// ping, or the radar sweep. Your own ships are always visible.
 function flotta2Seen(gs, seat) {
   const foe = seat === "A" ? "B" : "A";
   const seen = new Set();
-  if (gs.radar) {
-    for (const s of gs.ships[foe]) seen.add(s.id);
-    return seen;
+  const surfaceEyes = gs.ships[seat].map((s) => ({ x: s.x, y: s.y, r: FL2_UNITS[s.type].vision }));
+  if (gs.ping && gs.ping[seat]) surfaceEyes.push(gs.ping[seat]);
+  const sonar = gs.ships[seat].filter((s) => s.type === "sub" || s.type === "frigate");
+  for (const s of gs.ships[foe]) {
+    if (s.type === "sub") {
+      if (sonar.some((o) => fl2Dist(s, o) <= FL2_UNITS[o.type].vision)) seen.add(s.id);
+    } else if (gs.radar || surfaceEyes.some((e) => fl2Dist(s, e) <= e.r)) {
+      seen.add(s.id);
+    }
   }
-  const eyes = gs.ships[seat].map((s) => ({ x: s.x, y: s.y, r: FL2_UNITS[s.type].vision }));
-  if (gs.ping && gs.ping[seat]) eyes.push(gs.ping[seat]);
-  for (const s of gs.ships[foe]) if (eyes.some((e) => fl2Dist(s, e) <= e.r)) seen.add(s.id);
   return seen;
 }
 
