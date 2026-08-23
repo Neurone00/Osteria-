@@ -5120,7 +5120,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.2em", textTransform: "uppercase", color: T.ink30 }}>{gtag(gm)}</div>
           </div>
           <p style={{ color: T.ink60, fontSize: 12, lineHeight: 1.45, margin: 0, maxWidth: 260, overflow: "hidden" }}>{gline(gm)}</p>
-          {isMid && <div style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", color: T.ink30 }}>{L("Tocca per le regole", "Tap for the rules")} ↻</div>}
         </div>
       );
     };
