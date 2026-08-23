@@ -44,6 +44,7 @@ const EXPORTS = [
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
+  "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1091,6 +1092,105 @@ function playPrepared() {
   brisCensus(bg, "prepared briscola deal");
 }
 
+/* ── flotta 2 (gridless fleet duel) ─────────────────────────── */
+function fl2Census(g, label) {
+  for (const s of g.ships.A.concat(g.ships.B)) {
+    if (Math.hypot(s.x, s.y) > R.FL2_R + 1.5) fail(label, `ship ${s.id} left the sea (${s.x|0},${s.y|0})`);
+    if (s.hp <= 0) fail(label, `a dead ship ${s.id} is still afloat`);
+    if (s.hp > s.maxhp) fail(label, `ship ${s.id} healed past max`);
+  }
+  if (g.proj.length > 64) fail(label, "runaway projectile count");
+}
+const fl2RandPoint = () => {
+  const a = Math.random() * Math.PI * 2,
+    r = Math.sqrt(Math.random()) * R.FL2_R;
+  return { x: Math.cos(a) * r, y: Math.sin(a) * r };
+};
+function fl2SubmitRandom(g, seat) {
+  const mine = g.ships[seat];
+  if (!mine.length) return g;
+  const ship = mine[Math.floor(Math.random() * mine.length)];
+  const canFire = !!R.FL2_UNITS[ship.type].weapon;
+  const foe = g.ships[seat === "A" ? "B" : "A"];
+  const roll = Math.random();
+  let order;
+  if (roll < 0.45) order = { kind: "move", ship: ship.id, path: [fl2RandPoint(), fl2RandPoint()] };
+  else if (roll < 0.85 && canFire && foe.length) order = { kind: "fire", ship: ship.id, aim: { x: foe[0].x, y: foe[0].y } }; // aim at an enemy so combat actually happens
+  else order = { kind: "recon", ship: ship.id, at: fl2RandPoint() };
+  const r = R.flotta2Order(g, seat, order) || R.flotta2Order(g, seat, { kind: "move", ship: ship.id, path: [fl2RandPoint()] });
+  if (!r) return fail("flotta2", "could not submit any order for a live ship"), g;
+  return r.g;
+}
+function playFlotta2() {
+  let g = R.dealFlotta2("A", { A: 0, B: 0 });
+  fl2Census(g, "flotta2 deal");
+  let rounds = 0;
+  while (!g.done && rounds < 300) {
+    g = fl2SubmitRandom(g, "A");
+    g = fl2SubmitRandom(g, "B");
+    if (!R.flotta2Ready(g)) return fail("flotta2", "both orders in but round won't resolve"), rounds;
+    // deterministic: resolving the same state twice yields the identical next state
+    if (JSON.stringify(R.flotta2Resolve(g).g) !== JSON.stringify(R.flotta2Resolve(g).g)) return fail("flotta2", "resolution is not deterministic"), rounds;
+    g = R.flotta2Resolve(g).g;
+    fl2Census(g, "flotta2 round");
+    rounds++;
+  }
+  if (g.done && g.win && g.tally[g.win] !== 1) fail("flotta2", "winner's tally not bumped");
+  return rounds;
+}
+function flotta2RuleTests() {
+  // deal: one of each unit per side
+  let g = R.dealFlotta2("A", { A: 0, B: 0 });
+  if (g.ships.A.length !== R.FL2_FLEET.length || g.ships.B.length !== R.FL2_FLEET.length) fail("flotta2 rules", "each side should get the full fleet");
+  if (g.ships.A.map((s) => s.type).sort().join() !== R.FL2_FLEET.slice().sort().join()) fail("flotta2 rules", "fleet should be one of each unit");
+  // order validation
+  const recon = g.ships.A.find((s) => s.type === "recon");
+  if (R.flotta2Order(g, "A", { kind: "fire", ship: recon.id, aim: { x: 0, y: 0 } }) != null) fail("flotta2 rules", "recon has no weapon and can't fire");
+  if (R.flotta2Order(g, "A", { kind: "move", ship: g.ships.B[0].id, path: [] }) != null) fail("flotta2 rules", "can't order the enemy's ship");
+  const sub0 = g.ships.A.find((s) => s.type === "sub");
+  g = R.flotta2Order(g, "A", { kind: "move", ship: sub0.id, path: [{ x: 0, y: 0 }] }).g;
+  if (R.flotta2Order(g, "A", { kind: "move", ship: sub0.id, path: [] }) != null) fail("flotta2 rules", "only one action per side per round");
+
+  // a directed torpedo damages, then sinks, a held target — and wins the match
+  let h = R.dealFlotta2("A", { A: 0, B: 0 });
+  const sub = h.ships.A.find((s) => s.type === "sub");
+  const tgt = h.ships.B.find((s) => s.type === "warship");
+  h.ships.A = [sub];
+  h.ships.B = [tgt];
+  sub.x = 0; sub.y = 0; sub.path = [];
+  tgt.x = 120; tgt.y = 0; tgt.path = [];
+  const maxhp = tgt.maxhp;
+  let guard = 0;
+  while (!h.done && guard++ < 6) {
+    const aimAt = h.ships.B.length ? { x: h.ships.B[0].x, y: h.ships.B[0].y } : { x: 120, y: 0 };
+    h = R.flotta2Order(h, "A", { kind: "fire", ship: h.ships.A[0].id, aim: aimAt }).g;
+    h = R.flotta2Order(h, "B", { kind: "recon", ship: h.ships.B.length ? h.ships.B[0].id : tgt.id, at: { x: 0, y: 0 } }).g || h;
+    if (!R.flotta2Ready(h)) break;
+    h = R.flotta2Resolve(h).g;
+    if (guard === 1 && h.ships.B.length && h.ships.B[0].hp >= maxhp) fail("flotta2 rules", "a torpedo hit should damage the target");
+  }
+  if (!h.done || h.win !== "A") fail("flotta2 rules", "sinking the enemy fleet should win the match");
+  if (h.done && h.tally.A !== 1) fail("flotta2 rules", "the win should bump the tally");
+
+  // radar sweep flag lands every third round
+  let r2 = R.dealFlotta2("A", { A: 0, B: 0 });
+  const nudge = () => {
+    r2 = R.flotta2Order(r2, "A", { kind: "recon", ship: r2.ships.A[0].id, at: { x: 0, y: 0 } }).g;
+    r2 = R.flotta2Order(r2, "B", { kind: "recon", ship: r2.ships.B[0].id, at: { x: 0, y: 0 } }).g;
+    r2 = R.flotta2Resolve(r2).g;
+  };
+  nudge(); if (r2.radar) fail("flotta2 rules", "no sweep on round 2");
+  nudge(); if (!r2.radar) fail("flotta2 rules", "a radar sweep should land on round 3");
+
+  // fog of war: distant enemies unseen; a near one seen; radar reveals all
+  let v = R.dealFlotta2("A", { A: 0, B: 0 });
+  if (R.flotta2Seen(v, "A").size !== 0) fail("flotta2 rules", "the far enemy fleet should start unseen");
+  v.ships.B[0].x = v.ships.A[0].x + 40; v.ships.B[0].y = v.ships.A[0].y;
+  if (!R.flotta2Seen(v, "A").has(v.ships.B[0].id)) fail("flotta2 rules", "an enemy inside vision should be seen");
+  v.radar = true;
+  if (R.flotta2Seen(v, "A").size !== v.ships.B.length) fail("flotta2 rules", "a radar sweep should reveal the whole enemy fleet");
+}
+
 /* ── run ────────────────────────────────────────────────────── */
 const stat = (xs) => `${Math.min(...xs)}–${Math.max(...xs)}, median ${xs.slice().sort((a, b) => a - b)[xs.length >> 1]}`;
 
@@ -1113,6 +1213,7 @@ const runs = [
   ["diecimila, no last round + entry 500", () => playFarkle({ target: 2000, entry: true, lastRound: false })],
   ["bestiario (onitama)", () => playBestiario()],
   ["flotta (battaglia navale)", () => playFlotta()],
+  ["flotta 2 (fleet duel)", () => playFlotta2()],
   ["paroliere (boggle)", () => playParoliere()],
   ["scala 40", () => playScala()],
 ];
@@ -1164,6 +1265,11 @@ for (const [label, run] of runs) {
   const before = failures;
   flottaRuleTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"flotta rules".padEnd(44)} fleet, setup, fire/sink/win, move, repair`);
+}
+{
+  const before = failures;
+  flotta2RuleTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"flotta 2 rules".padEnd(44)} fleet, orders, coverage dmg, radar, fog, win`);
 }
 {
   const before = failures;

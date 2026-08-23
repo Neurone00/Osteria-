@@ -1541,6 +1541,231 @@ function flottaRepair(gs, seat, shipIndex, seg) {
   return { g, kind: "take", nojolt: true, ev: { t: "repair" } };
 }
 
+/* ── flotta 2 (gridless fleet duel) ────────────────────────────
+   A whole new game, not the grid Flotta. A big circular sea; each side has a
+   small fleet of distinct units on the SAME shared field. Play is simultaneous:
+   both players secretly submit ONE action for ONE ship each round, then the
+   round resolves together — every ship slides along its standing plan, every
+   in-flight shot advances, and blasts that land deal area damage. Weapons take
+   turns to arrive (torpedoes run straight, missiles lob to a point, frigate
+   barrages spread). Fog of war: you see enemies only within a ship's vision,
+   except every third round a radar sweep reveals the whole sea. Sink the enemy
+   fleet. Positions are continuous floats; resolution is fully deterministic
+   (no RNG), so both devices — or the sim — reach the identical next state. */
+const FL2_R = 1000; // sea radius; units are tens of units across → field is huge relative to ships
+const FL2_UNITS = {
+  warship: { speed: 55, vision: 175, hp: 4, size: 20, weapon: "missile" },
+  frigate: { speed: 80, vision: 150, hp: 3, size: 15, weapon: "barrage" },
+  sub: { speed: 95, vision: 125, hp: 2, size: 12, weapon: "torpedo" },
+  recon: { speed: 140, vision: 330, hp: 1, size: 10, weapon: null }, // eyes only
+};
+const FL2_FLEET = ["warship", "frigate", "sub", "recon"]; // one of each per side
+const FL2_WEAPON = {
+  // life = turns before the shot fizzles; aoe = blast radius. Damage scales with
+  // how deeply the ship sits in the blast: a dead-centre hit deals dmgMax, a
+  // glancing edge deals dmgMin. Heavier units hit harder (warship > frigate).
+  torpedo: { kind: "straight", speed: 150, aoe: 55, dmgMin: 1, dmgMax: 3, life: 8, range: 900 },
+  missile: { kind: "point", speed: 105, aoe: 95, dmgMin: 1.5, dmgMax: 4, life: 14, range: 700 }, // lobbed to a chosen point
+  barrage: { kind: "spread", speed: 125, aoe: 40, dmgMin: 0.4, dmgMax: 1.2, life: 6, range: 520, shots: 3, spread: 0.26 },
+};
+const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals all ships to both
+
+const fl2Len = (x, y) => Math.hypot(x, y);
+const fl2Dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+// keep a point inside the circular sea
+const fl2Clamp = (x, y) => {
+  const d = fl2Len(x, y);
+  if (d <= FL2_R) return { x, y };
+  const k = FL2_R / d;
+  return { x: x * k, y: y * k };
+};
+// advance a ship up to `dist` along its remaining planned path, trimming what it covers
+function fl2Advance(ship, dist) {
+  let left = dist;
+  let { x, y } = ship;
+  const path = (ship.path || []).slice();
+  while (left > 1e-6 && path.length) {
+    const t = path[0];
+    const dx = t.x - x,
+      dy = t.y - y;
+    const seg = Math.hypot(dx, dy);
+    if (seg <= left + 1e-6) {
+      x = t.x;
+      y = t.y;
+      left -= seg;
+      path.shift();
+    } else {
+      const k = left / seg;
+      x += dx * k;
+      y += dy * k;
+      ship.heading = Math.atan2(dy, dx);
+      left = 0;
+    }
+  }
+  if (path.length) ship.heading = Math.atan2(path[0].y - y, path[0].x - x);
+  const c = fl2Clamp(x, y);
+  ship.x = c.x;
+  ship.y = c.y;
+  ship.path = path;
+}
+function fl2Ship(type, owner, id, x, y, heading) {
+  const u = FL2_UNITS[type];
+  return { id, type, owner, x, y, heading, hp: u.hp, maxhp: u.hp, path: [] };
+}
+function dealFlotta2(dealer, tally) {
+  const ships = { A: [], B: [] };
+  const spread = FL2_R * 0.5; // fan the fleet across an arc on each side
+  FL2_FLEET.forEach((type, i) => {
+    const t = FL2_FLEET.length > 1 ? i / (FL2_FLEET.length - 1) - 0.5 : 0; // -0.5..0.5
+    const y = t * spread;
+    ships.A.push(fl2Ship(type, "A", `A${i}`, -FL2_R * 0.6, y, 0)); // A on the left, facing right
+    ships.B.push(fl2Ship(type, "B", `B${i}`, FL2_R * 0.6, y, Math.PI)); // B on the right, facing left
+  });
+  return {
+    R: FL2_R,
+    phase: "plan", // plan → (resolve) → plan …
+    turn: 1,
+    ships,
+    proj: [], // in-flight shots
+    orders: { A: null, B: null }, // this round's one-ship action per side (secret until resolve)
+    ping: { A: null, B: null }, // an active recon ping this round, per side
+    radar: false, // a sweep reveals all ships this round
+    boom: [], // detonations resolved this round, for the slam/fx
+    seq: 0, // deterministic id counter for shots
+    tally: tally || { A: 0, B: 0 },
+    win: null,
+    done: false,
+    matchDone: false,
+    last: null,
+  };
+}
+const fl2ShipById = (g, id) => g.ships.A.concat(g.ships.B).find((s) => s.id === id) || null;
+// Submit one side's single action for the round. No resolution here — that waits
+// until both are in, so exactly one writer (the host) resolves the pair.
+function flotta2Order(gs, seat, order) {
+  if (gs.phase !== "plan" || gs.done || gs.orders[seat]) return null;
+  if (!order || !order.ship) return null;
+  const ship = fl2ShipById(gs, order.ship);
+  if (!ship || ship.owner !== seat) return null;
+  if (order.kind === "fire" && !FL2_UNITS[ship.type].weapon) return null; // recon has no gun
+  const g = clone(gs);
+  g.orders[seat] = order;
+  return { g, quiet: true, ev: { t: "order" } };
+}
+const flotta2Ready = (gs) => !!(gs.orders.A && gs.orders.B) && gs.phase === "plan" && !gs.done;
+// Spawn the shot(s) for a fire order.
+function fl2Spawn(g, ship, aim) {
+  const w = FL2_WEAPON[FL2_UNITS[ship.type].weapon];
+  const dx = aim.x - ship.x,
+    dy = aim.y - ship.y;
+  const base = Math.atan2(dy, dx);
+  const mk = (ang) => {
+    const id = `p${g.seq++}`;
+    return { id, owner: ship.owner, weapon: FL2_UNITS[ship.type].weapon, x: ship.x, y: ship.y, ang, life: w.life, kind: w.kind, target: w.kind === "point" ? { x: aim.x, y: aim.y } : null, travelled: 0 };
+  };
+  if (w.kind === "spread") for (let i = 0; i < w.shots; i++) g.proj.push(mk(base + (i - (w.shots - 1) / 2) * w.spread));
+  else g.proj.push(mk(base));
+}
+// AoE hit at a point: every ship whose hull the blast overlaps takes damage
+// (friendly fire on), scaled by coverage — fully engulfed → dmgMax, just
+// clipped → dmgMin. A ship's hull is a disc of radius = its unit size.
+function fl2Blast(g, x, y, w) {
+  g.boom.push({ x, y, r: w.aoe });
+  for (const s of g.ships.A.concat(g.ships.B)) {
+    const shipR = FL2_UNITS[s.type].size;
+    const d = fl2Dist(s, { x, y });
+    if (d >= w.aoe + shipR) continue; // hull entirely outside the blast
+    const cover = Math.max(0, Math.min(1, (w.aoe + shipR - d) / (2 * shipR)));
+    s.hp -= w.dmgMin + (w.dmgMax - w.dmgMin) * cover;
+  }
+}
+// Resolve one simultaneous round from both submitted orders. Pure + deterministic.
+function flotta2Resolve(gs) {
+  if (!flotta2Ready(gs)) return null;
+  const g = clone(gs);
+  g.boom = [];
+  g.ping = { A: null, B: null };
+  // 1) apply both orders
+  for (const seat of ["A", "B"]) {
+    const o = g.orders[seat];
+    const ship = fl2ShipById(g, o.ship);
+    if (!ship || ship.hp <= 0) continue;
+    if (o.kind === "move") ship.path = (o.path || []).map((p) => fl2Clamp(p.x, p.y));
+    else if (o.kind === "fire" && o.aim) fl2Spawn(g, ship, o.aim);
+    else if (o.kind === "recon" && o.at) g.ping[seat] = { x: o.at.x, y: o.at.y, r: FL2_UNITS[ship.type].vision };
+  }
+  // 2) ships slide along their standing plans
+  for (const s of g.ships.A.concat(g.ships.B)) if (s.hp > 0) fl2Advance(s, FL2_UNITS[s.type].speed);
+  // 3) shots advance, then detonate on contact / arrival / expiry
+  const survivors = [];
+  for (const p of g.proj) {
+    const w = FL2_WEAPON[p.weapon];
+    let step = w.speed;
+    let detonated = false;
+    // sub-step so a fast shot can't tunnel through a small ship
+    const STEPS = 4;
+    for (let k = 0; k < STEPS && !detonated; k++) {
+      const adv = step / STEPS;
+      p.x += Math.cos(p.ang) * adv;
+      p.y += Math.sin(p.ang) * adv;
+      p.travelled += adv;
+      if (p.kind === "point" && p.target && fl2Dist(p, p.target) <= adv) {
+        fl2Blast(g, p.target.x, p.target.y, w);
+        detonated = true;
+        break;
+      }
+      const foe = g.ships[p.owner === "A" ? "B" : "A"];
+      for (const s of foe) {
+        if (s.hp > 0 && fl2Dist(p, s) <= FL2_UNITS[s.type].size + 3) {
+          fl2Blast(g, p.x, p.y, w);
+          detonated = true;
+          break;
+        }
+      }
+      if (fl2Len(p.x, p.y) > FL2_R) {
+        detonated = true; // runs off the sea and fizzles (no blast)
+        break;
+      }
+    }
+    p.life -= 1;
+    if (!detonated && p.life > 0 && p.travelled < w.range) survivors.push(p);
+  }
+  g.proj = survivors;
+  // 4) clear the dead
+  g.ships.A = g.ships.A.filter((s) => s.hp > 0);
+  g.ships.B = g.ships.B.filter((s) => s.hp > 0);
+  // 5) advance the clock; radar sweep every Nth round
+  g.turn += 1;
+  g.radar = g.turn % FL2_RADAR_EVERY === 0;
+  // 6) outcome
+  const aDead = g.ships.A.length === 0,
+    bDead = g.ships.B.length === 0;
+  if (aDead || bDead) {
+    g.done = true;
+    g.matchDone = true;
+    g.win = aDead && bDead ? null : aDead ? "B" : "A";
+    if (g.win) g.tally[g.win] += 1;
+  }
+  g.orders = { A: null, B: null };
+  g.last = { t: "round", turn: g.turn };
+  const hit = g.boom.length > 0;
+  return { g, kind: g.done ? "scopa" : hit ? "take" : "lay", ev: { t: "round", hit, radar: g.radar } };
+}
+// Which enemy ships this seat can see: within any of your ships' vision, inside
+// your active recon ping, or during a radar sweep. Your own are always visible.
+function flotta2Seen(gs, seat) {
+  const foe = seat === "A" ? "B" : "A";
+  const seen = new Set();
+  if (gs.radar) {
+    for (const s of gs.ships[foe]) seen.add(s.id);
+    return seen;
+  }
+  const eyes = gs.ships[seat].map((s) => ({ x: s.x, y: s.y, r: FL2_UNITS[s.type].vision }));
+  if (gs.ping && gs.ping[seat]) eyes.push(gs.ping[seat]);
+  for (const s of gs.ships[foe]) if (eyes.some((e) => fl2Dist(s, e) <= e.r)) seen.add(s.id);
+  return seen;
+}
+
 /* ── il paroliere (boggle) ─────────────────────────────────────
    The Italian Boggle: a 4×4 tray of letter dice, three minutes, both players
    hunt words at once. A word must be ≥3 letters and trace a path through
