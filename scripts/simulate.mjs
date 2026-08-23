@@ -45,7 +45,7 @@ const EXPORTS = [
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
-  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS",
+  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1115,7 +1115,8 @@ function fl2SubmitRandom(g, seat) {
   const foe = g.ships[seat === "A" ? "B" : "A"];
   const roll = Math.random();
   let order;
-  if (roll < 0.45) order = { kind: "move", ship: ship.id, path: [fl2RandPoint(), fl2RandPoint()] };
+  if (ship.type === "recon" && roll < 0.2) order = { kind: "scan", ship: ship.id, dir: { dx: Math.random() * 2 - 1, dy: Math.random() * 2 - 1 } };
+  else if (roll < 0.45) order = { kind: "move", ship: ship.id, path: [fl2RandPoint(), fl2RandPoint()] };
   else if (roll < 0.85 && canFire && foe.length) order = { kind: "fire", ship: ship.id, aim: { x: foe[0].x, y: foe[0].y } }; // aim at an enemy so combat actually happens
   else order = { kind: "recon", ship: ship.id, at: fl2RandPoint() };
   const r = R.flotta2Order(g, seat, order) || R.flotta2Order(g, seat, { kind: "move", ship: ship.id, path: [fl2RandPoint()] });
@@ -1298,6 +1299,65 @@ function flotta2RuleTests() {
   }
   if (!tc.done) fail("flotta2 rules", "the match should end at the turn cap");
   if (tc.turn > R.FL2_MAX_TURNS + 1) fail("flotta2 rules", "the match ran past the turn cap");
+
+  // a firing ship holds station: its standing route is not consumed that round
+  let hs = fl2Begun();
+  const suHS = hs.ships.A.find((s) => s.type === "sub");
+  suHS.x = 0; suHS.y = 0; suHS.path = [{ x: 400, y: 0 }]; // a standing route east
+  hs = R.flotta2Order(hs, "A", { kind: "fire", ship: suHS.id, aim: { x: 0, y: 200 } }).g;
+  hs = R.flotta2Order(hs, "B", { kind: "recon", ship: hs.ships.B[0].id, at: { x: 0, y: 0 } }).g;
+  hs = R.flotta2Resolve(hs).g;
+  const suHS2 = hs.ships.A.find((s) => s.id === suHS.id);
+  if (suHS2 && Math.hypot(suHS2.x, suHS2.y) > 1) fail("flotta2 rules", "a firing ship should hold station, not follow its route");
+
+  // a point shot aimed past its reach is clamped to the weapon's range
+  let sp = fl2Begun();
+  const warSp = sp.ships.A.find((s) => s.type === "warship");
+  warSp.x = 0; warSp.y = 0;
+  R.fl2Spawn(sp, warSp, { x: R.FL2_R * 5, y: 0 });
+  const shot = sp.proj[sp.proj.length - 1];
+  if (Math.hypot(shot.target.x, shot.target.y) > R.FL2_WEAPON.missile.range + 1) fail("flotta2 rules", "a point shot's target should be clamped to its range");
+
+  // a blast that bites metal records a hit confirmation
+  let hc = fl2Begun();
+  const suHC = hc.ships.A.find((s) => s.type === "sub");
+  const tgHC = hc.ships.B.find((s) => s.type === "warship");
+  hc.ships.A = [suHC]; hc.ships.B = [tgHC];
+  suHC.x = 0; suHC.y = 0; suHC.path = []; tgHC.x = 100; tgHC.y = 0; tgHC.path = [];
+  hc = R.flotta2Order(hc, "A", { kind: "fire", ship: suHC.id, aim: { x: 100, y: 0 } }).g;
+  hc = R.flotta2Order(hc, "B", { kind: "move", ship: tgHC.id, path: [] }).g;
+  hc = R.flotta2Resolve(hc).g;
+  if (!(hc.hits && hc.hits.length)) fail("flotta2 rules", "a damaging blast should record a hit confirmation");
+
+  // the drone scan: recon-only, reveals a distant surface ship along a thin
+  // far-reaching beam, persists until re-commanded, then clears
+  let sc = fl2Begun();
+  if (R.flotta2Order(sc, "A", { kind: "scan", ship: sc.ships.A.find((s) => s.type === "warship").id, dir: { dx: 1, dy: 0 } }) != null) fail("flotta2 rules", "only the drone can scan");
+  const recSc = sc.ships.A.find((s) => s.type === "recon");
+  const eWarSc = sc.ships.B.find((s) => s.type === "warship");
+  recSc.x = 0; recSc.y = 0; recSc.path = [];
+  sc.ships.A.forEach((s) => { if (s.type !== "recon") { s.x = -800; s.y = 0; s.path = []; } });
+  sc.ships.B.forEach((s) => { if (s !== eWarSc) { s.x = -900; s.y = 200; s.path = []; } });
+  const reach = R.FL2_UNITS.recon.vision;
+  eWarSc.x = reach * 1.5; eWarSc.y = 0; eWarSc.path = []; // beyond vision, within 2× scan reach
+  if (R.flotta2Seen(sc, "A").has(eWarSc.id)) fail("flotta2 rules", "an enemy beyond vision should be unseen before scanning");
+  sc = R.flotta2Order(sc, "A", { kind: "scan", ship: recSc.id, dir: { dx: 1, dy: 0 } }).g;
+  sc = R.flotta2Order(sc, "B", { kind: "move", ship: eWarSc.id, path: [] }).g;
+  sc = R.flotta2Resolve(sc).g;
+  const recSc2 = sc.ships.A.find((s) => s.type === "recon");
+  if (!recSc2 || !recSc2.scan) fail("flotta2 rules", "the scan bearing should be trained on the drone");
+  if (!R.flotta2Seen(sc, "A").has(eWarSc.id)) fail("flotta2 rules", "the drone scan should reveal a distant surface ship along its beam");
+  // persists a round when the drone is not re-commanded
+  sc = R.flotta2Order(sc, "A", { kind: "move", ship: sc.ships.A.find((s) => s.type !== "recon").id, path: [] }).g;
+  sc = R.flotta2Order(sc, "B", { kind: "move", ship: eWarSc.id, path: [] }).g;
+  sc = R.flotta2Resolve(sc).g;
+  if (!R.flotta2Seen(sc, "A").has(eWarSc.id)) fail("flotta2 rules", "the scan should stay trained until the drone is re-commanded");
+  // a fresh command to the drone clears the scan
+  sc = R.flotta2Order(sc, "A", { kind: "move", ship: sc.ships.A.find((s) => s.type === "recon").id, path: [] }).g;
+  sc = R.flotta2Order(sc, "B", { kind: "move", ship: eWarSc.id, path: [] }).g;
+  sc = R.flotta2Resolve(sc).g;
+  const recSc3 = sc.ships.A.find((s) => s.type === "recon");
+  if (recSc3 && recSc3.scan) fail("flotta2 rules", "a new drone command should clear the scan");
 }
 
 /* ── run ────────────────────────────────────────────────────── */
