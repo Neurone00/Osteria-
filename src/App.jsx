@@ -1124,6 +1124,8 @@ function dealFarkle(dealer, tally, opts) {
     dice: [], // the current live roll, awaiting the player's pick
     live: 6, // dice still to roll this segment
     kept: [], // dice set aside this turn (values), for display
+    pick: [], // the active player's live selection (indices), so the other screen sees it
+    lastTurn: null, // { seat, pts, farkle } — last turn's score change, shown as a delta
     turnScore: 0, // points banked-aside this turn, not yet safe
     rolled: false, // are `dice` a fresh roll waiting to be picked from?
     farkle: false, // the last roll busted (drives the reveal)
@@ -1146,6 +1148,7 @@ function dealFarkle(dealer, tally, opts) {
 function farkleEndTurn(g, seat) {
   g.turnScore = 0;
   g.kept = [];
+  g.pick = [];
   g.live = 6;
   g.rolled = false;
   g.hot = false;
@@ -1191,9 +1194,11 @@ function farkleRoll(gs, seat) {
   g.rolled = true;
   g.hot = false;
   g.farkle = false;
+  g.pick = [];
   if (!farkleHasScore(g.dice)) {
     g.farkle = true;
     g.turnScore = 0;
+    g.lastTurn = { seat, pts: 0, farkle: true };
     farkleEndTurn(g, seat);
     return { g, kind: "lay", nojolt: true, ev: { t: "farkle" } };
   }
@@ -1206,9 +1211,11 @@ function farkleRollOn(gs, seat, sel) {
   g.dice = rollN(g.live);
   g.rolled = true;
   g.farkle = false;
+  g.pick = [];
   if (!farkleHasScore(g.dice)) {
     g.farkle = true;
     g.turnScore = 0;
+    g.lastTurn = { seat, pts: 0, farkle: true };
     farkleEndTurn(g, seat);
     return { g, kind: "lay", nojolt: true, ev: { t: "farkle" } };
   }
@@ -1223,8 +1230,21 @@ function farkleBank(gs, seat, sel) {
   if (g.entry && g.scores[seat] === 0 && gained < g.entry) return null; // not enough to open
   g.scores[seat] += gained;
   if (g.trigger == null && g.scores[seat] >= g.target) g.trigger = seat; // opens the last round
+  g.lastTurn = { seat, pts: gained, farkle: false };
   farkleEndTurn(g, seat);
   return { g, kind: "scopa", ev: { t: "bank", pts: gained } };
+}
+// Broadcast the active player's in-progress dice pick so the other screen can
+// watch it live. A quiet write (no slam, no reveal) — only the active player,
+// only while a fresh roll is on the table.
+function farkleSelect(gs, seat, sel) {
+  if (gs.turn !== seat || gs.done || !gs.rolled) return null;
+  const pick = (sel || []).filter((i) => Number.isInteger(i) && i >= 0 && i < gs.dice.length);
+  const cur = gs.pick || [];
+  if (cur.length === pick.length && cur.every((v, i) => v === pick[i])) return null; // no change
+  const g = clone(gs);
+  g.pick = pick;
+  return { g, quiet: true, nojolt: true, ev: { t: "pick" } };
 }
 
 /* ── bestiario (onitama) ───────────────────────────────────────
@@ -8458,9 +8478,15 @@ function Farkle({ room, gs, seat, mine, commit }) {
   const valid = preview != null && preview > 0;
   const wouldBank = gs.turnScore + (valid ? preview : 0);
   const opensOk = !gs.entry || gs.scores[seat] > 0 || wouldBank >= gs.entry;
+  // what the opponent is picking right now (live off shared state), so this screen
+  // can show their choice and its running value as they make it
+  const oppPick = !mine && gs.rolled ? gs.pick || [] : [];
+  const oppPreview = oppPick.length ? farkleSelectionScore(oppPick.map((i) => gs.dice[i])) : null;
   const toggle = (i) => {
     if (!mine || !gs.rolled || gs.done) return;
-    setSel((s) => (s.includes(i) ? s.filter((x) => x !== i) : s.concat(i)));
+    const ns = sel.includes(i) ? sel.filter((x) => x !== i) : sel.concat(i);
+    setSel(ns);
+    commit(farkleSelect(gs, seat, ns)); // broadcast the live pick to the other screen
   };
 
   // farkle bust + hot-dice flashes, shared off the anim so both screens react
@@ -8482,9 +8508,32 @@ function Farkle({ room, gs, seat, mine, commit }) {
 
   const pct = Math.min(1, gs.scores[seat] / gs.target);
   const oppPct = Math.min(1, gs.scores[opp] / gs.target);
+  // last turn's swing, shown beside a player's name; keyed so it re-animates
+  const renderDelta = (d) =>
+    d ? (
+      <span key={`${d.seat}:${d.pts}:${d.farkle}`} className="fade" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 12, color: d.farkle ? "#B23A2E" : "#3B7A3B" }}>
+        {d.farkle ? "Farkle" : `+${d.pts}`}
+      </span>
+    ) : null;
+  // a name + progress bar; the fill eases so score changes glide, and the active
+  // player's name glows softly. Reconciled by position (plain call), so no remount.
+  const renderBar = (nm, score, p, color, delta, active) => (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className={active ? "turn" : ""} style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{nm}</span>
+          {renderDelta(delta)}
+        </div>
+        <Micro>{score} / {gs.target}</Micro>
+      </div>
+      <div style={{ height: 4, background: T.line, borderRadius: 2, marginTop: 6, overflow: "hidden" }}>
+        <div style={{ width: `${p * 100}%`, height: "100%", background: color, transition: "width 420ms cubic-bezier(.2,.8,.3,1)" }} />
+      </div>
+    </div>
+  );
 
   return (
-    <div style={{ paddingBottom: 56 }}>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
       {flash && (
         <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
           <div key={flash.id} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(48px, 16vw, 118px)", color: flash.kind === "farkle" ? "#B23A2E" : "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap" }}>
@@ -8493,22 +8542,101 @@ function Farkle({ room, gs, seat, mine, commit }) {
         </div>
       )}
 
-      {/* opponent + target progress */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
-        <Micro>
-          {gs.scores[opp]} / {gs.target}
-        </Micro>
-      </div>
-      <div style={{ height: 4, background: T.line, borderRadius: 2, marginTop: 6, overflow: "hidden" }}>
-        <div style={{ width: `${oppPct * 100}%`, height: "100%", background: TSIDE[opp] }} />
+      {/* opponent bar, at the top — with their last-turn swing and turn glow */}
+      {renderBar(who(room, opp), gs.scores[opp], oppPct, TSIDE[opp], gs.lastTurn && gs.lastTurn.seat === opp ? gs.lastTurn : null, gs.turn === opp && !gs.done)}
+
+      {/* play area — grows and stays centred; fixed slots keep it from jumping */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 12 }}>
+        {/* set aside (reserved height) */}
+        <div style={{ minHeight: 58, display: "flex", flexDirection: "column", justifyContent: "center", textAlign: "center" }}>
+          {gs.kept.length > 0 && (
+            <>
+              <Micro style={{ marginBottom: 6 }}>{L("messi da parte", "set aside")}</Micro>
+              <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
+                {gs.kept.map((d, i) => (
+                  <Die key={i} v={d} size={30} hi />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* the live roll (reserved height) */}
+        <div style={{ minHeight: 64, display: "flex", gap: 8, justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
+          {gs.rolled && gs.dice.length ? (
+            gs.dice.map((d, i) => {
+              const on = mine ? sel.includes(i) : oppPick.includes(i); // show the other player's live pick too
+              return (
+                <div key={i} style={{ transform: on ? "translateY(-7px)" : "none", transition: "transform 150ms ease" }}>
+                  <Die v={d} size={48} hi={on} roll={!!d} onClick={mine ? () => toggle(i) : undefined} />
+                </div>
+              );
+            })
+          ) : (
+            <Micro>{gs.farkle ? L("niente punti — turno perso", "no points — turn lost") : L("sei dadi pronti", "six dice ready")}</Micro>
+          )}
+        </div>
+
+        {/* this turn's running pot (reserved height) */}
+        <div style={{ textAlign: "center", minHeight: 30 }}>
+          <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink }}>{gs.turnScore}</span>
+          <Micro style={{ display: "inline", marginLeft: 8 }}>
+            {L("in gioco", "in play")}
+            {mine ? (valid ? ` · +${preview}` : "") : oppPreview ? ` · +${oppPreview}` : ""}
+          </Micro>
+        </div>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
-        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <Ico n="help" s={15} /> {L("come si conta", "how scoring works")}
-        </button>
+      {/* last-round note (reserved height, no layout jump) */}
+      <div style={{ minHeight: 18, textAlign: "center" }}>
+        {gs.trigger != null && !gs.done && (
+          <Micro style={{ display: "block", color: "#B8862B" }}>
+            {gs.trigger === seat
+              ? L("Sei al traguardo — un ultimo giro all’altro", "You hit the target — one last turn for the other")
+              : L("Ultimo giro: supera il punteggio per vincere", "Last turn: beat the score to win")}
+          </Micro>
+        )}
       </div>
+
+      {/* your bar + controls, anchored to the bottom */}
+      <div style={{ marginTop: 12 }}>
+        {renderBar(who(room, seat), gs.scores[seat], pct, TSIDE[seat], gs.lastTurn && gs.lastTurn.seat === seat ? gs.lastTurn : null, mine && !gs.done)}
+        <div style={{ marginTop: 12, minHeight: 78, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+          {!mine || gs.done ? (
+            <Micro style={{ textAlign: "center", display: "block" }}>{gs.done ? "" : `${L("tocca a", "over to")} ${who(room, opp)}`}</Micro>
+          ) : !gs.rolled ? (
+            <Button full onClick={() => commit(farkleRoll(gs, seat))}>
+              {L("Lancia i dadi", "Roll the dice")}
+            </Button>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Button full kind="line" disabled={!valid} onClick={() => valid && commit(farkleRollOn(gs, seat, sel))}>
+                  {L("Rilancia", "Roll on")}
+                </Button>
+                <Button full disabled={!valid || !opensOk} onClick={() => valid && opensOk && commit(farkleBank(gs, seat, sel))}>
+                  {L("Incassa", "Bank")} {wouldBank}
+                </Button>
+              </div>
+              <Micro style={{ textAlign: "center", marginTop: 8, minHeight: 14 }}>
+                {!sel.length
+                  ? L("scegli i dadi che valgono", "pick the dice that score")
+                  : !valid
+                  ? L("selezione non valida", "that pick doesn’t score")
+                  : !opensOk
+                  ? L("servono 500 per aprire", "you need 500 to open")
+                  : ""}
+              </Micro>
+            </>
+          )}
+        </div>
+        <div style={{ textAlign: "center", marginTop: 6 }}>
+          <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink60, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+            <Ico n="help" s={13} /> {L("come si conta", "how scoring works")}
+          </button>
+        </div>
+      </div>
+
       {showHelp && (
         <Sheet title={L("Come si contano i punti", "How scoring works")} onClose={() => setShowHelp(false)}>
           <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink80 || T.ink }}>
@@ -8520,94 +8648,6 @@ function Farkle({ room, gs, seat, mine, commit }) {
             ))}
           </div>
         </Sheet>
-      )}
-
-      {/* set-aside dice this turn */}
-      {gs.kept.length > 0 && (
-        <div style={{ marginTop: 16, textAlign: "center" }}>
-          <Micro style={{ marginBottom: 6 }}>{L("messi da parte", "set aside")}</Micro>
-          <div style={{ display: "flex", gap: 6, justifyContent: "center", flexWrap: "wrap" }}>
-            {gs.kept.map((d, i) => (
-              <Die key={i} v={d} size={34} hi />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* the live roll */}
-      <div style={{ margin: "18px 0 6px", textAlign: "center" }}>
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", minHeight: 58, alignItems: "flex-end", flexWrap: "wrap" }}>
-          {gs.rolled && gs.dice.length ? (
-            gs.dice.map((d, i) => {
-              const on = sel.includes(i);
-              return (
-                <div key={i} style={{ transform: on ? "translateY(-7px)" : "none", transition: "transform 150ms ease" }}>
-                  <Die v={d} size={48} hi={on} roll={!!d} onClick={mine ? () => toggle(i) : undefined} />
-                </div>
-              );
-            })
-          ) : (
-            <Micro>{gs.farkle ? L("niente punti — turno perso", "no points — turn lost") : L("sei dadi pronti", "six dice ready")}</Micro>
-          )}
-        </div>
-      </div>
-
-      {/* this turn's running pot */}
-      <div style={{ textAlign: "center", marginTop: 6 }}>
-        <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 20, color: T.ink }}>{gs.turnScore}</span>
-        <Micro style={{ display: "inline", marginLeft: 8 }}>
-          {L("in gioco", "in play")}
-          {valid ? ` · +${preview}` : ""}
-        </Micro>
-      </div>
-
-      {/* controls */}
-      <div style={{ marginTop: 12 }}>
-        {!mine || gs.done ? (
-          <Micro style={{ textAlign: "center", display: "block" }}>{gs.done ? "" : `${L("tocca a", "over to")} ${who(room, opp)}`}</Micro>
-        ) : !gs.rolled ? (
-          <Button full onClick={() => commit(farkleRoll(gs, seat))}>
-            {L("Lancia i dadi", "Roll the dice")}
-          </Button>
-        ) : (
-          <>
-            <div style={{ display: "flex", gap: 8 }}>
-              <Button full kind="line" disabled={!valid} onClick={() => valid && commit(farkleRollOn(gs, seat, sel))}>
-                {L("Rilancia", "Roll on")}
-              </Button>
-              <Button full disabled={!valid || !opensOk} onClick={() => valid && opensOk && commit(farkleBank(gs, seat, sel))}>
-                {L("Incassa", "Bank")} {wouldBank}
-              </Button>
-            </div>
-            <Micro style={{ textAlign: "center", marginTop: 8, minHeight: 14 }}>
-              {!sel.length
-                ? L("scegli i dadi che valgono", "pick the dice that score")
-                : !valid
-                ? L("selezione non valida", "that pick doesn’t score")
-                : !opensOk
-                ? L("servono 500 per aprire", "you need 500 to open")
-                : ""}
-            </Micro>
-          </>
-        )}
-      </div>
-
-      {/* your score */}
-      <div style={{ marginTop: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, seat)}</div>
-        <Micro>
-          {gs.scores[seat]} / {gs.target}
-        </Micro>
-      </div>
-      <div style={{ height: 4, background: T.line, borderRadius: 2, marginTop: 6, overflow: "hidden" }}>
-        <div style={{ width: `${pct * 100}%`, height: "100%", background: TSIDE[seat] }} />
-      </div>
-      {gs.trigger != null && !gs.done && (
-        <Micro style={{ textAlign: "center", display: "block", marginTop: 10, color: "#B8862B" }}>
-          {gs.trigger === seat
-            ? L("Sei al traguardo — un ultimo giro all’altro", "You hit the target — one last turn for the other")
-            : L("Ultimo giro: supera il punteggio per vincere", "Last turn: beat the score to win")}
-        </Micro>
       )}
     </div>
   );
