@@ -242,8 +242,11 @@ const GAMES = {
     en: { tag: "words in three minutes", line: "Sixteen letters, three minutes. Find as many words as you can by linking neighbouring letters. Words you both find cancel out — the rarest finds win." },
     instant: true, // letter-dice grid — no card deck or shuffle ritual
     cat: "dadi",
-    opts: [{ k: "secs", label: "Durata", cycle: [120, 180, 240], hint: "Secondi per ogni partita", le: "Round length", he: "Seconds per round" }],
-    def: { secs: 180 },
+    opts: [
+      { k: "secs", label: "Durata", cycle: [120, 180, 240], hint: "Secondi per ogni partita", le: "Round length", he: "Seconds per round" },
+      { k: "lingua", label: "Lingua", cycle: ["IT", "EN"], hint: "Lingua delle parole e del dizionario", le: "Language", he: "Language of the words and the dictionary" },
+    ],
+    def: { secs: 180, lingua: "IT" },
   },
 };
 // game meta + option labels/hints in the current language
@@ -1542,26 +1545,35 @@ function flottaRepair(gs, seat, shipIndex, seg) {
    never race. */
 const PAROL_N = 4;
 const PAROL_SECS = 180;
-const PAROL_KEYS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "L", "M", "N", "O", "P", "QU", "R", "S", "T", "U", "V", "Z"];
-// Weighted Italian letter bag (no accents, no J/K/W/X/Y). Q is drawn then shown
-// as the "QU" die.
-const PAROL_BAG = (() => {
-  const w = { A: 12, E: 12, I: 11, O: 10, U: 4, N: 7, L: 7, R: 7, T: 6, S: 6, C: 5, D: 4, M: 4, P: 3, B: 2, G: 2, V: 2, F: 2, H: 2, Z: 2, Q: 2 };
+// The keyboard letters per language. Italian drops J/K/W/X/Y; both keep the "QU"
+// die (Q always rides with u) and no accents.
+const PAROL_KEYS = {
+  IT: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "L", "M", "N", "O", "P", "QU", "R", "S", "T", "U", "V", "Z"],
+  EN: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "QU", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"],
+};
+const buildBag = (w) => {
   const bag = [];
   for (const k in w) for (let i = 0; i < w[k]; i++) bag.push(k);
   return bag;
-})();
-function parolBoard() {
+};
+// Weighted letter bags. Q is drawn then shown as the "QU" die.
+const PAROL_BAG = {
+  IT: buildBag({ A: 12, E: 12, I: 11, O: 10, U: 4, N: 7, L: 7, R: 7, T: 6, S: 6, C: 5, D: 4, M: 4, P: 3, B: 2, G: 2, V: 2, F: 2, H: 2, Z: 2, Q: 2 }),
+  EN: buildBag({ E: 12, A: 9, I: 9, O: 8, U: 4, N: 6, R: 6, T: 6, L: 4, S: 4, D: 4, G: 3, B: 2, C: 2, M: 2, P: 2, F: 2, H: 2, V: 2, W: 2, Y: 2, K: 1, J: 1, X: 1, Q: 1, Z: 1 }),
+};
+const parolLang = (l) => (l === "EN" ? "EN" : "IT");
+function parolBoard(lang) {
+  const bag = PAROL_BAG[parolLang(lang)];
   for (let tries = 0; tries < 60; tries++) {
     const cells = [];
     for (let i = 0; i < PAROL_N * PAROL_N; i++) {
-      const c = PAROL_BAG[Math.floor(Math.random() * PAROL_BAG.length)];
+      const c = bag[Math.floor(Math.random() * bag.length)];
       cells.push(c === "Q" ? "QU" : c);
     }
     const vowels = cells.filter((c) => /[AEIOU]/.test(c)).length; // QU counts (has U)
     if (vowels >= 5 && vowels <= 10) return cells;
   }
-  return PAROL_BAG.slice(0, 16).map((c) => (c === "Q" ? "QU" : c));
+  return bag.slice(0, 16).map((c) => (c === "Q" ? "QU" : c));
 }
 const parolNeighbors = (cell) => {
   const x = cell % PAROL_N,
@@ -1597,9 +1609,11 @@ function parolTrace(board, word) {
 }
 const parolPoints = (w) => (w.length <= 4 ? 1 : w.length === 5 ? 2 : w.length === 6 ? 3 : w.length === 7 ? 5 : 11);
 function dealParoliere(dealer, tally, opts) {
+  const lang = parolLang(opts?.lingua);
   return {
     phase: "ready", // ready → play → done
-    board: parolBoard(),
+    lang, // "IT" | "EN" — picks the board's letters, the keyboard and the dictionary
+    board: parolBoard(lang),
     secs: opts?.secs || PAROL_SECS,
     ready: { A: false, B: false },
     startedAt: null, // wall-clock epoch when play began — a fallback for a mid-game reload only
@@ -8513,21 +8527,68 @@ function Flotta({ room, gs, seat, mine, commit }) {
 }
 
 /* ── il paroliere (boggle) ── */
-const PAROL_KB = [
-  ["A", "B", "C", "D", "E", "F", "G"],
-  ["H", "I", "L", "M", "N", "O", "P"],
-  ["QU", "R", "S", "T", "U", "V", "Z"],
-];
+// Open-source wordlists, fetched from a CDN the first time a language is played
+// (not bundled — kept out of the one-file app). We only check a word is real; a
+// tampered client could still cheat, same friends-not-tournaments trust as the
+// hidden hands. Accents are stripped so they match the accent-free board.
+const PAROL_DICT_URL = {
+  IT: "https://cdn.jsdelivr.net/npm/an-array-of-italian-words@1.2.0/words.json",
+  EN: "https://cdn.jsdelivr.net/npm/an-array-of-english-words@2.0.0/index.json",
+};
+const parolDictCache = {}; // lang → Set (kept for the whole session once loaded)
+async function parolLoadDict(lang) {
+  lang = parolLang(lang);
+  if (parolDictCache[lang]) return parolDictCache[lang];
+  const res = await fetch(PAROL_DICT_URL[lang]);
+  if (!res.ok) throw new Error("dict " + res.status);
+  const list = await res.json(); // a JSON array of lowercase words
+  const set = new Set();
+  for (const raw of list) {
+    const w = String(raw)
+      .toUpperCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Z]/g, "");
+    if (w.length >= 3) set.add(w);
+  }
+  parolDictCache[lang] = set;
+  return set;
+}
+// Chunk a language's keys into keyboard rows of seven.
+const parolRows = (lang) => {
+  const keys = PAROL_KEYS[parolLang(lang)];
+  const rows = [];
+  for (let i = 0; i < keys.length; i += 7) rows.push(keys.slice(i, i + 7));
+  return rows;
+};
 function Paroliere({ room, gs, seat, commit }) {
   const opp = other(seat);
   const me = TSIDE[seat];
+  const lang = parolLang(gs.lang);
   const [buf, setBuf] = useState("");
   const [words, setWords] = useState([]); // my finds — LOCAL until time's up
   const [flash, setFlash] = useState(null); // { kind, id }
   const [now, setNow] = useState(() => nowMs()); // this device's monotonic clock
   const [showHelp, setShowHelp] = useState(false);
+  const [dict, setDict] = useState(null); // the loaded word Set
+  const [dictState, setDictState] = useState(hasStore() ? "off" : "loading"); // loading | ready | error | off
   const submitted = useRef(false);
   const startRef = useRef(null); // monotonic mark for when THIS device started the round
+
+  // Pull the dictionary for this language up front, so words are checked the
+  // moment play starts. In the artifact (no network) we skip it and don't verify.
+  useEffect(() => {
+    if (dictState === "off") return;
+    let live = true;
+    setDictState("loading");
+    parolLoadDict(lang).then(
+      (set) => live && (setDict(set), setDictState("ready")),
+      () => live && setDictState("error")
+    );
+    return () => {
+      live = false;
+    };
+  }, [lang]);
 
   // fresh round → clear my local state
   useEffect(() => {
@@ -8587,6 +8648,7 @@ function Paroliere({ room, gs, seat, commit }) {
     if (w.length < 3) return setFlash({ kind: "short", id: uid() });
     if (words.includes(w)) return setFlash({ kind: "dup", id: uid() });
     if (!parolTrace(gs.board, w)) return setFlash({ kind: "no", id: uid() });
+    if (dictState === "ready" && !dict.has(w)) return setFlash({ kind: "notword", id: uid() }); // real-word check
     setWords((ws) => [w, ...ws]);
     setBuf("");
     setFlash({ kind: "ok", id: uid() });
@@ -8601,7 +8663,10 @@ function Paroliere({ room, gs, seat, commit }) {
     <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
       <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
         <p style={{ margin: "0 0 10px" }}>{L("In tre minuti trova più parole che puoi. Ogni lettera si unisce a una vicina — anche in diagonale — senza riusare lo stesso dado.", "In three minutes find as many words as you can. Each letter links to a neighbour — diagonals too — without reusing the same die.")}</p>
-        <p style={{ margin: "0 0 10px" }}>{L("Parole di almeno 3 lettere. L’app controlla solo che la parola sia sul tabellone: se è una parola vera lo decidete voi.", "Words of at least 3 letters. The app only checks the word is on the board — whether it's a real word is up to you.")}</p>
+        <p style={{ margin: "0 0 10px" }}>
+          {L("Parole di almeno 3 lettere, in", "Words of at least 3 letters, in")} {lang === "EN" ? L("inglese", "English") : L("italiano", "Italian")}.{" "}
+          {dictState === "error" || dictState === "off" ? L("Il dizionario non è disponibile: valgono le parole vere per accordo tra voi.", "The dictionary isn't available: real words are on your honour.") : L("Le parole vengono controllate su un dizionario.", "Words are checked against a dictionary.")}
+        </p>
         <p style={{ margin: "0 0 10px" }}>{L("Punti per lunghezza: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Le parole trovate da entrambi si annullano.", "Points by length: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Words you both find cancel out.")}</p>
         <p style={{ margin: 0 }}>{L("«Qu» è un dado solo e vale due lettere.", "“Qu” is a single die and counts as two letters.")}</p>
       </div>
@@ -8634,11 +8699,16 @@ function Paroliere({ room, gs, seat, commit }) {
           </button>
         </div>
         <div style={{ marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: me }}>{L("Pronti a cercare parole?", "Ready to hunt words?")}</div>
-        <Micro style={{ marginTop: 6 }}>{L("Il tabellone si scopre quando siete pronti entrambi.", "The board is revealed once you're both ready.")}</Micro>
+        <Micro style={{ marginTop: 6 }}>
+          {L("Parole in", "Words in")} {lang === "EN" ? L("inglese", "English") : L("italiano", "Italian")}
+          {dictState === "error" ? L(" · dizionario non disponibile", " · dictionary unavailable") : dictState === "off" ? "" : ` · ${L("con dizionario", "checked against a dictionary")}`}
+        </Micro>
         {boardEl(false, true)}
         <div style={{ marginTop: 6 }}>
           {iReady ? (
             <Micro>{gs.ready[opp] ? L("Si comincia…", "Starting…") : `${L("Pronto — aspetti", "Ready — waiting for")} ${who(room, opp)}`}</Micro>
+          ) : dictState === "loading" ? (
+            <Micro>{L("Carico il dizionario…", "Loading the dictionary…")}</Micro>
           ) : (
             <Button full onClick={() => commit(parolReady(gs, seat))}>
               {L("Via!", "Go!")}
@@ -8667,7 +8737,10 @@ function Paroliere({ room, gs, seat, commit }) {
       {HelpSheet}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 26, letterSpacing: "0.02em", color: low ? "#B23A2E" : T.ink }}>{clock}</div>
-        <Micro>{L("parole", "words")}: {words.length}</Micro>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: T.ink60, border: `1px solid ${T.line}`, borderRadius: 6, padding: "2px 6px" }}>{lang}</span>
+          <Micro>{L("parole", "words")}: {words.length}</Micro>
+        </div>
       </div>
 
       {boardEl(true, false)}
@@ -8680,7 +8753,7 @@ function Paroliere({ room, gs, seat, commit }) {
       </div>
       <div style={{ textAlign: "center", minHeight: 16 }}>
         <Micro style={{ color: flash && flash.kind === "ok" ? "#2C7A4B" : "#B23A2E" }}>
-          {flash ? (flash.kind === "ok" ? L("presa!", "got it!") : flash.kind === "dup" ? L("già trovata", "already found") : flash.kind === "short" ? L("almeno 3 lettere", "at least 3 letters") : L("non è sul tabellone", "not on the board")) : ""}
+          {flash ? (flash.kind === "ok" ? L("presa!", "got it!") : flash.kind === "dup" ? L("già trovata", "already found") : flash.kind === "short" ? L("almeno 3 lettere", "at least 3 letters") : flash.kind === "notword" ? L("non è una parola", "not a word") : L("non è sul tabellone", "not on the board")) : ""}
         </Micro>
       </div>
 
@@ -8693,7 +8766,7 @@ function Paroliere({ room, gs, seat, commit }) {
 
       {/* the simplified keyboard */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {PAROL_KB.map((row, r) => (
+        {parolRows(lang).map((row, r) => (
           <div key={r} style={{ display: "flex", gap: 5, justifyContent: "center" }}>
             {row.map((k) => {
               const ok = keyOk(k);
