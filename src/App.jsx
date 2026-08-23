@@ -1458,7 +1458,9 @@ function flottaFire(gs, seat, idxs, salva) {
   const sunkNow = [];
   for (const idx of idxs) {
     if (idx < 0 || idx >= FL_N * FL_N) return null;
-    if (g.shots[seat][idx]) continue; // don't waste a peg on a repeat cell
+    // Ships move, so a previously-missed tile may now hold one — re-firing a miss
+    // is allowed. Only an already-scored hit is a wasted repeat, so skip that.
+    if (g.shots[seat][idx] === "hit") continue;
     let hit = false;
     for (const s of ships) {
       const k = s.cells.indexOf(idx);
@@ -8437,9 +8439,9 @@ function Flotta({ room, gs, seat, mine, commit }) {
   const tapEnemy = (i) => {
     if (!canAct) return;
     if (mode === "fire") {
-      if (!gs.shots[seat][i]) commit(flottaFire(gs, seat, [i], false));
+      if (gs.shots[seat][i] !== "hit") commit(flottaFire(gs, seat, [i], false)); // re-firing a miss is fine — ships move
     } else if (mode === "salva") {
-      if (gs.shots[seat][i]) return;
+      if (gs.shots[seat][i] === "hit") return; // a known hit is the only wasted repeat
       setSalva((s) => (s.includes(i) ? s.filter((x) => x !== i) : s.length < 3 ? s.concat(i) : s));
     } else if (mode === "sonar") {
       commit(flottaSonar(gs, seat, i));
@@ -8464,10 +8466,12 @@ function Flotta({ room, gs, seat, mine, commit }) {
     if (sunk) bg = foe;
     else if (shot === "hit") bg = "rgba(178,58,46,0.20)";
     let node = null;
+    // A sonar reveal is this turn's freshest read, so it shows over a stale
+    // hit/miss peg — a ship that moved onto a tile you'd missed still surfaces.
     if (sunk) node = null;
+    else if (rev) node = rev.ship ? <span style={{ position: "absolute", inset: "20%", border: "2px solid rgba(184,134,43,0.9)", borderRadius: "50%" }} /> : flDot("rgba(184,134,43,0.35)", "18%");
     else if (shot === "hit") node = <span style={{ position: "absolute", inset: "22%", borderRadius: "50%", background: "#B23A2E" }} />;
     else if (shot === "miss") node = flDot("rgba(18,18,18,0.28)");
-    else if (rev) node = rev.ship ? <span style={{ position: "absolute", inset: "20%", border: "2px solid rgba(184,134,43,0.9)", borderRadius: "50%" }} /> : flDot("rgba(184,134,43,0.35)", "18%");
     return { bg: picked ? "rgba(184,134,43,0.5)" : bg, node };
   };
   const ownCell = (i) => {
@@ -8531,6 +8535,7 @@ function Flotta({ room, gs, seat, mine, commit }) {
           <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
             <p style={{ margin: "0 0 10px" }}>{L("A turno fai una sola cosa: spari a una casella nemica, oppure manovri una nave di un passo per schivare.", "Each turn you do one thing: fire at an enemy cell, or maneuver one ship a step to dodge.")}</p>
             <p style={{ margin: "0 0 10px" }}>{L("I colpi restano segnati dove hai sparato: se il nemico sposta una nave, i tuoi segni non la seguono. I danni invece restano sulla nave.", "Your shots stay pegged where you fired: if the enemy moves a ship, your marks don't follow it. Damage, though, stays on the ship.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Poiché le navi si spostano, puoi ri-sparare su una casella dove avevi fatto acqua: una nave potrebbe esserci arrivata. Anche il sonar funziona lì.", "Because ships move, you can re-fire a cell you'd missed — a ship may have slid onto it. Sonar works there too.")}</p>
             <p style={{ margin: "0 0 10px" }}>{L("Tre poteri, una volta ciascuno: Salva spara fino a 3 colpi; Sonar rivela un’area 3×3; Ripara cura un colpo su una tua nave.", "Three powers, once each: Salvo fires up to 3 shots; Sonar reveals a 3×3 area; Repair heals one hit on your ship.")}</p>
             <p style={{ margin: 0 }}>{L("Affonda tutta la flotta nemica per vincere.", "Sink the whole enemy fleet to win.")}</p>
           </div>
