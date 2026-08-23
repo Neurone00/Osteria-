@@ -1575,6 +1575,26 @@ function parolBoard(lang) {
   }
   return bag.slice(0, 16).map((c) => (c === "Q" ? "QU" : c));
 }
+const PAROL_SHAKES = 3; // shakes each player takes in the pre-game ritual
+// Mix a fresh scrap of entropy into the shared seed (both players stir the pot).
+const parolMix = (seed, entropy) => (((seed ^ (entropy >>> 0)) * 2654435761) >>> 0);
+// The board as a pure function of the seed, so both phones churn to the same
+// letters as they shake. A small LCG keeps it deterministic.
+function parolBoardSeeded(lang, seed) {
+  const bag = PAROL_BAG[parolLang(lang)];
+  let s = seed >>> 0;
+  const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+  for (let tries = 0; tries < 60; tries++) {
+    const cells = [];
+    for (let i = 0; i < PAROL_N * PAROL_N; i++) {
+      const c = bag[Math.floor(rnd() * bag.length)];
+      cells.push(c === "Q" ? "QU" : c);
+    }
+    const vowels = cells.filter((c) => /[AEIOU]/.test(c)).length;
+    if (vowels >= 5 && vowels <= 10) return cells;
+  }
+  return bag.slice(0, 16).map((c) => (c === "Q" ? "QU" : c));
+}
 const parolNeighbors = (cell) => {
   const x = cell % PAROL_N,
     y = (cell / PAROL_N) | 0,
@@ -1610,10 +1630,14 @@ function parolTrace(board, word) {
 const parolPoints = (w) => (w.length <= 4 ? 1 : w.length === 5 ? 2 : w.length === 6 ? 3 : w.length === 7 ? 5 : 11);
 function dealParoliere(dealer, tally, opts) {
   const lang = parolLang(opts?.lingua);
+  const seed = Math.floor(Math.random() * 0xffffffff) >>> 0;
   return {
-    phase: "ready", // ready → play → done
+    phase: "shake", // shake → ready → play → done
     lang, // "IT" | "EN" — picks the board's letters, the keyboard and the dictionary
-    board: parolBoard(lang),
+    seed,
+    board: parolBoardSeeded(lang, seed),
+    shaker: dealer, // whose turn it is to shake the tray
+    shakes: { A: 0, B: 0 },
     secs: opts?.secs || PAROL_SECS,
     ready: { A: false, B: false },
     startedAt: null, // wall-clock epoch when play began — a fallback for a mid-game reload only
@@ -1628,6 +1652,21 @@ function dealParoliere(dealer, tally, opts) {
     matchDone: false,
     win: null,
   };
+}
+// The pre-game ritual: each player shakes the covered tray in turn, every shake
+// stirring the shared seed so both phones churn to the very same hidden letters.
+// A then B; once both have shaken their share, the tray is set and it's ready.
+function parolShake(gs, seat, entropy) {
+  const g = clone(gs);
+  if (g.phase !== "shake" || g.shaker !== seat) return null;
+  g.seed = parolMix(g.seed, entropy | 0);
+  g.board = parolBoardSeeded(g.lang, g.seed);
+  g.shakes[seat] += 1;
+  if (g.shakes[seat] >= PAROL_SHAKES) {
+    if (g.shakes[other(seat)] >= PAROL_SHAKES) g.phase = "ready";
+    else g.shaker = other(seat);
+  }
+  return { g, quiet: true, ev: { t: "shake" } };
 }
 function parolReady(gs, seat) {
   const g = clone(gs);
@@ -8590,9 +8629,9 @@ function Paroliere({ room, gs, seat, commit }) {
     };
   }, [lang]);
 
-  // fresh round → clear my local state
+  // fresh round (starts at the shake) → clear my local state
   useEffect(() => {
-    if (gs.phase === "ready") {
+    if (gs.phase === "shake") {
       setBuf("");
       setWords([]);
       submitted.current = false;
@@ -8623,6 +8662,36 @@ function Paroliere({ room, gs, seat, commit }) {
     const t = setTimeout(() => setFlash(null), 900);
     return () => clearTimeout(t);
   }, [flash]);
+
+  // shake ritual: a tap (or a phone shake) stirs the shared seed on your turn
+  const motionAsked = useRef(false);
+  const doShake = () => {
+    if (gs.phase !== "shake" || gs.shaker !== seat) return;
+    if (!motionAsked.current) {
+      motionAsked.current = true;
+      try {
+        if (typeof DeviceMotionEvent !== "undefined" && DeviceMotionEvent.requestPermission) DeviceMotionEvent.requestPermission().catch(() => {});
+      } catch {}
+    }
+    const entropy = (Math.floor(Math.random() * 0xffffffff) ^ Math.floor(nowMs() * 1000)) >>> 0;
+    commit(parolShake(gs, seat, entropy));
+  };
+  useEffect(() => {
+    if (gs.phase !== "shake" || gs.shaker !== seat || typeof window === "undefined") return;
+    let last = 0;
+    const onMotion = (e) => {
+      const a = e.accelerationIncludingGravity || e.acceleration;
+      if (!a) return;
+      const m = Math.hypot(a.x || 0, a.y || 0, a.z || 0);
+      const t = nowMs();
+      if (m > 22 && t - last > 350) {
+        last = t;
+        doShake();
+      }
+    };
+    window.addEventListener("devicemotion", onMotion);
+    return () => window.removeEventListener("devicemotion", onMotion);
+  }, [gs.phase, gs.shaker, gs.seed]); // eslint-disable-line
 
   const remainMs = gs.phase === "play" && startRef.current != null ? Math.max(0, gs.secs * 1000 - (now - startRef.current)) : gs.secs * 1000;
   const timeUp = gs.phase === "play" && startRef.current != null && remainMs <= 0;
@@ -8662,6 +8731,7 @@ function Paroliere({ room, gs, seat, commit }) {
   const HelpSheet = showHelp && (
     <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
       <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
+        <p style={{ margin: "0 0 10px" }}>{L("Prima si mescola: a turno scuotete (o toccate) il tabellone coperto, e le vostre scosse decidono le lettere.", "First you shake: take turns shaking (or tapping) the covered tray — your shakes decide the letters.")}</p>
         <p style={{ margin: "0 0 10px" }}>{L("In tre minuti trova più parole che puoi. Ogni lettera si unisce a una vicina — anche in diagonale — senza riusare lo stesso dado.", "In three minutes find as many words as you can. Each letter links to a neighbour — diagonals too — without reusing the same die.")}</p>
         <p style={{ margin: "0 0 10px" }}>
           {L("Parole di almeno 3 lettere, in", "Words of at least 3 letters, in")} {lang === "EN" ? L("inglese", "English") : L("italiano", "Italian")}.{" "}
@@ -8686,6 +8756,51 @@ function Paroliere({ room, gs, seat, commit }) {
       ))}
     </div>
   );
+
+  // —— shake ritual ——
+  if (gs.phase === "shake") {
+    const myTurn = gs.shaker === seat;
+    const dots = (n) =>
+      Array.from({ length: PAROL_SHAKES }, (_, i) => (
+        <span key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: i < n ? me : T.line }} />
+      ));
+    return (
+      <div style={{ paddingBottom: 30, textAlign: "center" }}>
+        {HelpSheet}
+        <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}>
+          <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <Ico n="help" s={15} /> {L("come si gioca", "how to play")}
+          </button>
+        </div>
+        <div style={{ marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: myTurn ? me : T.ink60 }}>
+          {myTurn ? L("Scuoti le lettere", "Shake the letters") : `${who(room, opp)} ${L("mescola…", "is shaking…")}`}
+        </div>
+        <Micro style={{ marginTop: 6 }}>{L("A turno mescolate il tabellone coperto: scuoti o tocca.", "Take turns shaking the covered tray: shake or tap.")}</Micro>
+        <div key={gs.seed} className="critshake" onClick={myTurn ? doShake : undefined} style={{ cursor: myTurn ? "pointer" : "default" }}>
+          {boardEl(false, true)}
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 20, marginTop: 4 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 12, color: TSIDE.A }}>{who(room, "A")}</span>
+            <span style={{ display: "inline-flex", gap: 4 }}>{dots(gs.shakes.A)}</span>
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 12, color: TSIDE.B }}>{who(room, "B")}</span>
+            <span style={{ display: "inline-flex", gap: 4 }}>{dots(gs.shakes.B)}</span>
+          </span>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          {myTurn ? (
+            <Button full onClick={doShake}>
+              {L("Scuoti", "Shake")} · {gs.shakes[seat]}/{PAROL_SHAKES}
+            </Button>
+          ) : (
+            <Micro>{L("Aspetta il tuo turno", "Wait your turn")}</Micro>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // —— ready ——
   if (gs.phase === "ready") {
