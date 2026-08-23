@@ -1570,22 +1570,20 @@ const FL2_UNITS = {
   warship: { speed: 55, vision: 175, hp: 4, size: 20, weapon: "missile" },
   frigate: { speed: 80, vision: 150, hp: 3, size: 15, weapon: "barrage" },
   sub: { speed: 95, vision: 125, hp: 2, size: 12, weapon: "torpedo" },
-  recon: { speed: 140, vision: 330, hp: 1, size: 10, weapon: null }, // eyes only
+  recon: { speed: 140, vision: 330, hp: 1, size: 10, weapon: "probe" }, // scout; only a light probe (chips other recons)
 };
 const FL2_FLEET = ["warship", "frigate", "sub", "recon"]; // one of each per side
 const FL2_WEAPON = {
-  // life = turns before the shot fizzles; aoe = blast radius. Damage scales with
-  // how deeply the ship sits in the blast: a dead-centre hit deals dmgMax, a
-  // glancing edge deals dmgMin. Heavier units hit harder (warship > frigate).
-  torpedo: { kind: "straight", speed: 150, aoe: 55, dmgMin: 1, dmgMax: 3, life: 8 },
-  missile: { kind: "point", speed: 105, aoe: 95, dmgMin: 1.5, dmgMax: 4, life: 14 }, // lobbed to a chosen point
-  barrage: { kind: "spread", speed: 125, aoe: 40, dmgMin: 0.4, dmgMax: 1.2, life: 6, shots: 3, spread: 0.26 },
+  // life = turns before the shot fizzles; aoe = blast radius; range = how far the
+  // shot travels before it dies. Damage scales with how deeply the ship sits in
+  // the blast: dead-centre → dmgMax, glancing edge → dmgMin. Heavier units hit
+  // harder. Reach: warship long (½ the field), frigate mid, torpedo short.
+  missile: { kind: "point", speed: 105, aoe: 95, dmgMin: 1.5, dmgMax: 4, life: 14, range: FL2_R / 2 }, // lobbed; long reach
+  barrage: { kind: "spread", speed: 125, aoe: 40, dmgMin: 0.4, dmgMax: 1.2, life: 6, range: 330, shots: 3, spread: 0.26 }, // mid
+  torpedo: { kind: "straight", speed: 150, aoe: 30, dmgMin: 1, dmgMax: 3, life: 6, range: 210, hitR: 1 }, // small blast, tight hit box, short
+  probe: { kind: "straight", speed: 130, aoe: 15, dmgMin: 0.3, dmgMax: 0.6, life: 5, range: 150, hitR: 1 }, // recon's pop-gun; 2 hits down a recon, useless on hulls
 };
 const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals all ships to both
-// A unit's reach is proportional to how far it can move: fast movers (sub, ~950)
-// out-range slow bruisers (warship, ~550). Range is set from the firing ship's
-// speed at launch, so it travels this far before the shot fizzles.
-const FL2_RANGE_K = 10;
 // Deployment: the sea is split into 8 octants (45° each, from +x). Each side owns
 // a half — B the east octants, A the west — and picks ONE to place its fleet in.
 // The recon/helo may deploy in ANY octant. Nobody may deploy inside the central
@@ -1749,7 +1747,7 @@ function fl2Spawn(g, ship, aim) {
   const dx = aim.x - ship.x,
     dy = aim.y - ship.y;
   const base = Math.atan2(dy, dx);
-  const range = FL2_UNITS[ship.type].speed * FL2_RANGE_K; // reach scales with the ship's movement
+  const range = w.range; // fixed reach per weapon (warship long, torpedo short)
   const mk = (ang) => {
     const id = `p${g.seq++}`;
     return { id, owner: ship.owner, weapon: FL2_UNITS[ship.type].weapon, x: ship.x, y: ship.y, ang, life: w.life, kind: w.kind, target: w.kind === "point" ? { x: aim.x, y: aim.y } : null, travelled: 0, range };
@@ -1813,7 +1811,7 @@ function flotta2Resolve(gs) {
       }
       const foe = g.ships[p.owner === "A" ? "B" : "A"];
       for (const s of foe) {
-        if (s.hp > 0 && fl2Dist(p, s) <= FL2_UNITS[s.type].size + 3) {
+        if (s.hp > 0 && fl2Dist(p, s) <= FL2_UNITS[s.type].size + (w.hitR ?? 4)) {
           fl2Blast(g, p.x, p.y, w);
           detonated = true;
           break;

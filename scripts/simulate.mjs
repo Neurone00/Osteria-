@@ -1188,7 +1188,7 @@ function flotta2RuleTests() {
   // order validation (in the planning phase)
   g = fl2Begun();
   const recon = g.ships.A.find((s) => s.type === "recon");
-  if (R.flotta2Order(g, "A", { kind: "fire", ship: recon.id, aim: { x: 0, y: 0 } }) != null) fail("flotta2 rules", "recon has no weapon and can't fire");
+  if (R.flotta2Order(g, "A", { kind: "fire", ship: recon.id, aim: { x: 0, y: 0 } }) == null) fail("flotta2 rules", "recon should be able to fire its probe");
   if (R.flotta2Order(g, "A", { kind: "move", ship: g.ships.B[0].id, path: [] }) != null) fail("flotta2 rules", "can't order the enemy's ship");
   const sub0 = g.ships.A.find((s) => s.type === "sub");
   g = R.flotta2Order(g, "A", { kind: "move", ship: sub0.id, path: [{ x: 0, y: 0 }] }).g;
@@ -1252,6 +1252,25 @@ function flotta2RuleTests() {
   z.radar = false;
   fA.x = 30; fA.y = 0; // bring my frigate onto it
   if (!R.flotta2Seen(z, "A").has(eSub.id)) fail("flotta2 rules", "a frigate should detect an enemy submarine");
+
+  // a recon's probe needs two hits to down another recon (and can't 1-shot it)
+  let rr = fl2Begun();
+  const myR = rr.ships.A.find((s) => s.type === "recon");
+  const eR = rr.ships.B.find((s) => s.type === "recon");
+  rr.ships.A = [myR];
+  rr.ships.B = [eR];
+  myR.x = 0; myR.y = 0; myR.path = [];
+  eR.x = 90; eR.y = 0; eR.path = [];
+  let gr = 0;
+  while (!rr.done && gr++ < 5) {
+    const aim = rr.ships.B.length ? { x: rr.ships.B[0].x, y: rr.ships.B[0].y } : { x: 90, y: 0 };
+    rr = R.flotta2Order(rr, "A", { kind: "fire", ship: rr.ships.A[0].id, aim }).g;
+    rr = (R.flotta2Order(rr, "B", { kind: "move", ship: rr.ships.B.length ? rr.ships.B[0].id : eR.id, path: [{ x: 90, y: 0 }] }) || { g: rr }).g;
+    if (!R.flotta2Ready(rr)) break;
+    rr = R.flotta2Resolve(rr).g;
+    if (gr === 1 && rr.ships.B.length === 0) fail("flotta2 rules", "one probe shot should not down a recon");
+  }
+  if (!rr.done || rr.win !== "A") fail("flotta2 rules", "two probe hits should down an enemy recon");
 }
 
 /* ── run ────────────────────────────────────────────────────── */
