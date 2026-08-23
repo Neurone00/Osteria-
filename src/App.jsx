@@ -245,9 +245,9 @@ const GAMES = {
     cta: { it: "Gioca!", en: "Play!" }, // a word game — not "deal", "shake" or "deploy"
     opts: [
       { k: "secs", label: "Durata", cycle: [120, 180, 240], hint: "Secondi per ogni partita", le: "Round length", he: "Seconds per round" },
-      { k: "lingua", label: "Lingua", cycle: ["IT", "EN"], hint: "Lingua delle parole e del dizionario", le: "Language", he: "Language of the words and the dictionary" },
+      { k: "lingua", label: "Lingua", cycle: ["both", "IT", "EN"], fmt: { both: "IT+EN", IT: "IT", EN: "EN" }, hint: "Bilingue, solo italiano o solo inglese", le: "Language", he: "Bilingual, Italian only or English only" },
     ],
-    def: { secs: 180, lingua: "IT" },
+    def: { secs: 180, lingua: "both" },
   },
 };
 // The games actually offered in the lobby. A game can be shelved (e.g. mid-rebuild)
@@ -1557,17 +1557,24 @@ const PAROL_KEYS = {
   IT: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "L", "M", "N", "O", "P", "QU", "R", "S", "T", "U", "V", "Z"],
   EN: ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "QU", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"],
 };
+PAROL_KEYS.both = PAROL_KEYS.EN; // bilingual uses the full alphabet
 const buildBag = (w) => {
   const bag = [];
   for (const k in w) for (let i = 0; i < w[k]; i++) bag.push(k);
   return bag;
 };
-// Weighted letter bags. Q is drawn then shown as the "QU" die.
+// Weighted letter bags. Q is drawn then shown as the "QU" die. The bilingual bag
+// blends the Italian and English weights, so the full alphabet appears with vowel
+// counts that suit both languages.
 const PAROL_BAG = {
   IT: buildBag({ A: 12, E: 12, I: 11, O: 10, U: 4, N: 7, L: 7, R: 7, T: 6, S: 6, C: 5, D: 4, M: 4, P: 3, B: 2, G: 2, V: 2, F: 2, H: 2, Z: 2, Q: 2 }),
   EN: buildBag({ E: 12, A: 9, I: 9, O: 8, U: 4, N: 6, R: 6, T: 6, L: 4, S: 4, D: 4, G: 3, B: 2, C: 2, M: 2, P: 2, F: 2, H: 2, V: 2, W: 2, Y: 2, K: 1, J: 1, X: 1, Q: 1, Z: 1 }),
+  both: buildBag({ A: 21, E: 24, I: 20, O: 18, U: 8, N: 13, R: 13, T: 12, L: 11, S: 10, D: 8, C: 7, M: 6, P: 5, G: 5, B: 4, V: 4, F: 4, H: 4, Z: 3, Q: 3, W: 2, Y: 2, K: 1, J: 1, X: 1 }),
 };
-const parolLang = (l) => (l === "EN" ? "EN" : "IT");
+const parolLang = (l) => (l === "EN" ? "EN" : l === "both" ? "both" : "IT");
+// A short badge and a prose name for the chosen language(s).
+const parolLangTag = (l) => (parolLang(l) === "both" ? "IT+EN" : parolLang(l));
+const parolLangName = (l) => (parolLang(l) === "both" ? L("italiano e inglese", "Italian and English") : parolLang(l) === "EN" ? L("inglese", "English") : L("italiano", "Italian"));
 function parolBoard(lang) {
   const bag = PAROL_BAG[parolLang(lang)];
   for (let tries = 0; tries < 60; tries++) {
@@ -5558,7 +5565,7 @@ function RuleChips({ conf, opts, setOpt }) {
                 style={{ border: `1.5px solid ${T.ink}`, background: "transparent", borderRadius: 12, padding: "8px 14px", cursor: setOpt ? "pointer" : "default", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, minWidth: 84, WebkitTapHighlightColor: "transparent" }}
               >
                 <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: T.ink60 }}>{L(o.label, o.le)}</span>
-                <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, color: T.ink, lineHeight: 1 }}>{String(cur)}</span>
+                <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, color: T.ink, lineHeight: 1 }}>{o.fmt ? o.fmt[cur] || String(cur) : String(cur)}</span>
               </button>
             );
           })}
@@ -8594,6 +8601,14 @@ const parolDictCache = {}; // lang → Set (kept for the whole session once load
 async function parolLoadDict(lang) {
   lang = parolLang(lang);
   if (parolDictCache[lang]) return parolDictCache[lang];
+  if (lang === "both") {
+    // Bilingual: a word counts if it's in either wordlist, so load both and union.
+    const [it, en] = await Promise.all([parolLoadDict("IT"), parolLoadDict("EN")]);
+    const set = new Set(it);
+    for (const w of en) set.add(w);
+    parolDictCache.both = set;
+    return set;
+  }
   const res = await fetch(PAROL_DICT_URL[lang]);
   if (!res.ok) throw new Error("dict " + res.status);
   const list = await res.json(); // a JSON array of lowercase words
@@ -8808,7 +8823,7 @@ function Paroliere({ room, gs, seat, commit }) {
         <p style={{ margin: "0 0 10px" }}>{L("Prima si mescola: a turno scuotete (o toccate) il tabellone coperto, e le vostre scosse decidono le lettere.", "First you shake: take turns shaking (or tapping) the covered tray — your shakes decide the letters.")}</p>
         <p style={{ margin: "0 0 10px" }}>{L("In tre minuti trova più parole che puoi. Ogni lettera si unisce a una vicina — anche in diagonale — senza riusare lo stesso dado.", "In three minutes find as many words as you can. Each letter links to a neighbour — diagonals too — without reusing the same die.")}</p>
         <p style={{ margin: "0 0 10px" }}>
-          {L("Parole di almeno 3 lettere, in", "Words of at least 3 letters, in")} {lang === "EN" ? L("inglese", "English") : L("italiano", "Italian")}.{" "}
+          {L("Parole di almeno 3 lettere, in", "Words of at least 3 letters, in")} {parolLangName(lang)}.{" "}
           {dictState === "error" || dictState === "off" ? L("Il dizionario non è disponibile: valgono le parole vere per accordo tra voi.", "The dictionary isn't available: real words are on your honour.") : L("Le parole vengono controllate su un dizionario.", "Words are checked against a dictionary.")}
         </p>
         <p style={{ margin: "0 0 10px" }}>{L("Punti per lunghezza: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Le parole trovate da entrambi si annullano.", "Points by length: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Words you both find cancel out.")}</p>
@@ -8889,7 +8904,7 @@ function Paroliere({ room, gs, seat, commit }) {
         </div>
         <div style={{ marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: me }}>{L("Pronti a cercare parole?", "Ready to hunt words?")}</div>
         <Micro style={{ marginTop: 6 }}>
-          {L("Parole in", "Words in")} {lang === "EN" ? L("inglese", "English") : L("italiano", "Italian")}
+          {L("Parole in", "Words in")} {parolLangName(lang)}
           {dictState === "error" ? L(" · dizionario non disponibile", " · dictionary unavailable") : dictState === "off" ? "" : ` · ${L("con dizionario", "checked against a dictionary")}`}
         </Micro>
         {boardEl(false, true)}
@@ -8927,7 +8942,7 @@ function Paroliere({ room, gs, seat, commit }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: MONO, fontWeight: 700, fontSize: 26, letterSpacing: "0.02em", color: low ? "#B23A2E" : T.ink }}>{clock}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: T.ink60, border: `1px solid ${T.line}`, borderRadius: 6, padding: "2px 6px" }}>{lang}</span>
+          <span style={{ fontFamily: MONO, fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", color: T.ink60, border: `1px solid ${T.line}`, borderRadius: 6, padding: "2px 6px" }}>{parolLangTag(lang)}</span>
           <Micro>{L("parole", "words")}: {words.length}</Micro>
         </div>
       </div>
