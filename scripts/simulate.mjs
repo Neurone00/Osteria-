@@ -45,7 +45,7 @@ const EXPORTS = [
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
-  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY",
+  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1271,6 +1271,33 @@ function flotta2RuleTests() {
     if (gr === 1 && rr.ships.B.length === 0) fail("flotta2 rules", "one probe shot should not down a recon");
   }
   if (!rr.done || rr.win !== "A") fail("flotta2 rules", "two probe hits should down an enemy recon");
+
+  // weapon recharge: warship waits a turn after firing; sub fires back-to-back
+  let rc = fl2Begun();
+  const wsA = rc.ships.A.find((s) => s.type === "warship");
+  rc = R.flotta2Order(rc, "A", { kind: "fire", ship: wsA.id, aim: { x: 0, y: 0 } }).g;
+  rc = R.flotta2Order(rc, "B", { kind: "recon", ship: rc.ships.B[0].id, at: { x: 0, y: 0 } }).g;
+  rc = R.flotta2Resolve(rc).g;
+  const wsA2 = rc.ships.A.find((s) => s.type === "warship");
+  if (wsA2 && R.flotta2Order(rc, "A", { kind: "fire", ship: wsA2.id, aim: { x: 0, y: 0 } }) != null) fail("flotta2 rules", "a warship should be recharging the round after firing");
+  let rs = fl2Begun();
+  const suA = rs.ships.A.find((s) => s.type === "sub");
+  rs = R.flotta2Order(rs, "A", { kind: "fire", ship: suA.id, aim: { x: 0, y: 0 } }).g;
+  rs = R.flotta2Order(rs, "B", { kind: "recon", ship: rs.ships.B[0].id, at: { x: 0, y: 0 } }).g;
+  rs = R.flotta2Resolve(rs).g;
+  const suA2 = rs.ships.A.find((s) => s.type === "sub");
+  if (suA2 && R.flotta2Order(rs, "A", { kind: "fire", ship: suA2.id, aim: { x: 0, y: 0 } }) == null) fail("flotta2 rules", "a sub should be able to fire every turn");
+
+  // the 13-turn cap ends a stalemate
+  let tc = fl2Begun();
+  let tg = 0;
+  while (!tc.done && tg++ < 40) {
+    tc = R.flotta2Order(tc, "A", { kind: "recon", ship: tc.ships.A[0].id, at: { x: 0, y: 0 } }).g;
+    tc = R.flotta2Order(tc, "B", { kind: "recon", ship: tc.ships.B[0].id, at: { x: 0, y: 0 } }).g;
+    tc = R.flotta2Resolve(tc).g;
+  }
+  if (!tc.done) fail("flotta2 rules", "the match should end at the turn cap");
+  if (tc.turn > R.FL2_MAX_TURNS + 1) fail("flotta2 rules", "the match ran past the turn cap");
 }
 
 /* ── run ────────────────────────────────────────────────────── */

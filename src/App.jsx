@@ -1566,10 +1566,11 @@ function flottaRepair(gs, seat, shipIndex, seg) {
    (no RNG), so both devices — or the sim — reach the identical next state. */
 const FL2_R = 1000; // sea radius; units are tens of units across → field is huge relative to ships
 const FL2_UNITS = {
-  warship: { speed: 55, vision: 175, hp: 4, size: 20, weapon: "missile" },
-  frigate: { speed: 80, vision: 150, hp: 3, size: 15, weapon: "barrage" },
-  sub: { speed: 95, vision: 125, hp: 2, size: 12, weapon: "torpedo" },
-  recon: { speed: 140, vision: 330, hp: 1, size: 10, weapon: "probe" }, // scout; only a light probe (chips other recons)
+  // recharge = rounds a fired weapon needs before it can fire again (sub & recon: 0)
+  warship: { speed: 55, vision: 175, hp: 4, size: 20, weapon: "missile", recharge: 1 },
+  frigate: { speed: 80, vision: 150, hp: 3, size: 15, weapon: "barrage", recharge: 1 },
+  sub: { speed: 95, vision: 125, hp: 2, size: 12, weapon: "torpedo", recharge: 0 },
+  recon: { speed: 140, vision: 330, hp: 1, size: 10, weapon: "probe", recharge: 0 }, // scout; light probe (chips other recons), fires every turn
 };
 const FL2_FLEET = ["warship", "frigate", "sub", "recon"]; // one of each per side
 const FL2_WEAPON = {
@@ -1585,7 +1586,8 @@ const FL2_WEAPON = {
   torpedo: { kind: "straight", speed: 180, aoe: 30, dmgMin: 1, dmgMax: 3, life: 6, range: 210, hitR: 1 }, // slow runner, small blast, short
   probe: { kind: "straight", speed: 200, aoe: 15, dmgMin: 0.3, dmgMax: 0.6, life: 5, range: 150, hitR: 1 }, // recon's pop-gun; 2 hits down a recon, useless on hulls
 };
-const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals all ships to both
+const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals surface ships to both
+const FL2_MAX_TURNS = 13; // a match lasts at most this many rounds, else decided on ships left
 // Deployment: the sea is split into 8 octants (45° each, from +x). Each side owns
 // a half — B the east octants, A the west — and picks ONE to place its fleet in.
 // The recon/helo may deploy in ANY octant. Nobody may deploy inside the central
@@ -1627,8 +1629,11 @@ const fl2Clamp = (x, y) => {
   const k = FL2_R / d;
   return { x: x * k, y: y * k };
 };
-// advance a ship up to `dist` along its remaining planned path, trimming what it covers
+// advance a ship up to `dist` along its remaining planned path, trimming what it
+// covers, and record the round's net displacement as its velocity (vx, vy)
 function fl2Advance(ship, dist) {
+  const ox = ship.x,
+    oy = ship.y;
   let left = dist;
   let { x, y } = ship;
   const path = (ship.path || []).slice();
@@ -1655,10 +1660,12 @@ function fl2Advance(ship, dist) {
   ship.x = c.x;
   ship.y = c.y;
   ship.path = path;
+  ship.vx = ship.x - ox; // this round's travel — its heading + speed, for scouting
+  ship.vy = ship.y - oy;
 }
 function fl2Ship(type, owner, id, x, y, heading) {
   const u = FL2_UNITS[type];
-  return { id, type, owner, x, y, heading, hp: u.hp, maxhp: u.hp, path: [] };
+  return { id, type, owner, x, y, heading, hp: u.hp, maxhp: u.hp, path: [], vx: 0, vy: 0, cd: 0 };
 }
 function dealFlotta2(dealer, tally) {
   const ships = { A: [], B: [] };
@@ -1737,7 +1744,8 @@ function flotta2Order(gs, seat, order) {
   if (!order || !order.ship) return null;
   const ship = fl2ShipById(gs, order.ship);
   if (!ship || ship.owner !== seat) return null;
-  if (order.kind === "fire" && !FL2_UNITS[ship.type].weapon) return null; // recon has no gun
+  if (order.kind === "fire" && !FL2_UNITS[ship.type].weapon) return null; // no gun
+  if (order.kind === "fire" && (ship.cd || 0) > 0) return null; // still recharging
   const g = clone(gs);
   g.orders[seat] = order;
   return { g, quiet: true, ev: { t: "order" } };
@@ -1776,6 +1784,8 @@ function flotta2Resolve(gs) {
   const g = clone(gs);
   g.boom = [];
   g.ping = { A: null, B: null };
+  // 0) tick down weapon cooldowns from last round
+  for (const s of g.ships.A.concat(g.ships.B)) s.cd = Math.max(0, (s.cd || 0) - 1);
   // 1) apply move + recon orders (firing waits until ships have moved)
   for (const seat of ["A", "B"]) {
     const o = g.orders[seat];
@@ -1791,7 +1801,7 @@ function flotta2Resolve(gs) {
     const o = g.orders[seat];
     if (o.kind !== "fire" || !o.aim) continue;
     const ship = fl2ShipById(g, o.ship);
-    if (ship && ship.hp > 0) fl2Spawn(g, ship, o.aim);
+    if (ship && ship.hp > 0) { fl2Spawn(g, ship, o.aim); ship.cd = FL2_UNITS[ship.type].recharge || 0; }
   }
   // 3) shots advance, then detonate on contact / arrival / expiry
   const survivors = [];
@@ -1834,13 +1844,22 @@ function flotta2Resolve(gs) {
   // 5) advance the clock; radar sweep every Nth round
   g.turn += 1;
   g.radar = g.turn % FL2_RADAR_EVERY === 0;
-  // 6) outcome
+  // 6) outcome — annihilation, or the 13-turn limit (most ships left, then most hull)
   const aDead = g.ships.A.length === 0,
     bDead = g.ships.B.length === 0;
-  if (aDead || bDead) {
+  const timeUp = g.turn > FL2_MAX_TURNS;
+  if (aDead || bDead || timeUp) {
     g.done = true;
     g.matchDone = true;
-    g.win = aDead && bDead ? null : aDead ? "B" : "A";
+    if (aDead || bDead) g.win = aDead && bDead ? null : aDead ? "B" : "A";
+    else {
+      const na = g.ships.A.length, nb = g.ships.B.length;
+      if (na !== nb) g.win = na > nb ? "A" : "B";
+      else {
+        const ha = g.ships.A.reduce((s, x) => s + x.hp, 0), hb = g.ships.B.reduce((s, x) => s + x.hp, 0);
+        g.win = ha === hb ? null : ha > hb ? "A" : "B";
+      }
+    }
     if (g.win) g.tally[g.win] += 1;
   }
   g.orders = { A: null, B: null };
@@ -3821,6 +3840,18 @@ function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
     ),
     check: <path {...P} d="M5 13l4 4L19 7" />,
     close: <path {...P} d="M6 6l12 12M18 6L6 18" />,
+    sound: (
+      <>
+        <path {...P} d="M4 9v6h4l5 4V5L8 9H4z" />
+        <path {...P} d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8 8 0 0 1 0 12" />
+      </>
+    ),
+    mute: (
+      <>
+        <path {...P} d="M4 9v6h4l5 4V5L8 9H4z" />
+        <path {...P} d="M16 9l5 6M21 9l-5 6" />
+      </>
+    ),
     target: (
       <>
         <circle {...P} cx="12" cy="12" r="8" />
@@ -9099,14 +9130,25 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
     }
   }, [deploying, seat]); // eslint-disable-line
 
-  // a fresh round / phase change → clear staging, note the moment for fx
+  // a fresh round / phase change → clear staging, note the moment, and snapshot
+  // positions so ships/shots can glide from where they were to where they are
+  const fromRef = useRef({});
+  const restRef = useRef({});
+  const snapPositions = () => {
+    const m = {};
+    for (const s of gs.ships.A.concat(gs.ships.B)) m[s.id] = { x: s.x, y: s.y };
+    for (const p of gs.proj || []) m[p.id] = { x: p.x, y: p.y };
+    return m;
+  };
   useEffect(() => {
     setSel(null);
     setMode(null);
     setDraft(null);
     gest.current = null;
+    fromRef.current = restRef.current; // where everything was last round
+    restRef.current = snapPositions(); // where it is now
     roundAt.current = nowMs();
-  }, [gs.turn, gs.phase, gs.done]);
+  }, [gs.turn, gs.phase, gs.done]); // eslint-disable-line
 
   // continuous sonar sweep, unless the viewer asked for less motion
   const reduceMotion = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -9307,12 +9349,38 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
       ctx.fillStyle = "rgba(255,91,74,0.08)"; ctx.fill();
       ctx.strokeStyle = "rgba(255,91,74,0.5)"; ctx.setLineDash([5, 5]); ctx.lineWidth = 1.4; ctx.stroke(); ctx.setLineDash([]);
     }
-    // rotating sweep
-    const sweep = reduceMotion ? -Math.PI / 2 : (t / 2600) * 2 * Math.PI;
-    for (let k = 0; k < 22; k++) {
+    // resolve tween: glide from last round's positions to this round's
+    const animDur = 650;
+    const ke = reduceMotion ? 1 : 1 - Math.pow(1 - Math.min(1, (nowMs() - roundAt.current) / animDur), 3);
+    const animPos = (id, cur) => { const f = fromRef.current[id]; if (!f || ke >= 1 || deploying) return cur; return { x: f.x + (cur.x - f.x) * ke, y: f.y + (cur.y - f.y) * ke }; };
+    // sonar arm: slow on a normal round; on a scan round (radar) it whips around
+    // fast and reveals surface contacts one by one, then eases back to slow.
+    const TAU = 2 * Math.PI, START = -Math.PI / 2, SLOW = 4200, SCAN_MS = 2600;
+    const sinceR = nowMs() - roundAt.current;
+    const scanning = !deploying && gs.radar && sinceR < SCAN_MS && !reduceMotion;
+    let sweep, scanSwept = Infinity;
+    if (reduceMotion) sweep = START;
+    else if (scanning) {
+      const pp = sinceR / SCAN_MS;
+      const eased = pp < 0.5 ? 2 * pp * pp : 1 - Math.pow(-2 * pp + 2, 2) / 2; // easeInOut
+      scanSwept = eased * TAU * 2.5; // ~2.5 rotations across the scan
+      sweep = START + scanSwept;
+    } else sweep = START + (t / SLOW) * TAU;
+    const swMod = ((sweep % TAU) + TAU) % TAU;
+    // echo: enemy contacts glow as the arm passes and fade after (revealed one by
+    // one during a scan). Own ships are always fully lit.
+    const echo = (pos) => {
+      if (reduceMotion) return 1;
+      let cb = Math.atan2(pos.y, pos.x); cb = ((cb % TAU) + TAU) % TAU;
+      if (scanning) { const rel = (((cb - START) % TAU) + TAU) % TAU; return scanSwept >= rel ? 1 : 0; }
+      const d = ((swMod - cb) % TAU + TAU) % TAU;
+      return Math.max(0.14, Math.exp(-1.3 * d));
+    };
+    const trail = scanning ? 30 : 22;
+    for (let k = 0; k < trail; k++) {
       const a = sweep - k * 0.05;
       ctx.beginPath(); ctx.moveTo(c0.x, c0.y); ctx.lineTo(c0.x + Math.cos(a) * rpx, c0.y + Math.sin(a) * rpx);
-      ctx.strokeStyle = `rgba(70,255,156,${0.16 * (1 - k / 22)})`; ctx.lineWidth = k === 0 ? 2 : 1.4; ctx.stroke();
+      ctx.strokeStyle = `rgba(70,255,156,${(scanning ? 0.22 : 0.16) * (1 - k / trail)})`; ctx.lineWidth = k === 0 ? 2 : 1.4; ctx.stroke();
     }
     // own vision pools (planning only)
     if (!deploying) for (const s of myShips) {
@@ -9328,19 +9396,38 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
       ctx.strokeStyle = `rgba(70,255,156,${0.7 * (1 - k)})`; ctx.lineWidth = 3; ctx.shadowColor = SON.green; ctx.shadowBlur = 14; ctx.stroke(); ctx.shadowBlur = 0;
     }
     const drawShip = (s, mineShip) => {
-      const pos = mineShip ? shipPos(s) : s;
+      const rest = mineShip ? shipPos(s) : { x: s.x, y: s.y };
+      const pos = animPos(s.id, rest);
+      const alpha = mineShip ? 1 : echo(rest); // enemy contacts ping + fade with the arm
+      if (alpha <= 0.02) return;
       const p = w2s(pos);
       const u = Math.max(5, shipPx(s.type));
       const edge = mineShip ? SON.green : SON.foe;
-      ctx.save(); ctx.shadowColor = edge; ctx.shadowBlur = mineShip ? 10 : 8;
+      ctx.save(); ctx.globalAlpha = alpha; ctx.shadowColor = edge; ctx.shadowBlur = mineShip ? 10 : 8;
       ctx.translate(p.x, p.y); ctx.rotate(s.heading || 0);
       fl2Hull(ctx, s.type, u * 0.5, edge, "rgba(4,22,14,0.85)");
       ctx.restore();
       const frac = Math.max(0, s.hp / s.maxhp);
-      ctx.save(); ctx.shadowColor = edge; ctx.shadowBlur = 6;
+      ctx.save(); ctx.globalAlpha = alpha; ctx.shadowColor = edge; ctx.shadowBlur = 6;
       ctx.beginPath(); ctx.arc(p.x, p.y, u * 1.6, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI);
       ctx.strokeStyle = mineShip ? SON.hp : SON.foe; ctx.lineWidth = 2.2; ctx.stroke(); ctx.restore();
       if (mineShip && s.id === sel) { ctx.beginPath(); ctx.arc(p.x, p.y, u * 2, 0, 2 * Math.PI); ctx.strokeStyle = SON.green; ctx.setLineDash([3, 3]); ctx.lineWidth = 1.6; ctx.stroke(); ctx.setLineDash([]); }
+      // heading/velocity vector — where the contact is travelling, so you can lead
+      if (!deploying && (s.vx || s.vy)) {
+        const vlen = Math.hypot(s.vx, s.vy) * scale;
+        if (vlen > 3) {
+          const ang = Math.atan2(s.vy, s.vx);
+          const tip = { x: p.x + Math.cos(ang) * (u * 1.9 + vlen), y: p.y + Math.sin(ang) * (u * 1.9 + vlen) };
+          const base = { x: p.x + Math.cos(ang) * u * 1.9, y: p.y + Math.sin(ang) * u * 1.9 };
+          ctx.save(); ctx.globalAlpha = alpha; ctx.shadowColor = edge; ctx.shadowBlur = 5; ctx.strokeStyle = edge; ctx.fillStyle = edge; ctx.lineWidth = 1.6;
+          ctx.beginPath(); ctx.moveTo(base.x, base.y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
+          const ah = 5;
+          ctx.beginPath(); ctx.moveTo(tip.x, tip.y);
+          ctx.lineTo(tip.x - Math.cos(ang - 0.4) * ah, tip.y - Math.sin(ang - 0.4) * ah);
+          ctx.lineTo(tip.x - Math.cos(ang + 0.4) * ah, tip.y - Math.sin(ang + 0.4) * ah);
+          ctx.closePath(); ctx.fill(); ctx.restore();
+        }
+      }
       if (mineShip && !deploying && s.path && s.path.length) {
         ctx.beginPath(); ctx.moveTo(p.x, p.y);
         for (const q of s.path) { const sp = w2s(q); ctx.lineTo(sp.x, sp.y); }
@@ -9352,7 +9439,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
     if (!deploying) for (const pr of gs.proj) {
       const visible = pr.owner === seat || myShips.some((o) => Math.hypot(o.x - pr.x, o.y - pr.y) <= FL2_UNITS[o.type].vision);
       if (!visible) continue;
-      const p = w2s(pr);
+      const p = w2s(animPos(pr.id, { x: pr.x, y: pr.y }));
       ctx.save(); ctx.shadowColor = pr.owner === seat ? SON.green : SON.foe; ctx.shadowBlur = 10;
       ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI); ctx.fillStyle = pr.owner === seat ? SON.green : SON.foe; ctx.fill(); ctx.restore();
     }
@@ -9418,7 +9505,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
           {!deploying && gs.radar && <Ico n="radar" s={15} c={SON.green} />}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          {setSound && <button style={chromeBtn} onClick={() => setSound(!sound)} aria-label="sound"><Ico n={sound ? "wine" : "wine"} s={18} /></button>}
+          {setSound && <button style={chromeBtn} onClick={() => setSound(!sound)} aria-label="sound"><Ico n={sound ? "sound" : "mute"} s={18} /></button>}
           <button style={chromeBtn} onClick={() => setShowHelp(true)} aria-label="help"><Ico n="help" s={18} /></button>
           <button style={{ ...chromeBtn, borderColor: SON.foe, color: SON.foe }} onClick={onExit} aria-label="exit"><Ico n="exit" s={18} /></button>
         </div>
@@ -9435,12 +9522,12 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
         <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
         {/* per-ship menu (planning) */}
         {!deploying && selScreen && canAct && (
-          <div onPointerDown={(e) => e.stopPropagation()} onPointerMove={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}
+          <div className="pop" onPointerDown={(e) => e.stopPropagation()} onPointerMove={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}
             style={{ position: "absolute", left: Math.max(30, Math.min(box.w - 30, selScreen.x)), top: Math.max(6, selScreen.y - shipPx(selShip.type) * 2 - 56), transform: "translateX(-50%)", display: "flex", gap: 10 }}>
             {mode === "menu" && (
               <>
                 <Fl2Btn icon="compass" label={L("Muovi", "Move")} tone={SON.green} bg={SON.sea} onTap={() => (setMode("move"), setDraft(null))} />
-                <Fl2Btn icon="crossbow" label={L("Spara", "Fire")} tone={SON.foe} bg={SON.sea} onTap={() => setMode("fire")} />
+                <Fl2Btn icon="target" label={L("Spara", "Fire")} tone={SON.foe} bg={SON.sea} onTap={() => setMode("fire")} />
               </>
             )}
             {mode !== "menu" && !draft && <Fl2Btn icon="close" label={L("Annulla", "Cancel")} tone={SON.faint} bg={SON.sea} onTap={() => (setSel(null), setMode(null))} />}
