@@ -244,7 +244,6 @@ const GAMES = {
     board: true,
     cat: "tavolo",
     cta: { it: "Salpa!", en: "Set sail!" },
-    disabled: true, // hidden while the deploy screen + pan/zoom camera + full-screen sonar UI are rebuilt
     opts: [],
     def: {},
   },
@@ -5684,8 +5683,9 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   return (
     <Frame jolt={jolt}>
       <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-      <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />
-      {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
+      {/* Flotta 2 is a full-screen sonar console with its own chrome — skip the standard header/solo bar */}
+      {room.game !== "flotta2" && <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />}
+      {solo && room.game !== "flotta2" && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
       <EndGameOverlay room={room} seat={seat} onAgree={agreeEnd} onDecline={declineEnd} onCancel={declineEnd} />
       <FinaleModal show={gs.done} decided={decided} outcome={outcome} room={room} gs={gs} seat={seat} onAgain={again} onExit={toGames} />
 
@@ -5710,7 +5710,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ) : room.game === "flotta" ? (
         <Flotta room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "flotta2" ? (
-        <Flotta2 room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+        <Flotta2 room={room} gs={gs} seat={seat} mine={mine} commit={commit} onExit={requestEnd} solo={solo} onFlip={() => setSeat(other(seat))} sound={sound} setSound={setSound} />
       ) : room.game === "paroliere" ? (
         <Paroliere room={room} gs={gs} seat={seat} commit={commit} />
       ) : (
@@ -9042,197 +9042,231 @@ function Fl2Btn({ icon, label, onTap, tone, bg, size = 46 }) {
     </div>
   );
 }
-function Flotta2({ room, gs, seat, mine, commit }) {
+function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, setSound }) {
   const opp = other(seat);
-  const me = TSIDE[seat],
-    foe = TSIDE[opp];
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
-  const [box, setBox] = useState({ w: 360, h: 360 });
-  const [sel, setSel] = useState(null); // selected own ship id
-  const [mode, setMode] = useState(null); // null | "menu" | "move" | "fire" | "recon"
-  const [draft, setDraft] = useState(null); // staged order preview
+  const [box, setBox] = useState({ w: 360, h: 560 });
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const [showHelp, setShowHelp] = useState(false);
-  const drawing = useRef(null);
-  const roundAt = useRef(0); // when the last round resolved, for blast/radar flashes
+  const [sel, setSel] = useState(null); // selected own ship (planning)
+  const [mode, setMode] = useState(null); // null | "menu" | "move" | "fire"
+  const [draft, setDraft] = useState(null);
   const [, force] = useState(0);
+  const gest = useRef(null); // active one-finger gesture
+  const pointers = useRef(new Map()); // live pointers, for pinch
+  const roundAt = useRef(0);
 
+  const deploying = gs.phase === "deploy";
   const myShips = gs.ships[seat];
   const seen = flotta2Seen(gs, seat);
-  const submitted = !!gs.orders[seat];
-  const canAct = !submitted && !gs.done;
+  const submittedDeploy = deploying && !!gs.deploy[seat];
+  const submittedOrder = !deploying && !!gs.orders[seat];
+  const canAct = deploying ? !submittedDeploy && !gs.done : !submittedOrder && !gs.done;
+
+  // deployment working state (local until Ready)
+  const [dzone, setDzone] = useState(null);
+  const [dpos, setDpos] = useState({}); // id → {x,y}
   const selShip = sel ? myShips.find((s) => s.id === sel) : null;
 
   useEffect(() => {
-    const measure = () => {
-      const el = wrapRef.current;
-      if (el) setBox({ w: el.clientWidth, h: el.clientHeight });
-    };
+    const measure = () => { const el = wrapRef.current; if (el) setBox({ w: el.clientWidth, h: el.clientHeight }); };
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
 
-  // a fresh round arrived → clear my staging and mark the moment (blast/sweep fx)
+  // auto-layout ships in an octant's ring
+  const autoPlace = (zone) => {
+    const a0 = zone * (Math.PI / 4);
+    const out = {};
+    const n = myShips.length;
+    myShips.forEach((s, i) => {
+      const a = a0 + (Math.PI / 4) * ((i + 1) / (n + 1));
+      const rr = gs.R * 0.72;
+      out[s.id] = { x: Math.cos(a) * rr, y: Math.sin(a) * rr };
+    });
+    return out;
+  };
+  // pick a default octant + placement when entering deploy or switching sides
+  // (solo flips seat, so re-seed for whoever hasn't deployed yet)
+  useEffect(() => {
+    if (deploying && !gs.deploy[seat]) {
+      const z = FL2_ZONES[seat][1];
+      setDzone(z);
+      setDpos(autoPlace(z));
+    }
+  }, [deploying, seat]); // eslint-disable-line
+
+  // a fresh round / phase change → clear staging, note the moment for fx
   useEffect(() => {
     setSel(null);
     setMode(null);
     setDraft(null);
-    drawing.current = null;
+    gest.current = null;
     roundAt.current = nowMs();
-  }, [gs.turn, gs.done]);
+  }, [gs.turn, gs.phase, gs.done]);
 
-  // the sonar sweep runs continuously — unless the viewer asked for less motion,
-  // in which case we hold a still scope and only repaint on interaction.
+  // continuous sonar sweep, unless the viewer asked for less motion
   const reduceMotion = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   useEffect(() => {
     if (reduceMotion) return;
     let raf;
-    const loop = () => {
-      force((n) => n + 1);
-      raf = requestAnimationFrame(loop);
-    };
+    const loop = () => { force((n) => n + 1); raf = requestAnimationFrame(loop); };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, [reduceMotion]);
 
-  // resolve the round once both plans are in — guarded so each client fires once
+  // both deployed → open play (guarded so each client begins once)
+  const begunRef = useRef(false);
+  useEffect(() => {
+    if (flotta2DeployReady(gs) && !begunRef.current) { begunRef.current = true; const r = flotta2Begin(gs); if (r) commit(r); }
+  }, [gs.deploy && gs.deploy.A, gs.deploy && gs.deploy.B]); // eslint-disable-line
+  // both ordered → resolve the round (guarded once per turn)
   const resolvedFor = useRef(-1);
   useEffect(() => {
-    if (flotta2Ready(gs) && resolvedFor.current !== gs.turn) {
-      resolvedFor.current = gs.turn;
-      const r = flotta2Resolve(gs);
-      if (r) commit(r);
-    }
-  }, [gs.orders.A, gs.orders.B, gs.turn]); // eslint-disable-line
-
-  // Both sides submit into one shared object over a last-write-wins transport, so
-  // two truly-simultaneous submits can clobber each other. Keep my own order and
-  // re-send it if the shared state comes back without it — the two converge.
-  const myOrderRef = useRef(null);
+    if (flotta2Ready(gs) && resolvedFor.current !== gs.turn) { resolvedFor.current = gs.turn; const r = flotta2Resolve(gs); if (r) commit(r); }
+  }, [gs.orders && gs.orders.A, gs.orders && gs.orders.B, gs.turn]); // eslint-disable-line
+  // re-send my own submission if a concurrent write clobbered the shared state
+  const mineRef = useRef(null);
+  useEffect(() => { mineRef.current = null; }, [gs.turn, gs.phase, seat]);
   useEffect(() => {
-    myOrderRef.current = null;
-  }, [gs.turn]);
-  useEffect(() => {
-    if (!gs.done && myOrderRef.current && !gs.orders[seat]) {
-      const r = flotta2Order(gs, seat, myOrderRef.current);
-      if (r) commit(r);
-    }
-  }, [gs.orders.A, gs.orders.B]); // eslint-disable-line
+    if (gs.done || !mineRef.current) return;
+    if (deploying && !gs.deploy[seat]) { const r = flotta2Deploy(gs, seat, mineRef.current); if (r) commit(r); }
+    else if (!deploying && !gs.orders[seat]) { const r = flotta2Order(gs, seat, mineRef.current); if (r) commit(r); }
+  }, [gs.deploy && gs.deploy.A, gs.deploy && gs.deploy.B, gs.orders && gs.orders.A, gs.orders && gs.orders.B]); // eslint-disable-line
 
-  const scale = (Math.min(box.w, box.h) * 0.47) / gs.R;
-  const cX = box.w / 2,
-    cY = box.h / 2;
+  /* ── camera ── */
+  const fit = (Math.min(box.w, box.h) * 0.46) / gs.R;
+  const scale = fit * zoom;
+  const cX = box.w / 2 + pan.x;
+  const cY = box.h / 2 + pan.y;
   const w2s = (p) => ({ x: cX + p.x * scale, y: cY + p.y * scale });
   const s2w = (sx, sy) => ({ x: (sx - cX) / scale, y: (sy - cY) / scale });
-  const shipPx = (t) => Math.max(11, FL2_UNITS[t].size * scale);
-  // where a ship will be after it advances along its standing plan this round —
-  // shots launch from there, so the aim preview should too
-  const futurePos = (ship) => {
-    const c = { x: ship.x, y: ship.y, path: (ship.path || []).slice(), heading: ship.heading };
-    fl2Advance(c, FL2_UNITS[ship.type].speed);
-    return c;
-  };
-
-  const local = (e) => {
-    const r = wrapRef.current.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
-  };
+  const shipPx = (t) => Math.max(5, FL2_UNITS[t].size * scale); // small relative to the field; zoom in to work up close
+  const shipPos = (s) => (deploying && dpos[s.id] ? dpos[s.id] : { x: s.x, y: s.y });
+  const local = (e) => { const r = wrapRef.current.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
   const hitShip = (sx, sy) => {
-    let best = null,
-      bd = Infinity;
+    let best = null, bd = Infinity;
     for (const s of myShips) {
-      const p = w2s(s);
+      const p = w2s(shipPos(s));
       const d = Math.hypot(p.x - sx, p.y - sy);
-      if (d < bd && d <= shipPx(s.type) + 16) (bd = d), (best = s);
+      if (d < bd && d <= Math.max(22, shipPx(s.type) + 16)) (bd = d), (best = s);
     }
     return best;
   };
+  // clamp a deploy drop into the legal ring/octant (recon: any octant)
+  const clampDeploy = (type, p) => {
+    let r = fl2Len(p.x, p.y);
+    r = Math.max(FL2_R * 0.52, Math.min(FL2_R * 0.97, r));
+    let a = Math.atan2(p.y, p.x);
+    if (a < 0) a += 2 * Math.PI;
+    if (type !== "recon" && dzone != null) {
+      const a0 = dzone * (Math.PI / 4) + 0.05, a1 = (dzone + 1) * (Math.PI / 4) - 0.05;
+      a = Math.max(a0, Math.min(a1, a));
+    }
+    return { x: Math.cos(a) * r, y: Math.sin(a) * r };
+  };
 
-  const down = (e) => {
-    if (!canAct) return;
-    const { x, y } = local(e);
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {}
-    if (mode === "move" && selShip) {
-      drawing.current = { kind: "move", pts: [s2w(x, y)] };
-      setDraft(null);
-    } else if (mode === "fire" && selShip) {
-      drawing.current = { kind: "fire", aim: s2w(x, y) };
-      setDraft({ kind: "fire", aim: s2w(x, y) });
-    } else if (mode === "recon" && selShip) {
-      setDraft({ kind: "recon", at: s2w(x, y) });
-    } else {
+  /* ── gestures: one finger acts/pans, two fingers pinch-zoom ── */
+  const onDown = (e) => {
+    const l = local(e);
+    pointers.current.set(e.pointerId, l);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    if (pointers.current.size === 2) {
+      const [a, b] = [...pointers.current.values()];
+      gest.current = { kind: "pinch", d0: Math.hypot(a.x - b.x, a.y - b.y), z0: zoom, ox: pan.x, oy: pan.y, mid0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
+      return;
+    }
+    if (pointers.current.size !== 1) return;
+    const { x, y } = l;
+    if (!canAct) { gest.current = { kind: "pan", sx: x, sy: y, ox: pan.x, oy: pan.y }; force((n) => n + 1); return; }
+    if (deploying) {
       const s = hitShip(x, y);
-      if (s) {
-        setSel(s.id);
-        setMode("menu");
-        setDraft(null);
-      } else {
-        setSel(null);
-        setMode(null);
-        setDraft(null);
-      }
+      if (s) { setSel(s.id); gest.current = { kind: "place", id: s.id, type: s.type }; return; }
+      gest.current = { kind: "tapPan", sx: x, sy: y, ox: pan.x, oy: pan.y, moved: false };
+      return;
     }
-    force((n) => n + 1);
+    if (mode === "move" && selShip) { gest.current = { kind: "draw", pts: [s2w(x, y)] }; setDraft(null); return; }
+    if (mode === "fire" && selShip) { gest.current = { kind: "aim" }; setDraft({ kind: "fire", aim: s2w(x, y) }); return; }
+    const s = hitShip(x, y);
+    if (s) { gest.current = { kind: "tapShip", id: s.id, sx: x, sy: y, moved: false }; return; }
+    gest.current = { kind: "tapPan", sx: x, sy: y, ox: pan.x, oy: pan.y, moved: false };
   };
-  const move = (e) => {
-    if (!drawing.current) return;
+  const onMove = (e) => {
+    if (pointers.current.has(e.pointerId)) pointers.current.set(e.pointerId, local(e));
+    const g = gest.current;
+    if (!g) return;
+    if (g.kind === "pinch") {
+      const pts = [...pointers.current.values()];
+      if (pts.length < 2) return;
+      const [a, b] = pts;
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const nz = Math.max(1, Math.min(6, g.z0 * (d / (g.d0 || 1))));
+      setZoom(nz);
+      force((n) => n + 1);
+      return;
+    }
     const { x, y } = local(e);
-    if (drawing.current.kind === "move") {
-      const pts = drawing.current.pts;
-      const last = pts[pts.length - 1];
-      const wp = s2w(x, y);
-      if (Math.hypot(wp.x - last.x, wp.y - last.y) >= gs.R * 0.02) pts.push(wp);
-    } else if (drawing.current.kind === "fire") {
-      drawing.current.aim = s2w(x, y);
-      setDraft({ kind: "fire", aim: drawing.current.aim });
+    if (g.kind === "pan") { setPan({ x: g.ox + (x - g.sx), y: g.oy + (y - g.sy) }); force((n) => n + 1); return; }
+    if (g.kind === "tapPan") {
+      if (!g.moved && Math.hypot(x - g.sx, y - g.sy) < 8) return;
+      g.moved = true;
+      setPan({ x: g.ox + (x - g.sx), y: g.oy + (y - g.sy) });
+      force((n) => n + 1);
+      return;
     }
-    force((n) => n + 1);
+    if (g.kind === "tapShip") { if (Math.hypot(x - g.sx, y - g.sy) >= 8) g.moved = true; return; }
+    if (g.kind === "place") { setDpos((p) => ({ ...p, [g.id]: clampDeploy(g.type, s2w(x, y)) })); force((n) => n + 1); return; }
+    if (g.kind === "draw") { const wp = s2w(x, y); const last = g.pts[g.pts.length - 1]; if (Math.hypot(wp.x - last.x, wp.y - last.y) >= gs.R * 0.02) g.pts.push(wp); force((n) => n + 1); return; }
+    if (g.kind === "aim") { setDraft({ kind: "fire", aim: s2w(x, y) }); force((n) => n + 1); return; }
   };
-  const up = () => {
-    const d = drawing.current;
-    drawing.current = null;
-    if (!d) return;
-    if (d.kind === "move" && selShip) {
-      // route starts at the ship; cap the plan to ~3 turns of travel
-      let path = [{ x: selShip.x, y: selShip.y }, ...d.pts];
+  const onUp = (e) => {
+    pointers.current.delete(e.pointerId);
+    const g = gest.current;
+    if (pointers.current.size >= 1 && g && g.kind === "pinch") { gest.current = null; return; }
+    if (!g) return;
+    gest.current = null;
+    const { x, y } = local(e);
+    if (g.kind === "tapPan" && !g.moved) {
+      if (deploying) {
+        const wp = s2w(x, y);
+        const oct = fl2Octant(wp.x, wp.y);
+        if (FL2_ZONES[seat].includes(oct)) { setDzone(oct); setDpos(autoPlace(oct)); }
+      } else { setSel(null); setMode(null); setDraft(null); }
+    } else if (g.kind === "tapShip" && !g.moved) {
+      setSel(g.id); setMode("menu");
+    } else if (g.kind === "draw" && selShip) {
+      let path = [{ x: selShip.x, y: selShip.y }, ...g.pts];
       const maxLen = 3 * FL2_UNITS[selShip.type].speed;
-      let acc = 0;
-      const trimmed = [path[0]];
+      let acc = 0; const trimmed = [path[0]];
       for (let i = 1; i < path.length; i++) {
         const seg = Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
-        if (acc + seg > maxLen) {
-          const k = (maxLen - acc) / seg;
-          trimmed.push({ x: path[i - 1].x + (path[i].x - path[i - 1].x) * k, y: path[i - 1].y + (path[i].y - path[i - 1].y) * k });
-          break;
-        }
-        acc += seg;
-        trimmed.push(path[i]);
+        if (acc + seg > maxLen) { const k = (maxLen - acc) / seg; trimmed.push({ x: path[i - 1].x + (path[i].x - path[i - 1].x) * k, y: path[i - 1].y + (path[i].y - path[i - 1].y) * k }); break; }
+        acc += seg; trimmed.push(path[i]);
       }
       if (trimmed.length >= 2) setDraft({ kind: "move", path: trimmed });
     }
     force((n) => n + 1);
   };
 
-  const confirm = () => {
+  const futurePos = (ship) => { const c = { x: ship.x, y: ship.y, path: (ship.path || []).slice(), heading: ship.heading }; fl2Advance(c, FL2_UNITS[ship.type].speed); return c; };
+
+  const confirmOrder = () => {
     if (!draft || !selShip) return;
     const order = { ship: sel, ...draft };
     const r = flotta2Order(gs, seat, order);
-    if (r) {
-      myOrderRef.current = order; // remember it in case a concurrent submit clobbers the shared state
-      commit(r);
-    }
-    setSel(null);
-    setMode(null);
-    setDraft(null);
+    if (r) { mineRef.current = order; commit(r); }
+    setSel(null); setMode(null); setDraft(null);
   };
-  const cancel = () => {
-    setDraft(null);
-    drawing.current = null;
-    setMode("menu");
-    force((n) => n + 1);
+  const submitDeploy = () => {
+    if (dzone == null) return;
+    const ships = {};
+    for (const s of myShips) { const p = dpos[s.id] || shipPos(s); ships[s.id] = { x: p.x, y: p.y, path: [] }; }
+    const placement = { zone: dzone, ships };
+    const r = flotta2Deploy(gs, seat, placement);
+    if (r) { mineRef.current = placement; commit(r); }
   };
 
   /* ── paint ── */
@@ -9240,311 +9274,201 @@ function Flotta2({ room, gs, seat, mine, commit }) {
     const cv = canvasRef.current;
     if (!cv) return;
     const dpr = Math.min(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
-    const W = box.w,
-      H = box.h;
-    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
-      cv.width = Math.round(W * dpr);
-      cv.height = Math.round(H * dpr);
-    }
+    const W = box.w, H = box.h;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
     const ctx = cv.getContext("2d");
     ctx.save();
     ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, W, H);
-    const c0 = w2s({ x: 0, y: 0 });
-    const rpx = gs.R * scale;
     const t = nowMs();
-    // black screen behind everything
     ctx.fillStyle = "#020a06";
     ctx.fillRect(0, 0, W, H);
-    // the sonar scope: a near-black disc with a soft green core glow
+    const c0 = w2s({ x: 0, y: 0 });
+    const rpx = gs.R * scale;
     const grad = ctx.createRadialGradient(c0.x, c0.y, rpx * 0.05, c0.x, c0.y, rpx);
     grad.addColorStop(0, "#0a2a1b");
     grad.addColorStop(1, SON.sea);
-    ctx.beginPath();
-    ctx.arc(c0.x, c0.y, rpx, 0, 2 * Math.PI);
-    ctx.fillStyle = grad;
-    ctx.fill();
-    // everything scope-side is clipped to the disc
+    ctx.beginPath(); ctx.arc(c0.x, c0.y, rpx, 0, 2 * Math.PI); ctx.fillStyle = grad; ctx.fill();
     ctx.save();
-    ctx.beginPath();
-    ctx.arc(c0.x, c0.y, rpx, 0, 2 * Math.PI);
-    ctx.clip();
-    // concentric range rings + bearing lines
-    ctx.strokeStyle = SON.grid;
-    ctx.lineWidth = 1;
-    for (let i = 1; i <= 4; i++) {
-      ctx.beginPath();
-      ctx.arc(c0.x, c0.y, (rpx * i) / 4, 0, 2 * Math.PI);
-      ctx.stroke();
+    ctx.beginPath(); ctx.arc(c0.x, c0.y, rpx, 0, 2 * Math.PI); ctx.clip();
+    // range rings + bearing lines
+    ctx.strokeStyle = SON.grid; ctx.lineWidth = 1;
+    for (let i = 1; i <= 4; i++) { ctx.beginPath(); ctx.arc(c0.x, c0.y, (rpx * i) / 4, 0, 2 * Math.PI); ctx.stroke(); }
+    for (let a = 0; a < 8; a++) { ctx.beginPath(); ctx.moveTo(c0.x, c0.y); ctx.lineTo(c0.x + Math.cos((a * Math.PI) / 4) * rpx, c0.y + Math.sin((a * Math.PI) / 4) * rpx); ctx.stroke(); }
+    // deploy overlays: your octants, chosen zone, no-deploy circle
+    if (deploying) {
+      for (const oct of FL2_ZONES[seat]) {
+        const a0 = oct * (Math.PI / 4);
+        ctx.beginPath(); ctx.moveTo(c0.x, c0.y); ctx.arc(c0.x, c0.y, rpx, a0, a0 + Math.PI / 4); ctx.closePath();
+        ctx.fillStyle = oct === dzone ? "rgba(70,255,156,0.14)" : "rgba(70,255,156,0.04)";
+        ctx.fill();
+      }
+      // central no-deploy circle
+      ctx.beginPath(); ctx.arc(c0.x, c0.y, FL2_NODEPLOY * scale, 0, 2 * Math.PI);
+      ctx.fillStyle = "rgba(255,91,74,0.08)"; ctx.fill();
+      ctx.strokeStyle = "rgba(255,91,74,0.5)"; ctx.setLineDash([5, 5]); ctx.lineWidth = 1.4; ctx.stroke(); ctx.setLineDash([]);
     }
-    for (let a = 0; a < 8; a++) {
-      ctx.beginPath();
-      ctx.moveTo(c0.x, c0.y);
-      ctx.lineTo(c0.x + Math.cos((a * Math.PI) / 4) * rpx, c0.y + Math.sin((a * Math.PI) / 4) * rpx);
-      ctx.stroke();
-    }
-    // rotating sweep — a bright leading spoke with a fading trail
+    // rotating sweep
     const sweep = reduceMotion ? -Math.PI / 2 : (t / 2600) * 2 * Math.PI;
     for (let k = 0; k < 22; k++) {
       const a = sweep - k * 0.05;
-      ctx.beginPath();
-      ctx.moveTo(c0.x, c0.y);
-      ctx.lineTo(c0.x + Math.cos(a) * rpx, c0.y + Math.sin(a) * rpx);
-      ctx.strokeStyle = `rgba(70,255,156,${0.16 * (1 - k / 22)})`;
-      ctx.lineWidth = k === 0 ? 2 : 1.4;
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(c0.x, c0.y); ctx.lineTo(c0.x + Math.cos(a) * rpx, c0.y + Math.sin(a) * rpx);
+      ctx.strokeStyle = `rgba(70,255,156,${0.16 * (1 - k / 22)})`; ctx.lineWidth = k === 0 ? 2 : 1.4; ctx.stroke();
     }
-    // own vision pools (soft green)
-    for (const s of myShips) {
+    // own vision pools (planning only)
+    if (!deploying) for (const s of myShips) {
       const p = w2s(s);
       const vg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, FL2_UNITS[s.type].vision * scale);
-      vg.addColorStop(0, "rgba(70,255,156,0.10)");
-      vg.addColorStop(1, "rgba(70,255,156,0)");
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, FL2_UNITS[s.type].vision * scale, 0, 2 * Math.PI);
-      ctx.fillStyle = vg;
-      ctx.fill();
+      vg.addColorStop(0, "rgba(70,255,156,0.10)"); vg.addColorStop(1, "rgba(70,255,156,0)");
+      ctx.beginPath(); ctx.arc(p.x, p.y, FL2_UNITS[s.type].vision * scale, 0, 2 * Math.PI); ctx.fillStyle = vg; ctx.fill();
     }
     const since = nowMs() - roundAt.current;
-    // radar-sweep reveal: an expanding ring on the third round
-    if (gs.radar && since < 1200) {
+    if (!deploying && gs.radar && since < 1200) {
       const k = since / 1200;
-      ctx.beginPath();
-      ctx.arc(c0.x, c0.y, rpx * k, 0, 2 * Math.PI);
-      ctx.strokeStyle = `rgba(70,255,156,${0.7 * (1 - k)})`;
-      ctx.lineWidth = 3;
-      ctx.shadowColor = SON.green;
-      ctx.shadowBlur = 14;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
+      ctx.beginPath(); ctx.arc(c0.x, c0.y, rpx * k, 0, 2 * Math.PI);
+      ctx.strokeStyle = `rgba(70,255,156,${0.7 * (1 - k)})`; ctx.lineWidth = 3; ctx.shadowColor = SON.green; ctx.shadowBlur = 14; ctx.stroke(); ctx.shadowBlur = 0;
     }
-    // ships — distinct silhouette per unit, own green, enemy contacts red, glowing
     const drawShip = (s, mineShip) => {
-      const p = w2s(s);
-      const u = Math.max(6, shipPx(s.type));
+      const pos = mineShip ? shipPos(s) : s;
+      const p = w2s(pos);
+      const u = Math.max(5, shipPx(s.type));
       const edge = mineShip ? SON.green : SON.foe;
-      ctx.save();
-      ctx.shadowColor = edge;
-      ctx.shadowBlur = mineShip ? 10 : 8;
-      ctx.translate(p.x, p.y);
-      ctx.rotate(s.heading || 0);
+      ctx.save(); ctx.shadowColor = edge; ctx.shadowBlur = mineShip ? 10 : 8;
+      ctx.translate(p.x, p.y); ctx.rotate(s.heading || 0);
       fl2Hull(ctx, s.type, u * 0.5, edge, "rgba(4,22,14,0.85)");
       ctx.restore();
-      // health ring
       const frac = Math.max(0, s.hp / s.maxhp);
-      ctx.save();
-      ctx.shadowColor = edge;
-      ctx.shadowBlur = 6;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, u * 1.5, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI);
-      ctx.strokeStyle = mineShip ? SON.hp : SON.foe;
-      ctx.lineWidth = 2.2;
-      ctx.stroke();
-      ctx.restore();
-      if (mineShip && s.id === sel) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, u * 1.9, 0, 2 * Math.PI);
-        ctx.strokeStyle = SON.green;
-        ctx.setLineDash([3, 3]);
-        ctx.lineWidth = 1.6;
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      if (mineShip && s.path && s.path.length) {
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        for (const q of s.path) {
-          const sp = w2s(q);
-          ctx.lineTo(sp.x, sp.y);
-        }
-        ctx.strokeStyle = SON.grid;
-        ctx.lineWidth = 1.3;
-        ctx.setLineDash([4, 4]);
-        ctx.stroke();
-        ctx.setLineDash([]);
+      ctx.save(); ctx.shadowColor = edge; ctx.shadowBlur = 6;
+      ctx.beginPath(); ctx.arc(p.x, p.y, u * 1.6, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI);
+      ctx.strokeStyle = mineShip ? SON.hp : SON.foe; ctx.lineWidth = 2.2; ctx.stroke(); ctx.restore();
+      if (mineShip && s.id === sel) { ctx.beginPath(); ctx.arc(p.x, p.y, u * 2, 0, 2 * Math.PI); ctx.strokeStyle = SON.green; ctx.setLineDash([3, 3]); ctx.lineWidth = 1.6; ctx.stroke(); ctx.setLineDash([]); }
+      if (mineShip && !deploying && s.path && s.path.length) {
+        ctx.beginPath(); ctx.moveTo(p.x, p.y);
+        for (const q of s.path) { const sp = w2s(q); ctx.lineTo(sp.x, sp.y); }
+        ctx.strokeStyle = SON.grid; ctx.lineWidth = 1.3; ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([]);
       }
     };
-    for (const s of gs.ships[opp]) if (seen.has(s.id)) drawShip(s, false);
+    if (!deploying) for (const s of gs.ships[opp]) if (seen.has(s.id)) drawShip(s, false);
     for (const s of myShips) drawShip(s, true);
-    // projectiles — glowing blips (own green, enemy red)
-    for (const pr of gs.proj) {
+    if (!deploying) for (const pr of gs.proj) {
       const visible = pr.owner === seat || myShips.some((o) => Math.hypot(o.x - pr.x, o.y - pr.y) <= FL2_UNITS[o.type].vision);
       if (!visible) continue;
       const p = w2s(pr);
-      ctx.save();
-      ctx.shadowColor = pr.owner === seat ? SON.green : SON.foe;
-      ctx.shadowBlur = 10;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI);
-      ctx.fillStyle = pr.owner === seat ? SON.green : SON.foe;
-      ctx.fill();
+      ctx.save(); ctx.shadowColor = pr.owner === seat ? SON.green : SON.foe; ctx.shadowBlur = 10;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI); ctx.fillStyle = pr.owner === seat ? SON.green : SON.foe; ctx.fill(); ctx.restore();
+    }
+    if (!deploying && since < 800) {
+      const k = since / 800; ctx.save(); ctx.shadowColor = SON.foe; ctx.shadowBlur = 16;
+      for (const b of gs.boom || []) { const p = w2s(b); ctx.beginPath(); ctx.arc(p.x, p.y, b.r * scale * (0.4 + 0.6 * k), 0, 2 * Math.PI); ctx.strokeStyle = `rgba(255,91,74,${0.8 * (1 - k)})`; ctx.lineWidth = 3; ctx.stroke(); }
       ctx.restore();
     }
-    // blasts from the round just resolved
-    if (since < 800) {
-      const k = since / 800;
-      ctx.save();
-      ctx.shadowColor = SON.foe;
-      ctx.shadowBlur = 16;
-      for (const b of gs.boom || []) {
-        const p = w2s(b);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, b.r * scale * (0.4 + 0.6 * k), 0, 2 * Math.PI);
-        ctx.strokeStyle = `rgba(255,91,74,${0.8 * (1 - k)})`;
-        ctx.lineWidth = 3;
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-    // draft + in-progress previews, all in bright green with a glow
-    ctx.save();
-    ctx.shadowColor = SON.green;
-    ctx.shadowBlur = 8;
-    ctx.strokeStyle = SON.green;
-    if (draft && selShip) {
-      const sp = w2s(selShip);
+    // previews
+    ctx.save(); ctx.shadowColor = SON.green; ctx.shadowBlur = 8; ctx.strokeStyle = SON.green;
+    if (!deploying && draft && selShip) {
       if (draft.kind === "move" && draft.path) {
-        ctx.beginPath();
-        ctx.moveTo(w2s(draft.path[0]).x, w2s(draft.path[0]).y);
+        ctx.beginPath(); ctx.moveTo(w2s(draft.path[0]).x, w2s(draft.path[0]).y);
         for (const q of draft.path) ctx.lineTo(w2s(q).x, w2s(q).y);
-        ctx.lineWidth = 2.4;
-        ctx.stroke();
+        ctx.lineWidth = 2.4; ctx.stroke();
       } else if (draft.kind === "fire" && draft.aim) {
-        const a = w2s(draft.aim);
-        const from = w2s(futurePos(selShip)); // the shot launches from where the ship will be
-        const w = FL2_WEAPON[FL2_UNITS[selShip.type].weapon];
-        ctx.beginPath();
-        ctx.arc(from.x, from.y, 4, 0, 2 * Math.PI); // marks the future launch point
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(from.x, from.y);
-        ctx.lineTo(a.x, a.y);
-        ctx.setLineDash([5, 4]);
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.arc(a.x, a.y, w.aoe * scale, 0, 2 * Math.PI);
-        ctx.strokeStyle = SON.foe;
-        ctx.shadowColor = SON.foe;
-        ctx.lineWidth = 1.8;
-        ctx.stroke();
-      } else if (draft.kind === "recon" && draft.at) {
-        const a = w2s(draft.at);
-        ctx.beginPath();
-        ctx.arc(a.x, a.y, FL2_UNITS[selShip.type].vision * scale, 0, 2 * Math.PI);
-        ctx.setLineDash([5, 4]);
-        ctx.lineWidth = 1.8;
-        ctx.stroke();
-        ctx.setLineDash([]);
+        const a = w2s(draft.aim), from = w2s(futurePos(selShip)), w = FL2_WEAPON[FL2_UNITS[selShip.type].weapon];
+        ctx.beginPath(); ctx.arc(from.x, from.y, 4, 0, 2 * Math.PI); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(a.x, a.y); ctx.setLineDash([5, 4]); ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]);
+        ctx.beginPath(); ctx.arc(a.x, a.y, w.aoe * scale, 0, 2 * Math.PI); ctx.strokeStyle = SON.foe; ctx.shadowColor = SON.foe; ctx.lineWidth = 1.8; ctx.stroke();
       }
     }
-    if (drawing.current && drawing.current.kind === "move" && selShip) {
-      const sp = w2s(selShip);
-      ctx.beginPath();
-      ctx.moveTo(sp.x, sp.y);
-      for (const q of drawing.current.pts) ctx.lineTo(w2s(q).x, w2s(q).y);
-      ctx.lineWidth = 2.4;
-      ctx.stroke();
+    if (!deploying && gest.current && gest.current.kind === "draw" && selShip) {
+      const sp = w2s(selShip); ctx.beginPath(); ctx.moveTo(sp.x, sp.y);
+      for (const q of gest.current.pts) ctx.lineTo(w2s(q).x, w2s(q).y);
+      ctx.lineWidth = 2.4; ctx.stroke();
     }
     ctx.restore();
-    ctx.restore(); // end scope clip
-    // scope rim
-    ctx.beginPath();
-    ctx.arc(c0.x, c0.y, rpx, 0, 2 * Math.PI);
-    ctx.strokeStyle = SON.faint;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    // CRT scanlines over the whole canvas
+    ctx.restore(); // clip
+    ctx.beginPath(); ctx.arc(c0.x, c0.y, rpx, 0, 2 * Math.PI); ctx.strokeStyle = SON.faint; ctx.lineWidth = 2; ctx.stroke();
     ctx.fillStyle = "rgba(0,0,0,0.16)";
     for (let y = 0; y < H; y += 3) ctx.fillRect(0, y, W, 1);
     ctx.restore();
   });
 
-  // floating controls near the selected ship
-  const selScreen = selShip ? w2s(selShip) : null;
-  const isRecon = selShip && !FL2_UNITS[selShip.type].weapon;
+  /* ── chrome + controls ── */
+  const selScreen = selShip ? w2s(shipPos(selShip)) : null;
   const status = gs.done
-    ? gs.win === seat
-      ? L("Vittoria!", "Victory!")
-      : gs.win
-      ? L("Sconfitta", "Defeated")
-      : L("Pari", "Draw")
-    : submitted
-    ? L("Ordine dato — aspetta l'avversario", "Order set — waiting for the other player")
-    : sel
-    ? mode === "move"
-      ? L("Disegna la rotta", "Draw the route")
-      : mode === "fire"
-      ? L("Trascina per mirare", "Drag to aim")
-      : mode === "recon"
-      ? L("Tocca dove esplorare", "Tap where to scout")
-      : L("Muovi o agisci", "Move or act")
+    ? gs.win === seat ? L("Vittoria!", "Victory!") : gs.win ? L("Sconfitta", "Defeated") : L("Pari", "Draw")
+    : deploying
+    ? submittedDeploy ? L("Schierato — aspetta l'avversario", "Deployed — waiting for the other player") : dzone == null ? L("Tocca un settore per schierare", "Tap a sector to deploy") : L("Trascina le navi · poi Pronto", "Drag your ships · then Ready")
+    : submittedOrder ? L("Ordine dato — aspetta l'avversario", "Order set — waiting")
+    : sel ? (mode === "move" ? L("Disegna la rotta", "Draw the route") : mode === "fire" ? L("Trascina per mirare", "Drag to aim") : L("Muovi o spara", "Move or fire"))
     : L("Tocca una tua nave", "Tap one of your ships");
+  const chromeBtn = { width: 40, height: 40, borderRadius: 999, border: `1px solid ${SON.faint}`, background: SON.sea, color: SON.green, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" };
 
   return (
-    <div style={{ paddingBottom: 12 }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 40, background: "#020a06", color: SON.green, fontFamily: BRAND, display: "flex", flexDirection: "column", touchAction: "none" }}>
       {showHelp && (
         <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
           <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
-            <p style={{ margin: "0 0 10px" }}>{L("Mare aperto, niente griglia. A ogni turno pianifichi UNA azione con UNA nave; poi il turno si risolve per entrambi insieme.", "Open sea, no grid. Each round you plan ONE action with ONE ship; then the round resolves for both at once.")}</p>
-            <p style={{ margin: "0 0 10px" }}>{L("Tocca una tua nave, poi scegli muovi (disegna la rotta) o agisci (trascina per mirare). Le navi seguono la rotta ogni turno.", "Tap your ship, then pick move (draw the route) or act (drag to aim). Ships follow their route every turn.")}</p>
-            <p style={{ margin: "0 0 10px" }}>{L("Ogni nave spara diverso; i colpi viaggiano nel tempo e fanno danno ad area — più sei al centro, più fa male.", "Each ship fires differently; shots travel over turns and deal area damage — the closer to the centre, the harder it hits.")}</p>
-            <p style={{ margin: 0 }}>{L("Vedi i nemici solo se vicini a una tua nave. Ogni 3 turni il radar li svela tutti. Affonda la flotta avversaria.", "You see enemies only near your ships. Every 3rd turn radar reveals them all. Sink the enemy fleet.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Schieramento: scegli un settore della tua metà e trascina lì le navi (il ricognitore va ovunque). Nessuno schiera nel cerchio centrale.", "Deploy: pick a sector of your half and drag your ships there (the recon goes anywhere). No one deploys in the central circle.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("A ogni turno UNA azione con UNA nave: muovi (disegna la rotta) o spara (trascina per mirare). Poi il turno si risolve per entrambi.", "Each round ONE action with ONE ship: move (draw a route) or fire (drag to aim). Then the round resolves for both.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("I colpi partono da dove sarà la nave e viaggiano nel tempo. Portata: corazzata lunga, fregata media, siluro corta.", "Shots leave from where the ship will be and travel over time. Reach: warship long, frigate mid, torpedo short.")}</p>
+            <p style={{ margin: 0 }}>{L("I sommergibili li vedono solo sommergibili e fregate. Ogni 3 turni il radar svela le navi di superficie. Pizzica per zoomare, trascina per spostare.", "Submarines are seen only by subs and frigates. Every 3rd round radar reveals surface ships. Pinch to zoom, drag to pan.")}</p>
           </div>
         </Sheet>
       )}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
-          {L("Turno", "Round")} {gs.turn} {gs.radar && <Ico n="radar" s={15} c={SON.green} />}
+      {/* top bar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: `1px solid rgba(70,255,156,0.15)` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, letterSpacing: "0.02em" }}>
+          {deploying ? L("Schieramento", "Deployment") : `${L("Turno", "Round")} ${gs.turn}`}
+          {!deploying && gs.radar && <Ico n="radar" s={15} c={SON.green} />}
         </div>
-        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <Ico n="help" s={15} /> {L("come si gioca", "how to play")}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {setSound && <button style={chromeBtn} onClick={() => setSound(!sound)} aria-label="sound"><Ico n={sound ? "wine" : "wine"} s={18} /></button>}
+          <button style={chromeBtn} onClick={() => setShowHelp(true)} aria-label="help"><Ico n="help" s={18} /></button>
+          <button style={{ ...chromeBtn, borderColor: SON.foe, color: SON.foe }} onClick={onExit} aria-label="exit"><Ico n="exit" s={18} /></button>
+        </div>
       </div>
-      <div style={{ textAlign: "center", minHeight: 18, marginBottom: 4 }}>
-        <Micro style={{ color: gs.done ? me : T.ink60 }}>{status}</Micro>
-      </div>
-      <div
-        ref={wrapRef}
-        onPointerDown={down}
-        onPointerMove={move}
-        onPointerUp={up}
-        onPointerCancel={up}
-        style={{ position: "relative", width: "100%", height: "min(64vh, 520px)", touchAction: "none", userSelect: "none", WebkitUserSelect: "none", background: "#020a06", borderRadius: 14, overflow: "hidden", boxShadow: `0 0 24px ${SON.green}22, inset 0 0 40px #000` }}
-      >
+      {solo && (
+        <div onClick={onFlip} style={{ textAlign: "center", padding: "6px 8px", fontSize: 12.5, fontWeight: 600, color: SON.green, borderBottom: `1px solid rgba(70,255,156,0.12)`, cursor: "pointer" }}>
+          <Ico n="flask" s={13} /> {L("Solo · sei", "Solo · you are")} {who(room, seat)} — {L("tocca per cambiare lato", "tap to switch sides")}
+        </div>
+      )}
+      <div style={{ textAlign: "center", minHeight: 18, padding: "5px 8px", fontFamily: MONO, fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: gs.done ? SON.green : SON.faint }}>{status}</div>
+
+      {/* scope */}
+      <div ref={wrapRef} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp} style={{ position: "relative", flex: 1, minHeight: 0, touchAction: "none", userSelect: "none", WebkitUserSelect: "none" }}>
         <canvas ref={canvasRef} style={{ width: "100%", height: "100%", display: "block" }} />
-        {/* per-ship controls */}
-        {selScreen && canAct && (
-          <div
-            onPointerDown={(e) => e.stopPropagation()}
-            onPointerMove={(e) => e.stopPropagation()}
-            onPointerUp={(e) => e.stopPropagation()}
-            style={{ position: "absolute", left: Math.max(30, Math.min(box.w - 30, selScreen.x)), top: Math.max(6, selScreen.y - shipPx(selShip.type) * 2 - 54), transform: "translateX(-50%)", display: "flex", gap: 10 }}
-          >
+        {/* per-ship menu (planning) */}
+        {!deploying && selScreen && canAct && (
+          <div onPointerDown={(e) => e.stopPropagation()} onPointerMove={(e) => e.stopPropagation()} onPointerUp={(e) => e.stopPropagation()}
+            style={{ position: "absolute", left: Math.max(30, Math.min(box.w - 30, selScreen.x)), top: Math.max(6, selScreen.y - shipPx(selShip.type) * 2 - 56), transform: "translateX(-50%)", display: "flex", gap: 10 }}>
             {mode === "menu" && (
               <>
                 <Fl2Btn icon="compass" label={L("Muovi", "Move")} tone={SON.green} bg={SON.sea} onTap={() => (setMode("move"), setDraft(null))} />
-                <Fl2Btn icon={isRecon ? "eagle" : "crossbow"} label={isRecon ? L("Esplora", "Scout") : L("Spara", "Fire")} tone={SON.foe} bg={SON.sea} onTap={() => setMode(isRecon ? "recon" : "fire")} />
+                <Fl2Btn icon="crossbow" label={L("Spara", "Fire")} tone={SON.foe} bg={SON.sea} onTap={() => setMode("fire")} />
               </>
             )}
             {mode !== "menu" && !draft && <Fl2Btn icon="close" label={L("Annulla", "Cancel")} tone={SON.faint} bg={SON.sea} onTap={() => (setSel(null), setMode(null))} />}
             {draft && (
               <>
-                <Fl2Btn icon="check" label={L("Conferma", "Confirm")} tone={SON.green} bg={SON.sea} onTap={confirm} />
-                <Fl2Btn icon="close" label={L("Rifai", "Redo")} tone={SON.foe} bg={SON.sea} onTap={cancel} />
+                <Fl2Btn icon="check" label={L("Conferma", "Confirm")} tone={SON.green} bg={SON.sea} onTap={confirmOrder} />
+                <Fl2Btn icon="close" label={L("Rifai", "Redo")} tone={SON.foe} bg={SON.sea} onTap={() => (setDraft(null), setMode("menu"))} />
               </>
             )}
           </div>
         )}
+        {/* zoom hint / reset */}
+        {zoom > 1.02 && (
+          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => (setZoom(1), setPan({ x: 0, y: 0 }))} style={{ position: "absolute", right: 12, bottom: 12, ...chromeBtn }} aria-label="recenter"><Ico n="recenter" s={18} /></button>
+        )}
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-        <Micro>
-          <span style={{ color: SON.green, fontWeight: 700 }}>{who(room, seat)}</span> {myShips.length}
-        </Micro>
-        <Micro>
-          <span style={{ color: SON.foe, fontWeight: 700 }}>{who(room, opp)}</span> {gs.radar ? gs.ships[opp].length : `${seen.size}?`}
-        </Micro>
+
+      {/* bottom bar: deploy Ready, or fleet counts */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 14px", borderTop: `1px solid rgba(70,255,156,0.15)` }}>
+        <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.1em" }}>
+          <span style={{ color: SON.green }}>{who(room, seat)}</span> {myShips.length}
+          {!deploying && <> · <span style={{ color: SON.foe }}>{who(room, opp)}</span> {gs.radar ? gs.ships[opp].length : `${seen.size}?`}</>}
+        </span>
+        {deploying && canAct && (
+          <button onClick={submitDeploy} disabled={dzone == null} style={{ ...chromeBtn, width: "auto", padding: "0 18px", height: 40, gap: 8, opacity: dzone == null ? 0.4 : 1, fontWeight: 700, fontSize: 14 }}>
+            <Ico n="check" s={18} /> {L("Pronto", "Ready")}
+          </button>
+        )}
       </div>
     </div>
   );
