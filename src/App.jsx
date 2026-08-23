@@ -8593,38 +8593,30 @@ function Flotta({ room, gs, seat, mine, commit }) {
 // (not bundled — kept out of the one-file app). We only check a word is real; a
 // tampered client could still cheat, same friends-not-tournaments trust as the
 // hidden hands. Accents are stripped so they match the accent-free board.
-const PAROL_DICT_URL = {
-  IT: "https://cdn.jsdelivr.net/npm/an-array-of-italian-words@1.2.0/words.json",
-  EN: "https://cdn.jsdelivr.net/npm/an-array-of-english-words@2.0.0/index.json",
-};
-const parolDictCache = {}; // lang → Set (kept for the whole session once loaded)
-async function parolLoadDict(lang) {
-  lang = parolLang(lang);
-  if (parolDictCache[lang]) return parolDictCache[lang];
-  if (lang === "both") {
-    // Bilingual: a word counts if it's in either wordlist, so load both and union.
-    const [it, en] = await Promise.all([parolLoadDict("IT"), parolLoadDict("EN")]);
-    const set = new Set(it);
-    for (const w of en) set.add(w);
-    parolDictCache.both = set;
-    return set;
-  }
-  const res = await fetch(PAROL_DICT_URL[lang]);
-  if (!res.ok) throw new Error("dict " + res.status);
-  const list = await res.json(); // a JSON array of lowercase words
-  const set = new Set();
-  for (const raw of list) {
-    const w = String(raw)
-      .toUpperCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^A-Z]/g, "");
-    if (w.length >= 3) set.add(w);
-  }
-  parolDictCache[lang] = set;
-  return set;
+// Words are validated on demand against the Free Dictionary API — open source, no
+// key, CORS-enabled from the browser — so nothing heavy is downloaded up front
+// and the dictionary stays current. Only the handful of words a player actually
+// enters are looked up, and each result is memoised for the session. Bilingual
+// accepts a word found in either language. If the service can't be reached the
+// word is accepted on the honour system rather than blocking play.
+const PAROL_DICT_API = "https://api.dictionaryapi.dev/api/v2/entries";
+const parolWordCache = new Map(); // `${apiLang}:${WORD}` → boolean
+async function parolCheckOne(apiLang, word) {
+  const key = `${apiLang}:${word}`;
+  if (parolWordCache.has(key)) return parolWordCache.get(key);
+  const res = await fetch(`${PAROL_DICT_API}/${apiLang}/${encodeURIComponent(word.toLowerCase())}`);
+  const ok = res.ok; // 200 → a real word, 404 → not found
+  parolWordCache.set(key, ok);
+  return ok;
 }
-// Chunk a language's keys into keyboard rows of seven.
+// true = a real word, false = definitely not one, "honour" = service unreachable.
+async function parolCheckWord(lang, word) {
+  const langs = parolLang(lang) === "both" ? ["it", "en"] : [parolLang(lang).toLowerCase()];
+  const rs = await Promise.allSettled(langs.map((a) => parolCheckOne(a, word)));
+  if (rs.some((r) => r.status === "fulfilled" && r.value === true)) return true;
+  if (rs.some((r) => r.status === "rejected")) return "honour"; // couldn't reach it
+  return false;
+}
 const parolRows = (lang) => {
   const keys = PAROL_KEYS[parolLang(lang)];
   const rows = [];
@@ -8640,27 +8632,13 @@ function Paroliere({ room, gs, seat, commit }) {
   const [flash, setFlash] = useState(null); // { kind, id }
   const [now, setNow] = useState(() => nowMs()); // this device's monotonic clock
   const [showHelp, setShowHelp] = useState(false);
-  const [dict, setDict] = useState(null); // the loaded word Set
-  const [dictState, setDictState] = useState(hasStore() ? "off" : "loading"); // loading | ready | error | off
+  // Deployed, words are checked live against the online dictionary; in the
+  // artifact (no network) we play on the honour system and don't verify.
+  const online = !hasStore();
   const submitted = useRef(false);
   const startRef = useRef(null); // monotonic mark for when THIS device started the round
   const active = useRef(false); // a trace gesture is in progress
   const moved = useRef(false); // the gesture dragged across cells (vs. a single tap)
-
-  // Pull the dictionary for this language up front, so words are checked the
-  // moment play starts. In the artifact (no network) we skip it and don't verify.
-  useEffect(() => {
-    if (dictState === "off") return;
-    let live = true;
-    setDictState("loading");
-    parolLoadDict(lang).then(
-      (set) => live && (setDict(set), setDictState("ready")),
-      () => live && setDictState("error")
-    );
-    return () => {
-      live = false;
-    };
-  }, [lang]);
 
   // fresh round (starts at the shake) → clear my local state
   useEffect(() => {
@@ -8742,12 +8720,14 @@ function Paroliere({ room, gs, seat, commit }) {
   // (and not already used) can extend the path.
   const pathWord = path.map((i) => gs.board[i]).join("");
   const nextSet = new Set(path.length ? parolNeighbors(path[path.length - 1]).filter((n) => !path.includes(n)) : []);
-  const addWord = (w) => {
+  const addWord = async (w) => {
     w = (w || "").toUpperCase();
     if (w.length < 3) return void setFlash({ kind: "short", id: uid() });
     if (words.includes(w)) return void setFlash({ kind: "dup", id: uid() });
     if (!parolTrace(gs.board, w)) return void setFlash({ kind: "no", id: uid() });
-    if (dictState === "ready" && !dict.has(w)) return void setFlash({ kind: "notword", id: uid() });
+    // Online check runs last: a 404 means "not a word"; an unreachable service
+    // (returns "honour") accepts the word rather than blocking play.
+    if (online && (await parolCheckWord(gs.lang, w)) === false) return void setFlash({ kind: "notword", id: uid() });
     setWords((ws) => [w, ...ws]);
     setFlash({ kind: "ok", id: uid() });
     return true;
@@ -8807,8 +8787,8 @@ function Paroliere({ room, gs, seat, commit }) {
     }
     // a plain tap keeps the path open, to tap on or press ✓
   };
-  const submitPath = () => {
-    if (addWord(pathWord)) setPath([]);
+  const submitPath = async () => {
+    if (await addWord(pathWord)) setPath([]);
   };
   const undoCell = () => setPath((p) => p.slice(0, -1));
 
@@ -8824,7 +8804,7 @@ function Paroliere({ room, gs, seat, commit }) {
         <p style={{ margin: "0 0 10px" }}>{L("In tre minuti trova più parole che puoi. Ogni lettera si unisce a una vicina — anche in diagonale — senza riusare lo stesso dado.", "In three minutes find as many words as you can. Each letter links to a neighbour — diagonals too — without reusing the same die.")}</p>
         <p style={{ margin: "0 0 10px" }}>
           {L("Parole di almeno 3 lettere, in", "Words of at least 3 letters, in")} {parolLangName(lang)}.{" "}
-          {dictState === "error" || dictState === "off" ? L("Il dizionario non è disponibile: valgono le parole vere per accordo tra voi.", "The dictionary isn't available: real words are on your honour.") : L("Le parole vengono controllate su un dizionario.", "Words are checked against a dictionary.")}
+          {online ? L("Le parole vengono controllate su un dizionario online.", "Words are checked against an online dictionary.") : L("Il dizionario non è disponibile: valgono le parole vere per accordo tra voi.", "The dictionary isn't available: real words are on your honour.")}
         </p>
         <p style={{ margin: "0 0 10px" }}>{L("Punti per lunghezza: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Le parole trovate da entrambi si annullano.", "Points by length: 3–4 → 1, 5 → 2, 6 → 3, 7 → 5, 8+ → 11. Words you both find cancel out.")}</p>
         <p style={{ margin: 0 }}>{L("«Qu» è un dado solo e vale due lettere.", "“Qu” is a single die and counts as two letters.")}</p>
@@ -8905,14 +8885,12 @@ function Paroliere({ room, gs, seat, commit }) {
         <div style={{ marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: me }}>{L("Pronti a cercare parole?", "Ready to hunt words?")}</div>
         <Micro style={{ marginTop: 6 }}>
           {L("Parole in", "Words in")} {parolLangName(lang)}
-          {dictState === "error" ? L(" · dizionario non disponibile", " · dictionary unavailable") : dictState === "off" ? "" : ` · ${L("con dizionario", "checked against a dictionary")}`}
+          {online ? ` · ${L("con dizionario online", "checked online")}` : ""}
         </Micro>
         {boardEl(false, true)}
         <div style={{ marginTop: 6 }}>
           {iReady ? (
             <Micro>{gs.ready[opp] ? L("Si comincia…", "Starting…") : `${L("Pronto — aspetti", "Ready — waiting for")} ${who(room, opp)}`}</Micro>
-          ) : dictState === "loading" ? (
-            <Micro>{L("Carico il dizionario…", "Loading the dictionary…")}</Micro>
           ) : (
             <Button full onClick={() => commit(parolReady(gs, seat))}>
               {L("Via!", "Go!")}
