@@ -5832,7 +5832,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       {room.game !== "flotta2" && <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />}
       {solo && room.game !== "flotta2" && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
       <EndGameOverlay room={room} seat={seat} onAgree={agreeEnd} onDecline={declineEnd} onCancel={declineEnd} />
-      <FinaleModal show={gs.done} decided={decided} outcome={outcome} room={room} gs={gs} seat={seat} onAgain={again} onExit={toGames} />
+      <FinaleModal show={gs.done && room.game !== "flotta2"} decided={decided} outcome={outcome} room={room} gs={gs} seat={seat} onAgain={again} onExit={toGames} />
 
       {room.game === "camicia" ? (
         <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} showScores={!!room.scores} />
@@ -5855,7 +5855,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ) : room.game === "flotta" ? (
         <Flotta room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "flotta2" ? (
-        <Flotta2 room={room} gs={gs} seat={seat} mine={mine} commit={commit} onExit={requestEnd} solo={solo} onFlip={() => setSeat(other(seat))} sound={sound} setSound={setSound} />
+        <Flotta2 room={room} gs={gs} seat={seat} mine={mine} commit={commit} onExit={requestEnd} onAgain={again} solo={solo} onFlip={() => setSeat(other(seat))} sound={sound} setSound={setSound} />
       ) : room.game === "paroliere" ? (
         <Paroliere room={room} gs={gs} seat={seat} commit={commit} />
       ) : (
@@ -9207,7 +9207,7 @@ function Fl2Btn({ icon, label, onTap, tone, bg, size = 46 }) {
     </div>
   );
 }
-function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, setSound }) {
+function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, sound, setSound }) {
   const opp = other(seat);
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
@@ -9588,10 +9588,23 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
       ctx.translate(p.x, p.y); ctx.rotate(s.heading || 0);
       fl2Hull(ctx, s.type, u * 0.5, edge, "rgba(4,22,14,0.85)");
       ctx.restore();
+      // hull gauge: a ring read as an HP bar — a faint full track, a bright arc for
+      // the health left, and dark ticks splitting it into one segment per hull point
       const frac = Math.max(0, s.hp / s.maxhp);
-      ctx.save(); ctx.globalAlpha = alpha; ctx.shadowColor = edge; ctx.shadowBlur = 6;
-      ctx.beginPath(); ctx.arc(p.x, p.y, u * 1.6, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI);
-      ctx.strokeStyle = mineShip ? SON.hp : SON.foe; ctx.lineWidth = 2.2; ctx.stroke(); ctx.restore();
+      const rr = u * 1.6;
+      ctx.save(); ctx.globalAlpha = alpha;
+      ctx.beginPath(); ctx.arc(p.x, p.y, rr, 0, 2 * Math.PI);
+      ctx.strokeStyle = mineShip ? "rgba(234,255,107,0.18)" : "rgba(255,91,74,0.18)"; ctx.lineWidth = 2.6; ctx.stroke();
+      if (frac > 0) {
+        ctx.shadowColor = edge; ctx.shadowBlur = 6;
+        ctx.beginPath(); ctx.arc(p.x, p.y, rr, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI);
+        ctx.strokeStyle = mineShip ? SON.hp : SON.foe; ctx.lineWidth = 2.8; ctx.stroke(); ctx.shadowBlur = 0;
+      }
+      if (s.maxhp > 1) {
+        ctx.strokeStyle = "rgba(4,22,14,0.9)"; ctx.lineWidth = 1.6;
+        for (let i = 0; i < s.maxhp; i++) { const a = -Math.PI / 2 + (i / s.maxhp) * 2 * Math.PI; ctx.beginPath(); ctx.moveTo(p.x + Math.cos(a) * (rr - 3), p.y + Math.sin(a) * (rr - 3)); ctx.lineTo(p.x + Math.cos(a) * (rr + 3), p.y + Math.sin(a) * (rr + 3)); ctx.stroke(); }
+      }
+      ctx.restore();
       if (mineShip && s.id === sel) { ctx.beginPath(); ctx.arc(p.x, p.y, u * 2, 0, 2 * Math.PI); ctx.strokeStyle = SON.green; ctx.setLineDash([3, 3]); ctx.lineWidth = 1.6; ctx.stroke(); ctx.setLineDash([]); }
       // heading/velocity vector — where the contact is travelling, so you can lead
       if (!deploying && (s.vx || s.vy)) {
@@ -9775,7 +9788,8 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
       {/* top bar */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: `1px solid rgba(70,255,156,0.15)` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, letterSpacing: "0.02em" }}>
-          {deploying ? L("Schieramento", "Deployment") : `${L("Turno", "Round")} ${gs.turn}`}
+          <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 700, letterSpacing: "0.22em", color: SON.green, padding: "3px 8px", border: `1px solid ${SON.faint}`, borderRadius: 7 }}>{room.code}</span>
+          <span style={{ color: SON.faint }}>{deploying ? L("Schieramento", "Deployment") : `${L("Turno", "Round")} ${gs.turn}/${FL2_MAX_TURNS}`}</span>
           {!deploying && gs.radar && <Ico n="radar" s={15} c={SON.green} />}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -9845,6 +9859,40 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
           </button>
         )}
       </div>
+
+      {/* end of match — a sonar-styled verdict with the reason and the final tally */}
+      {gs.done && (() => {
+        const na = gs.ships.A.length, nb = gs.ships.B.length;
+        const mineN = gs.ships[seat].length, foeN = gs.ships[opp].length;
+        const hull = (arr) => Math.round(arr.reduce((s, x) => s + x.hp, 0));
+        const myHull = hull(gs.ships[seat]), foeHull = hull(gs.ships[opp]);
+        const annih = na === 0 || nb === 0;
+        const outcome = gs.win == null ? "draw" : gs.win === seat ? "win" : "lose";
+        const head = outcome === "win" ? L("Vittoria!", "Victory!") : outcome === "lose" ? L("Sconfitta", "Defeated") : L("Pari", "Draw");
+        const col = outcome === "win" ? SON.green : outcome === "lose" ? SON.foe : SON.faint;
+        const reason = annih
+          ? na === 0 && nb === 0 ? L("Flotte annientate a vicenda", "Both fleets annihilated") : outcome === "win" ? L("Flotta nemica annientata", "Enemy fleet annihilated") : L("La tua flotta è annientata", "Your fleet was annihilated")
+          : mineN !== foeN ? L(`Limite di ${FL2_MAX_TURNS} turni · vince chi ha più navi`, `${FL2_MAX_TURNS}-turn limit · most ships left wins`) : L(`Limite di ${FL2_MAX_TURNS} turni · vince chi ha più scafo`, `${FL2_MAX_TURNS}-turn limit · most hull left wins`);
+        const btn = { ...chromeBtn, width: "100%", height: 46, borderRadius: 12, display: "inline-flex", flexDirection: "row", gap: 8, fontWeight: 700, fontSize: 15 };
+        return (
+          <div className="fade" style={{ position: "absolute", inset: 0, zIndex: 60, background: "rgba(2,10,6,0.88)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
+            <div className="pop" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(44px,15vw,84px)", lineHeight: 0.95, color: col, textShadow: `0 0 26px ${col}` }}>{head}</div>
+            <div style={{ fontFamily: MONO, fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase", color: SON.faint, marginTop: 12, maxWidth: 300, lineHeight: 1.5 }}>{reason}</div>
+            <div style={{ display: "flex", gap: 22, marginTop: 22, fontFamily: MONO, fontSize: 13, alignItems: "stretch" }}>
+              <div><div style={{ color: SON.green, fontWeight: 700 }}>{who(room, seat)}</div><div style={{ color: SON.soft, marginTop: 4 }}>{mineN} {L("navi", "ships")} · {myHull} {L("scafo", "hull")}</div></div>
+              <div style={{ width: 1, background: "rgba(70,255,156,0.2)" }} />
+              <div><div style={{ color: SON.foe, fontWeight: 700 }}>{who(room, opp)}</div><div style={{ color: SON.soft, marginTop: 4 }}>{foeN} {L("navi", "ships")} · {foeHull} {L("scafo", "hull")}</div></div>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 28, width: "100%", maxWidth: 260 }}>
+              {(solo || seat === "A") && onAgain && (
+                <button onClick={onAgain} style={btn}><Ico n="rotateL" s={17} /> {L("Rivincita", "Rematch")}</button>
+              )}
+              {!solo && seat !== "A" && <div style={{ fontFamily: MONO, fontSize: 12, color: SON.faint }}>{who(room, "A")} {L("prepara la rivincita…", "sets up the rematch…")}</div>}
+              <button onClick={onExit} style={{ ...btn, height: 44, borderColor: SON.foe, color: SON.foe, fontWeight: 600, fontSize: 14 }}><Ico n="exit" s={16} /> {L("Esci", "Exit")}</button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
