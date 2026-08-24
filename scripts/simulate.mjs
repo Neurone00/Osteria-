@@ -1216,12 +1216,52 @@ function flotta2PirateTests() {
   eSub.x = 5000; eSub.y = 0;
   if (R.flotta2Seen(h, "A").has(eSub.id)) fail("flotta2 pirati", "a far contact should be unseen");
 
-  // the scout has no cannons; a gunship fires a broadside
+  // every hull carries guns now — the brigantine included
   let f = fl2Begun({ variant: "pirati" });
   const scout = f.ships.A.find((s) => s.type === "recon");
   const gun = f.ships.A.find((s) => s.type === "warship");
-  if (R.flotta2Order(f, "A", { kind: "fire", ship: scout.id }) != null) fail("flotta2 pirati", "the scout has no cannons");
+  if (R.flotta2Order(f, "A", { kind: "fire", ship: scout.id }) == null) fail("flotta2 pirati", "the brigantine should loose a broadside");
   if (R.flotta2Order(f, "A", { kind: "fire", ship: gun.id }) == null) fail("flotta2 pirati", "a gunship should fire a broadside");
+
+  // a brigantine's light guns bite only other brigantines — a galleon abeam is spared
+  let b = fl2Begun({ variant: "pirati" });
+  const brg = b.ships.A.find((s) => s.type === "recon");
+  const foeGun = b.ships.B.find((s) => s.type === "warship");
+  b.ships.A = [brg]; b.ships.B = [foeGun];
+  brg.x = 0; brg.y = 0; brg.heading = 0; brg.path = [];
+  foeGun.x = 0; foeGun.y = 120; foeGun.path = [];
+  const gunHp0 = foeGun.hp;
+  b = R.flotta2Order(b, "A", { kind: "fire", ship: brg.id }).g;
+  b = R.flotta2Order(b, "B", { kind: "move", ship: foeGun.id, path: [] }).g;
+  b = R.flotta2Resolve(b).g;
+  if (b.ships.B[0] && b.ships.B[0].hp < gunHp0) fail("flotta2 pirati", "a brigantine broadside must not bite a galleon");
+  // but it does bite an enemy brigantine abeam
+  let b2 = fl2Begun({ variant: "pirati" });
+  const brgA = b2.ships.A.find((s) => s.type === "recon");
+  const brgB = b2.ships.B.find((s) => s.type === "recon");
+  b2.ships.A = [brgA]; b2.ships.B = [brgB];
+  brgA.x = 0; brgA.y = 0; brgA.heading = 0; brgA.path = [];
+  brgB.x = 0; brgB.y = 120; brgB.path = [];
+  const brgHp0 = brgB.hp;
+  b2 = R.flotta2Order(b2, "A", { kind: "fire", ship: brgA.id }).g;
+  b2 = R.flotta2Order(b2, "B", { kind: "move", ship: brgB.id, path: [] }).g;
+  b2 = R.flotta2Resolve(b2).g;
+  if (b2.ships.B[0] && b2.ships.B[0].hp >= brgHp0) fail("flotta2 pirati", "a brigantine broadside should bite an enemy brigantine abeam");
+
+  // any ship can hit any ship — a broadside bites a friendly hull abeam too
+  let ff = fl2Begun({ variant: "pirati" });
+  const g1 = ff.ships.A.find((s) => s.type === "warship");
+  const g2 = ff.ships.A.find((s) => s.type === "frigate");
+  ff.ships.A = [g1, g2]; ff.ships.B = [ff.ships.B[0]];
+  g1.x = 0; g1.y = 0; g1.heading = 0; g1.path = [];
+  g2.x = 0; g2.y = 150; g2.path = [];
+  ff.ships.B[0].x = 4000; ff.ships.B[0].y = 4000; ff.ships.B[0].path = [];
+  const friHp0 = g2.hp;
+  ff = R.flotta2Order(ff, "A", { kind: "fire", ship: g1.id }).g;
+  ff = R.flotta2Order(ff, "B", { kind: "move", ship: ff.ships.B[0].id, path: [] }).g;
+  ff = R.flotta2Resolve(ff).g;
+  const friAfter = ff.ships.A.find((s) => s.type === "frigate");
+  if (friAfter && friAfter.hp >= friHp0) fail("flotta2 pirati", "friendly fire is on — a broadside should bite a friendly abeam");
 
   // a broadside hits a ship sitting abeam (perpendicular to the heading)
   let c = fl2Begun({ variant: "pirati" });
@@ -1447,6 +1487,44 @@ function flotta2RuleTests() {
   sc = R.flotta2Resolve(sc).g;
   const recSc3 = sc.ships.A.find((s) => s.type === "recon");
   if (recSc3 && recSc3.scan) fail("flotta2 rules", "a new drone command should clear the scan");
+
+  // the frigate's barrage looses up to three independently-aimed shells at once
+  let ba = fl2Begun();
+  const fri = ba.ships.A.find((s) => s.type === "frigate");
+  const t1 = ba.ships.B.find((s) => s.type === "warship");
+  const t2 = ba.ships.B.find((s) => s.type === "frigate");
+  const t3 = ba.ships.B.find((s) => s.type === "sub");
+  ba.ships.A = [fri]; ba.ships.B = [t1, t2, t3];
+  fri.x = 0; fri.y = 0; fri.path = [];
+  t1.x = 150; t1.y = 0; t1.path = [];
+  t2.x = 0; t2.y = 150; t2.path = [];
+  t3.x = -150; t3.y = 0; t3.path = [];
+  const hpA = t1.hp, hpB = t2.hp, hpC = t3.hp;
+  ba = R.flotta2Order(ba, "A", { kind: "fire", ship: fri.id, aims: [{ x: 150, y: 0 }, { x: 0, y: 150 }, { x: -150, y: 0 }] }).g;
+  ba = R.flotta2Order(ba, "B", { kind: "move", ship: t1.id, path: [] }).g;
+  ba = R.flotta2Resolve(ba).g;
+  const a1 = ba.ships.B.find((s) => s.id === t1.id), a2 = ba.ships.B.find((s) => s.id === t2.id), a3 = ba.ships.B.find((s) => s.id === t3.id);
+  if ((a1 && a1.hp >= hpA) || (a2 && a2.hp >= hpB) || (a3 && a3.hp >= hpC)) fail("flotta2 rules", "each barrage shell should strike its own aimed target");
+
+  // a torpedo runs its lane and bites the first hull that strays into its track,
+  // even a shade off the aim line (the corridor is wide)
+  let tp = fl2Begun();
+  const subTp = tp.ships.A.find((s) => s.type === "sub");
+  const strayer = tp.ships.B.find((s) => s.type === "warship");
+  tp.ships.A = [subTp]; tp.ships.B = [strayer];
+  subTp.x = 0; subTp.y = 0; subTp.path = [];
+  strayer.x = 120; strayer.y = 16; strayer.path = []; // just off the aim line, inside the corridor
+  const stHp = strayer.hp;
+  tp = R.flotta2Order(tp, "A", { kind: "fire", ship: subTp.id, aim: { x: 300, y: 0 } }).g;
+  tp = R.flotta2Order(tp, "B", { kind: "move", ship: strayer.id, path: [] }).g;
+  tp = R.flotta2Resolve(tp).g;
+  const stAfter = tp.ships.B.find((s) => s.id === strayer.id);
+  if (stAfter && stAfter.hp >= stHp) fail("flotta2 rules", "a torpedo should bite the first hull in its lane");
+
+  // when the match is over the fog lifts — the whole enemy fleet is revealed
+  let fo = fl2Begun();
+  fo.done = true;
+  if (R.flotta2Seen(fo, "A").size !== fo.ships.B.length) fail("flotta2 rules", "the end screen should reveal the whole enemy fleet");
 }
 
 /* ── run ────────────────────────────────────────────────────── */
