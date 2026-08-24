@@ -1601,13 +1601,18 @@ const FL2_WEAPON = {
   // range = how far it travels before dying. Damage scales with how deeply the
   // ship sits in the blast (dead-centre → dmgMax, glancing → dmgMin); heavier
   // units hit harder. Reach: warship long (½ the field), frigate mid, torpedo short.
-  missile: { kind: "point", speed: 260, aoe: 95, dmgMin: 1.5, dmgMax: 4, life: 14, range: FL2_R / 2 }, // lobbed; fast + long reach
-  barrage: { kind: "spread", speed: 230, aoe: 40, dmgMin: 0.4, dmgMax: 1.2, life: 6, range: 330, shots: 3, spread: 0.26 }, // quick shells, mid
-  torpedo: { kind: "straight", speed: 180, aoe: 30, dmgMin: 1, dmgMax: 3, life: 6, range: 210, hitR: 1 }, // slow runner, small blast, short
-  probe: { kind: "straight", speed: 200, aoe: 15, dmgMin: 0.3, dmgMax: 0.6, life: 5, range: 150, hitR: 1 }, // recon's pop-gun; 2 hits down a recon, useless on hulls
+  // ranges are all +20% over the original reach, so shots carry further.
+  missile: { kind: "point", speed: 260, aoe: 95, dmgMin: 1.5, dmgMax: 4, life: 16, range: FL2_R * 0.6 }, // lobbed; fast + long reach
+  barrage: { kind: "spread", speed: 230, aoe: 40, dmgMin: 0.4, dmgMax: 1.2, life: 7, range: 396, shots: 3, spread: 0.26 }, // quick shells, mid
+  torpedo: { kind: "straight", speed: 180, aoe: 30, dmgMin: 1, dmgMax: 3, life: 7, range: 252, hitR: 1 }, // slow runner, small blast, short
+  probe: { kind: "strike", range: 330 }, // the drone's attack is a direct tap-strike (not an area shot); 2 strikes down a recon, useless on hulls
 };
+// The drone's strike: a direct, guaranteed hit on a tapped enemy within range. It
+// deals a fixed sliver of damage — two strikes finish a 1-hp recon, but it barely
+// scratches a hull. No travel, no blast: if you can reach it, you hit it.
+const FL2_STRIKE_DMG = 0.5;
 const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals surface ships to both
-const FL2_MAX_TURNS = 13; // a match lasts at most this many rounds, else decided on ships left
+const FL2_MAX_TURNS = 31; // a match lasts at most this many rounds, else decided on ships left
 // The recon/drone's scan: a long narrow beam instead of its round eye. It reaches
 // twice as far as normal vision (SCAN_LEN×) but is thin — a corridor of half-width
 // vision/SCAN_W. Once set it stays trained in that bearing every round until the
@@ -1740,7 +1745,8 @@ function dealFlotta2(dealer, tally) {
     ping: { A: null, B: null },
     radar: false,
     boom: [],
-    hits: [], // points where a blast actually damaged a ship this round (hit confirmation)
+    hits: [], // points where a blast damaged a ship this round (hit confirmation)
+    impacts: [], // every landing this match (persistent), so you can always see where shots fell
     seq: 0,
     tally: tally || { A: 0, B: 0 },
     win: null,
@@ -1798,8 +1804,14 @@ function flotta2Order(gs, seat, order) {
   const ship = fl2ShipById(gs, order.ship);
   if (!ship || ship.owner !== seat) return null;
   if (order.kind === "fire" && !FL2_UNITS[ship.type].weapon) return null; // no gun
+  if (order.kind === "fire" && FL2_WEAPON[FL2_UNITS[ship.type].weapon].kind === "strike") return null; // the drone strikes, it doesn't fire a shot
   if (order.kind === "fire" && (ship.cd || 0) > 0) return null; // still recharging
   if (order.kind === "scan" && (ship.type !== "recon" || !order.dir)) return null; // only the drone scans
+  if (order.kind === "strike") {
+    if (ship.type !== "recon" || !order.target) return null; // only the drone strikes
+    const tgt = fl2ShipById(gs, order.target);
+    if (!tgt || tgt.owner === seat) return null; // must aim at an enemy ship
+  }
   const g = clone(gs);
   g.orders[seat] = order;
   return { g, quiet: true, ev: { t: "order" } };
@@ -1840,6 +1852,7 @@ function fl2Blast(g, x, y, w) {
     struck = true;
   }
   if (struck) (g.hits || (g.hits = [])).push({ x, y }); // a blast that bit metal — confirm it
+  (g.impacts || (g.impacts = [])).push({ x, y, turn: g.turn, hit: struck }); // a lasting mark of where it fell
 }
 // Resolve one simultaneous round from both submitted orders. Pure + deterministic.
 function flotta2Resolve(gs) {
@@ -1853,7 +1866,7 @@ function flotta2Resolve(gs) {
   // a ship that fires this round holds station — its shot is fired from where it
   // sits, unaffected by any standing route (you move OR you shoot, never both).
   const firing = new Set();
-  for (const seat of ["A", "B"]) { const o = g.orders[seat]; if (o && o.kind === "fire") firing.add(o.ship); }
+  for (const seat of ["A", "B"]) { const o = g.orders[seat]; if (o && (o.kind === "fire" || o.kind === "strike")) firing.add(o.ship); }
   // 1) apply move + drone orders. Any command to the drone replaces its standing
   //    scan; a fresh "scan" order trains a new bearing that persists until then.
   for (const seat of ["A", "B"]) {
@@ -1880,6 +1893,20 @@ function flotta2Resolve(gs) {
     if (o.kind !== "fire" || !o.aim) continue;
     const ship = fl2ShipById(g, o.ship);
     if (ship && ship.hp > 0) { fl2Spawn(g, ship, o.aim); ship.cd = FL2_UNITS[ship.type].recharge || 0; }
+  }
+  // 2c) drone strikes — a direct, guaranteed hit on the tapped enemy if it's in
+  //     range from where the drone ended up (no shot to dodge). 2 strikes down a recon.
+  for (const seat of ["A", "B"]) {
+    const o = g.orders[seat];
+    if (o.kind !== "strike" || !o.target) continue;
+    const ship = fl2ShipById(g, o.ship);
+    const tgt = fl2ShipById(g, o.target);
+    if (!ship || ship.hp <= 0 || !tgt || tgt.hp <= 0) continue;
+    if (fl2Dist(ship, tgt) <= FL2_WEAPON.probe.range) {
+      tgt.hp -= FL2_STRIKE_DMG;
+      g.hits.push({ x: tgt.x, y: tgt.y });
+      g.impacts.push({ x: tgt.x, y: tgt.y, turn: g.turn, hit: true });
+    }
   }
   // 3) shots advance, then detonate on contact / arrival / expiry
   const survivors = [];
@@ -1916,6 +1943,7 @@ function flotta2Resolve(gs) {
     if (!detonated && p.life > 0 && p.travelled < p.range) survivors.push(p);
   }
   g.proj = survivors;
+  if (g.impacts.length > 80) g.impacts = g.impacts.slice(-80); // keep the trail bounded
   // 4) clear the dead
   g.ships.A = g.ships.A.filter((s) => s.hp > 0);
   g.ships.B = g.ships.B.filter((s) => s.hp > 0);
@@ -9308,6 +9336,17 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
     }
     return best;
   };
+  // nearest visible enemy ship to a tap — the drone's strike picks its mark this way
+  const hitEnemy = (sx, sy) => {
+    let best = null, bd = Infinity;
+    for (const s of gs.ships[opp]) {
+      if (!seen.has(s.id)) continue;
+      const p = w2s(s);
+      const d = Math.hypot(p.x - sx, p.y - sy);
+      if (d < bd && d <= Math.max(28, shipPx(s.type) + 20)) (bd = d), (best = s);
+    }
+    return best;
+  };
   // clamp a deploy drop into the legal ring/octant (recon: any octant)
   const clampDeploy = (type, p) => {
     let r = fl2Len(p.x, p.y);
@@ -9343,6 +9382,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
     }
     if (mode === "move" && selShip) { gest.current = { kind: "draw", pts: [s2w(x, y)] }; setDraft(null); return; }
     if (mode === "fire" && selShip) { gest.current = { kind: "aim" }; setDraft({ kind: "fire", aim: s2w(x, y) }); return; }
+    if (mode === "strike" && selShip) { const t = hitEnemy(x, y); gest.current = { kind: "tapStrike" }; if (t) setDraft({ kind: "strike", target: t.id, at: { x: t.x, y: t.y } }); return; }
     if (mode === "scan" && selShip) { const wp = s2w(x, y); gest.current = { kind: "aimScan" }; setDraft({ kind: "scan", dir: { dx: wp.x - selShip.x, dy: wp.y - selShip.y } }); return; }
     const s = hitShip(x, y);
     if (s) { gest.current = { kind: "tapShip", id: s.id, sx: x, sy: y, moved: false }; return; }
@@ -9576,14 +9616,38 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
         ctx.strokeStyle = SON.grid; ctx.lineWidth = 1.3; ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([]);
       }
     };
+    // persistent impact trail — every landing this match stays marked, so you can
+    // always see where shots have fallen (a hit = amber dot, a miss = faint cross)
+    if (!deploying && gs.impacts) for (const im of gs.impacts) {
+      const age = Math.max(0, (gs.turn || 0) - (im.turn || 0));
+      const a = Math.max(0.16, 1 - age * 0.1); // fades with age but never disappears
+      const p = w2s(im);
+      ctx.save(); ctx.globalAlpha = a;
+      if (im.hit) { ctx.fillStyle = SON.hp; ctx.shadowColor = SON.hp; ctx.shadowBlur = 5; ctx.beginPath(); ctx.arc(p.x, p.y, 2.6, 0, 2 * Math.PI); ctx.fill(); }
+      else { ctx.strokeStyle = "rgba(150,185,165,0.85)"; ctx.lineWidth = 1.2; const r = 4; ctx.beginPath(); ctx.moveTo(p.x - r, p.y - r); ctx.lineTo(p.x + r, p.y + r); ctx.moveTo(p.x + r, p.y - r); ctx.lineTo(p.x - r, p.y + r); ctx.stroke(); }
+      ctx.restore();
+    }
     if (!deploying) for (const s of gs.ships[opp]) if (seen.has(s.id)) drawShip(s, false);
     for (const s of myShips) drawShip(s, true);
     if (!deploying) for (const pr of gs.proj) {
-      const visible = pr.owner === seat || myShips.some((o) => Math.hypot(o.x - pr.x, o.y - pr.y) <= FL2_UNITS[o.type].vision);
+      const mineShot = pr.owner === seat;
+      const visible = mineShot || myShips.some((o) => Math.hypot(o.x - pr.x, o.y - pr.y) <= FL2_UNITS[o.type].vision);
       if (!visible) continue;
       const p = w2s(animPos(pr.id, { x: pr.x, y: pr.y }));
-      ctx.save(); ctx.shadowColor = pr.owner === seat ? SON.green : SON.foe; ctx.shadowBlur = 10;
-      ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI); ctx.fillStyle = pr.owner === seat ? SON.green : SON.foe; ctx.fill(); ctx.restore();
+      // your own shots always show where they're headed: a dashed track to the
+      // predicted landing and its blast footprint, so a fired shot is never lost
+      if (mineShot) {
+        const w = FL2_WEAPON[pr.weapon];
+        const land = pr.kind === "point" && pr.target ? pr.target : { x: pr.x + Math.cos(pr.ang) * Math.max(0, pr.range - pr.travelled), y: pr.y + Math.sin(pr.ang) * Math.max(0, pr.range - pr.travelled) };
+        const lp = w2s(land);
+        ctx.save();
+        ctx.strokeStyle = "rgba(70,255,156,0.35)"; ctx.setLineDash([3, 5]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(lp.x, lp.y); ctx.stroke(); ctx.setLineDash([]);
+        ctx.strokeStyle = "rgba(255,91,74,0.5)"; ctx.beginPath(); ctx.arc(lp.x, lp.y, (w.aoe || 10) * scale, 0, 2 * Math.PI); ctx.stroke();
+        ctx.restore();
+      }
+      ctx.save(); ctx.shadowColor = mineShot ? SON.green : SON.foe; ctx.shadowBlur = 10;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, 2 * Math.PI); ctx.fillStyle = mineShot ? SON.green : SON.foe; ctx.fill(); ctx.restore();
     }
     if (!deploying && since < 800) {
       const k = since / 800; ctx.save(); ctx.shadowColor = SON.foe; ctx.shadowBlur = 16;
@@ -9640,6 +9704,19 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
           ctx.beginPath(); ctx.arc(hit.x, hit.y, w.aoe * scale, 0, 2 * Math.PI); ctx.fill(); ctx.lineWidth = 1.8; ctx.stroke();
         }
         ctx.restore();
+      } else if (draft.kind === "strike" && draft.at) {
+        // the drone's strike: a reticle locked on the tapped enemy, plus its reach ring
+        const from = w2s(selShip), tp = w2s(draft.at);
+        const rng = FL2_WEAPON.probe.range * scale;
+        const inRange = Math.hypot(draft.at.x - selShip.x, draft.at.y - selShip.y) <= FL2_WEAPON.probe.range;
+        ctx.save();
+        ctx.strokeStyle = "rgba(70,255,156,0.25)"; ctx.setLineDash([4, 6]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(from.x, from.y, rng, 0, 2 * Math.PI); ctx.stroke(); ctx.setLineDash([]);
+        ctx.strokeStyle = inRange ? SON.foe : "rgba(255,91,74,0.45)"; ctx.shadowColor = SON.foe; ctx.shadowBlur = 6; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(tp.x, tp.y); ctx.stroke();
+        ctx.beginPath(); ctx.arc(tp.x, tp.y, 12, 0, 2 * Math.PI); ctx.stroke();
+        for (const [ax, ay] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) { ctx.beginPath(); ctx.moveTo(tp.x + ax * 16, tp.y + ay * 16); ctx.lineTo(tp.x + ax * 8, tp.y + ay * 8); ctx.stroke(); }
+        ctx.restore();
       } else if (draft.kind === "scan" && draft.dir) {
         const from = w2s(selShip), vis = FL2_UNITS[selShip.type].vision;
         const ang = Math.atan2(draft.dir.dy, draft.dir.dx);
@@ -9678,7 +9755,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
     : deploying
     ? submittedDeploy ? L("Schierato — aspetta l'avversario", "Deployed — waiting for the other player") : dzone == null ? L("Tocca un settore per schierare", "Tap a sector to deploy") : mode === "droute" ? L("Disegna la rotta iniziale", "Draw the initial route") : mode === "dmenu" ? L("Rotta iniziale · o trascina la nave", "Initial route · or drag the ship") : L("Trascina le navi · tocca per la rotta · poi Pronto", "Drag ships · tap for a route · then Ready")
     : submittedOrder ? L("Ordine dato — aspetta l'avversario", "Order set — waiting")
-    : sel ? (mode === "move" ? L("Disegna la rotta", "Draw the route") : mode === "fire" ? L("Trascina per mirare", "Drag to aim") : mode === "scan" ? L("Trascina per orientare la scansione", "Drag to aim the scan") : L("Muovi o spara", "Move or fire"))
+    : sel ? (mode === "move" ? L("Disegna la rotta", "Draw the route") : mode === "fire" ? L("Trascina per mirare", "Drag to aim") : mode === "strike" ? L("Tocca la nave nemica da colpire", "Tap the enemy ship to strike") : mode === "scan" ? L("Trascina per orientare la scansione", "Drag to aim the scan") : L("Muovi o spara", "Move or fire"))
     : L("Tocca una tua nave", "Tap one of your ships");
   const chromeBtn = { width: 40, height: 40, borderRadius: 999, border: `1px solid ${SON.faint}`, background: SON.sea, color: SON.green, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" };
 
@@ -9724,7 +9801,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, solo, onFlip, sound, se
             {mode === "menu" && (
               <>
                 <Fl2Btn icon="compass" label={L("Muovi", "Move")} tone={SON.green} bg={SON.sea} onTap={() => (setMode("move"), setDraft(null))} />
-                <Fl2Btn icon="target" label={L("Spara", "Fire")} tone={SON.foe} bg={SON.sea} onTap={() => setMode("fire")} />
+                <Fl2Btn icon="target" label={selShip.type === "recon" ? L("Colpisci", "Strike") : L("Spara", "Fire")} tone={SON.foe} bg={SON.sea} onTap={() => setMode(selShip.type === "recon" ? "strike" : "fire")} />
                 {selShip.type === "recon" && <Fl2Btn icon="radar" label={L("Scansione", "Scan")} tone={SON.green} bg={SON.sea} onTap={() => (setMode("scan"), setDraft(null))} />}
               </>
             )}

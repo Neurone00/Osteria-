@@ -1111,12 +1111,15 @@ function fl2SubmitRandom(g, seat) {
   const mine = g.ships[seat];
   if (!mine.length) return g;
   const ship = mine[Math.floor(Math.random() * mine.length)];
-  const canFire = !!R.FL2_UNITS[ship.type].weapon;
+  const wpn = R.FL2_UNITS[ship.type].weapon;
+  const canFire = !!wpn && R.FL2_WEAPON[wpn].kind !== "strike"; // the drone strikes, doesn't fire
+  const isDrone = ship.type === "recon";
   const foe = g.ships[seat === "A" ? "B" : "A"];
   const roll = Math.random();
   let order;
-  if (ship.type === "recon" && roll < 0.2) order = { kind: "scan", ship: ship.id, dir: { dx: Math.random() * 2 - 1, dy: Math.random() * 2 - 1 } };
-  else if (roll < 0.45) order = { kind: "move", ship: ship.id, path: [fl2RandPoint(), fl2RandPoint()] };
+  if (isDrone && roll < 0.18) order = { kind: "scan", ship: ship.id, dir: { dx: Math.random() * 2 - 1, dy: Math.random() * 2 - 1 } };
+  else if (isDrone && roll < 0.34 && foe.length) order = { kind: "strike", ship: ship.id, target: foe[Math.floor(Math.random() * foe.length)].id };
+  else if (roll < 0.5) order = { kind: "move", ship: ship.id, path: [fl2RandPoint(), fl2RandPoint()] };
   else if (roll < 0.85 && canFire && foe.length) order = { kind: "fire", ship: ship.id, aim: { x: foe[0].x, y: foe[0].y } }; // aim at an enemy so combat actually happens
   else order = { kind: "recon", ship: ship.id, at: fl2RandPoint() };
   const r = R.flotta2Order(g, seat, order) || R.flotta2Order(g, seat, { kind: "move", ship: ship.id, path: [fl2RandPoint()] });
@@ -1189,7 +1192,9 @@ function flotta2RuleTests() {
   // order validation (in the planning phase)
   g = fl2Begun();
   const recon = g.ships.A.find((s) => s.type === "recon");
-  if (R.flotta2Order(g, "A", { kind: "fire", ship: recon.id, aim: { x: 0, y: 0 } }) == null) fail("flotta2 rules", "recon should be able to fire its probe");
+  if (R.flotta2Order(g, "A", { kind: "fire", ship: recon.id, aim: { x: 0, y: 0 } }) != null) fail("flotta2 rules", "the drone can't fire a shot — it strikes");
+  if (R.flotta2Order(g, "A", { kind: "strike", ship: recon.id, target: g.ships.B[0].id }) == null) fail("flotta2 rules", "the drone should be able to strike an enemy");
+  if (R.flotta2Order(g, "A", { kind: "strike", ship: recon.id, target: g.ships.A[0].id }) != null) fail("flotta2 rules", "the drone can't strike a friendly ship");
   if (R.flotta2Order(g, "A", { kind: "move", ship: g.ships.B[0].id, path: [] }) != null) fail("flotta2 rules", "can't order the enemy's ship");
   const sub0 = g.ships.A.find((s) => s.type === "sub");
   g = R.flotta2Order(g, "A", { kind: "move", ship: sub0.id, path: [{ x: 0, y: 0 }] }).g;
@@ -1254,7 +1259,7 @@ function flotta2RuleTests() {
   fA.x = 30; fA.y = 0; // bring my frigate onto it
   if (!R.flotta2Seen(z, "A").has(eSub.id)) fail("flotta2 rules", "a frigate should detect an enemy submarine");
 
-  // a recon's probe needs two hits to down another recon (and can't 1-shot it)
+  // the drone's strike is a direct tap-hit: two strikes down another recon, one doesn't
   let rr = fl2Begun();
   const myR = rr.ships.A.find((s) => s.type === "recon");
   const eR = rr.ships.B.find((s) => s.type === "recon");
@@ -1264,14 +1269,14 @@ function flotta2RuleTests() {
   eR.x = 90; eR.y = 0; eR.path = [];
   let gr = 0;
   while (!rr.done && gr++ < 5) {
-    const aim = rr.ships.B.length ? { x: rr.ships.B[0].x, y: rr.ships.B[0].y } : { x: 90, y: 0 };
-    rr = R.flotta2Order(rr, "A", { kind: "fire", ship: rr.ships.A[0].id, aim }).g;
+    const tid = rr.ships.B.length ? rr.ships.B[0].id : eR.id;
+    rr = R.flotta2Order(rr, "A", { kind: "strike", ship: rr.ships.A[0].id, target: tid }).g;
     rr = (R.flotta2Order(rr, "B", { kind: "move", ship: rr.ships.B.length ? rr.ships.B[0].id : eR.id, path: [{ x: 90, y: 0 }] }) || { g: rr }).g;
     if (!R.flotta2Ready(rr)) break;
     rr = R.flotta2Resolve(rr).g;
-    if (gr === 1 && rr.ships.B.length === 0) fail("flotta2 rules", "one probe shot should not down a recon");
+    if (gr === 1 && rr.ships.B.length === 0) fail("flotta2 rules", "one drone strike should not down a recon");
   }
-  if (!rr.done || rr.win !== "A") fail("flotta2 rules", "two probe hits should down an enemy recon");
+  if (!rr.done || rr.win !== "A") fail("flotta2 rules", "two drone strikes should down an enemy recon");
 
   // weapon recharge: warship waits a turn after firing; sub fires back-to-back
   let rc = fl2Begun();
@@ -1289,7 +1294,7 @@ function flotta2RuleTests() {
   const suA2 = rs.ships.A.find((s) => s.type === "sub");
   if (suA2 && R.flotta2Order(rs, "A", { kind: "fire", ship: suA2.id, aim: { x: 0, y: 0 } }) == null) fail("flotta2 rules", "a sub should be able to fire every turn");
 
-  // the 13-turn cap ends a stalemate
+  // the turn cap ends a stalemate
   let tc = fl2Begun();
   let tg = 0;
   while (!tc.done && tg++ < 40) {
