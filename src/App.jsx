@@ -9938,13 +9938,19 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       const u = Math.max(5, shipPx(s.type));
       const edge = mineShip ? TH.green : TH.foe;
       ctx.save(); ctx.globalAlpha = alpha;
-      ctx.translate(p.x, p.y); ctx.rotate(s.heading || 0);
       if (gs.pirate) {
-        // paper cutout: a soft brown drop-shadow cast down-right lifts the silhouette
-        // off the chart, and the fill is a cream paper tone with an inked edge.
-        ctx.shadowColor = "rgba(46,30,14,0.42)"; ctx.shadowBlur = 4; ctx.shadowOffsetX = 2.4; ctx.shadowOffsetY = 3;
+        // paper cutout with a FIXED top-left light: cast the silhouette down-right in
+        // screen space (the offset is applied before the heading rotation, so turning
+        // the ship only turns the hull, never the light), then lay the cream hull on top.
+        ctx.save();
+        ctx.translate(p.x + 2.4, p.y + 3); ctx.rotate(s.heading || 0);
+        ctx.globalAlpha = alpha * 0.34; ctx.shadowColor = "rgba(38,24,10,0.5)"; ctx.shadowBlur = 3;
+        fl2Hull(ctx, s.type, u * 0.5, "rgba(40,26,12,0.85)", "rgba(40,26,12,0.85)", true);
+        ctx.restore();
+        ctx.translate(p.x, p.y); ctx.rotate(s.heading || 0);
         fl2Hull(ctx, s.type, u * 0.5, mineShip ? "#3f2c17" : "#7a2c12", mineShip ? "#f3ead1" : "#e7cfa8", true);
       } else {
+        ctx.translate(p.x, p.y); ctx.rotate(s.heading || 0);
         ctx.shadowColor = edge; ctx.shadowBlur = mineShip ? 10 : 8;
         fl2Hull(ctx, s.type, u * 0.5, edge, "rgba(4,22,14,0.85)", false);
       }
