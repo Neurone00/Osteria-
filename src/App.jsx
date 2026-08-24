@@ -6597,6 +6597,23 @@ function GameArt({ game, size = 88 }) {
           <circle cx="38" cy="58" r="1.6" fill={red} stroke="none" />
         </g>
       ); break;
+    case "flotta2": {
+      const g2 = "#2FA06C"; // sonar green, toned down to read on the paper card
+      art = (
+        <g>
+          {[12, 20, 28].map((r, i) => (
+            <circle key={r} cx="50" cy="50" r={r} fill="none" stroke={ink} strokeWidth={i === 2 ? 2.2 : 1.2} opacity={i === 2 ? 1 : 0.38} />
+          ))}
+          <path d="M50 20V80M20 50H80" stroke={ink} strokeWidth="1" opacity="0.32" fill="none" />
+          <path d="M50 50 L50 22 A28 28 0 0 1 74.2 36 Z" fill={g2} opacity="0.18" stroke="none" />
+          <path d="M50 50L74.2 36" stroke={g2} strokeWidth="2.6" strokeLinecap="round" fill="none" />
+          <circle cx="63" cy="40" r="6.5" fill="none" stroke={g2} strokeWidth="1.6" opacity="0.5" />
+          <circle cx="63" cy="40" r="3" fill={g2} />
+          <circle cx="50" cy="50" r="2.2" fill={ink} />
+        </g>
+      );
+      break;
+    }
     default:
       art = card(50, 50, 0);
   }
