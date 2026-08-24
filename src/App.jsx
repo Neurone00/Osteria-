@@ -1878,7 +1878,7 @@ function fl2Spawn(g, ship, aim) {
   const base = Math.atan2(dy, dx);
   const mk = (ang) => {
     const id = `p${g.seq++}`;
-    return { id, owner: ship.owner, weapon: FL2_UNITS[ship.type].weapon, x: ship.x, y: ship.y, ang, life: w.life, kind: w.kind, target: w.kind === "point" ? { x: tx, y: ty } : null, travelled: 0, range };
+    return { id, owner: ship.owner, src: ship.id, weapon: FL2_UNITS[ship.type].weapon, x: ship.x, y: ship.y, ang, life: w.life, kind: w.kind, target: w.kind === "point" ? { x: tx, y: ty } : null, travelled: 0, range };
   };
   if (w.kind === "spread") for (let i = 0; i < w.shots; i++) g.proj.push(mk(base + (i - (w.shots - 1) / 2) * w.spread));
   else g.proj.push(mk(base));
@@ -1898,10 +1898,11 @@ function fl2SpawnBroadside(g, ship) {
 // AoE hit at a point: every ship whose hull the blast overlaps takes damage
 // (friendly fire on), scaled by coverage — fully engulfed → dmgMax, just
 // clipped → dmgMin. A ship's hull is a disc of radius = its unit size.
-function fl2Blast(g, x, y, w, only) {
+function fl2Blast(g, x, y, w, only, except) {
   g.boom.push({ x, y, r: w.aoe });
   let struck = false;
   for (const s of g.ships.A.concat(g.ships.B)) {
+    if (except && s.id === except) continue; // the ship that fired is spared its own blast
     if (only && s.type !== only) continue; // brigantine splash spares everything but brigantines
     const shipR = FL2_UNITS[s.type].size;
     const d = fl2Dist(s, { x, y });
@@ -1989,7 +1990,7 @@ function flotta2Resolve(gs) {
       p.y += Math.sin(p.ang) * adv;
       p.travelled += adv;
       if (p.kind === "point" && p.target && fl2Dist(p, p.target) <= adv) {
-        fl2Blast(g, p.target.x, p.target.y, w);
+        fl2Blast(g, p.target.x, p.target.y, w, p.only, p.src);
         detonated = true;
         break;
       }
@@ -2002,7 +2003,7 @@ function flotta2Resolve(gs) {
         if (p.src && s.id === p.src) continue; // a ship can't shoot itself
         if (p.only && s.type !== p.only) continue; // brigantine guns are choosy
         if (fl2Dist(p, s) <= FL2_UNITS[s.type].size + (w.hitR ?? 4)) {
-          fl2Blast(g, p.x, p.y, w, p.only);
+          fl2Blast(g, p.x, p.y, w, p.only, p.src);
           detonated = true;
           break;
         }

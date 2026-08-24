@@ -1531,6 +1531,22 @@ function flotta2RuleTests() {
   let fo = fl2Begun();
   fo.done = true;
   if (R.flotta2Seen(fo, "A").size !== fo.ships.B.length) fail("flotta2 rules", "the end screen should reveal the whole enemy fleet");
+
+  // a firing ship is spared its own blast, even when the detonation overlaps its hull
+  let sb = fl2Begun();
+  const shooter = sb.ships.A.find((s) => s.type === "warship");
+  const near = sb.ships.B.find((s) => s.type === "sub");
+  sb.ships.A = [shooter]; sb.ships.B = [near];
+  shooter.x = 0; shooter.y = 0; shooter.path = [];
+  near.x = 60; near.y = 0; near.path = []; // inside the missile's big blast radius
+  const meHp = shooter.hp, foeHp = near.hp;
+  sb = R.flotta2Order(sb, "A", { kind: "fire", ship: shooter.id, aim: { x: 60, y: 0 } }).g;
+  sb = R.flotta2Order(sb, "B", { kind: "move", ship: near.id, path: [] }).g;
+  sb = R.flotta2Resolve(sb).g;
+  const meAfter = sb.ships.A.find((s) => s.id === shooter.id);
+  if (meAfter && meAfter.hp < meHp) fail("flotta2 rules", "a firing ship must not take its own blast");
+  const foeAfter = sb.ships.B.find((s) => s.id === near.id);
+  if (foeAfter && foeAfter.hp >= foeHp) fail("flotta2 rules", "the shot should still hit the enemy caught in the blast");
 }
 
 /* ── run ────────────────────────────────────────────────────── */
