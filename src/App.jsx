@@ -1624,6 +1624,9 @@ const FL2_WEAPON = {
 const FL2_STRIKE_DMG = 0.5;
 const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals surface ships to both
 const FL2_MAX_TURNS = 31; // a match lasts at most this many rounds, else decided on ships left
+const FL2_PIRATE_SIGHT = 3; // pirates spot by eye alone — triple every hull's lookout range
+// a hull's sighting range: on the open sea (pirate) the lookout sees three times as far
+const fl2Vision = (type, pirate) => FL2_UNITS[type].vision * (pirate ? FL2_PIRATE_SIGHT : 1);
 // The recon/drone's scan: a long narrow beam instead of its round eye. It reaches
 // twice as far as normal vision (SCAN_LEN×) but is thin — a corridor of half-width
 // vision/SCAN_W. Once set it stays trained in that bearing every round until the
@@ -2061,7 +2064,7 @@ function flotta2Seen(gs, seat) {
   // ships' lookout range. No radar, no stealth; the scout's long sight does the work.
   if (gs.pirate) {
     for (const s of gs.ships[foe]) {
-      if (gs.ships[seat].some((o) => fl2Dist(s, o) <= FL2_UNITS[o.type].vision)) seen.add(s.id);
+      if (gs.ships[seat].some((o) => fl2Dist(s, o) <= fl2Vision(o.type, true))) seen.add(s.id);
     }
     return seen;
   }
@@ -9899,7 +9902,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     // each ship's reach reads at a glance — the selected ship's ring is brightest.
     if (!deploying) for (const s of myShips) {
       const p = w2s(s);
-      const vr = FL2_UNITS[s.type].vision * scale;
+      const vr = fl2Vision(s.type, gs.pirate) * scale;
       const vg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, vr);
       vg.addColorStop(0, G(0.10)); vg.addColorStop(1, G(0));
       ctx.beginPath(); ctx.arc(p.x, p.y, vr, 0, 2 * Math.PI); ctx.fillStyle = vg; ctx.fill();

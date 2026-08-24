@@ -45,7 +45,7 @@ const EXPORTS = [
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
-  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "FL2_WIND_EVERY", "fl2WindFactor",
+  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1215,6 +1215,12 @@ function flotta2PirateTests() {
   if (!R.flotta2Seen(h, "A").has(eSub.id)) fail("flotta2 pirati", "a near sub should be seen by line of sight");
   eSub.x = 5000; eSub.y = 0;
   if (R.flotta2Seen(h, "A").has(eSub.id)) fail("flotta2 pirati", "a far contact should be unseen");
+  // the pirate lookout sees three times as far: a contact just past base vision is spotted
+  if (R.FL2_PIRATE_SIGHT !== 3) fail("flotta2 pirati", "pirate sight should be tripled");
+  if (R.fl2Vision("warship", true) !== R.FL2_UNITS.warship.vision * 3) fail("flotta2 pirati", "pirate vision helper should triple the range");
+  if (R.fl2Vision("warship", false) !== R.FL2_UNITS.warship.vision) fail("flotta2 pirati", "modern vision should be untouched");
+  eSub.x = 0; eSub.y = R.FL2_UNITS.warship.vision * 2; // beyond base sight, within triple
+  if (!R.flotta2Seen(h, "A").has(eSub.id)) fail("flotta2 pirati", "the tripled lookout should spot a contact past base vision");
 
   // every hull carries guns now — the brigantine included
   let f = fl2Begun({ variant: "pirati" });
