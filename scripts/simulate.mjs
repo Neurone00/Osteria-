@@ -45,7 +45,7 @@ const EXPORTS = [
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
-  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy",
+  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "FL2_WIND_EVERY", "fl2WindFactor",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1117,6 +1117,14 @@ function fl2SubmitRandom(g, seat) {
   const foe = g.ships[seat === "A" ? "B" : "A"];
   const roll = Math.random();
   let order;
+  if (g.pirate) {
+    // pirate: only sail or loose a broadside (the scout can't fire)
+    if (roll < 0.5 && ship.type !== "recon") order = { kind: "fire", ship: ship.id };
+    else order = { kind: "move", ship: ship.id, path: [fl2RandPoint(), fl2RandPoint()] };
+    const r = R.flotta2Order(g, seat, order) || R.flotta2Order(g, seat, { kind: "move", ship: ship.id, path: [fl2RandPoint()] });
+    if (!r) return fail("flotta2", "could not submit any pirate order for a live ship"), g;
+    return r.g;
+  }
   if (isDrone && roll < 0.18) order = { kind: "scan", ship: ship.id, dir: { dx: Math.random() * 2 - 1, dy: Math.random() * 2 - 1 } };
   else if (isDrone && roll < 0.34 && foe.length) order = { kind: "strike", ship: ship.id, target: foe[Math.floor(Math.random() * foe.length)].id };
   else if (roll < 0.5) order = { kind: "move", ship: ship.id, path: [fl2RandPoint(), fl2RandPoint()] };
@@ -1126,9 +1134,9 @@ function fl2SubmitRandom(g, seat) {
   if (!r) return fail("flotta2", "could not submit any order for a live ship"), g;
   return r.g;
 }
-// build a legal deployment for one side (ships spread in an octant of its half)
+// build a legal deployment for one side (ships spread in one of its octants)
 function fl2Deploy(g, seat) {
-  const zone = R.FL2_ZONES[seat][1];
+  const zone = R.fl2ZonesFor(g.pirate)[seat][1];
   const a0 = zone * (Math.PI / 4);
   const ships = {};
   g.ships[seat].forEach((s, i) => {
@@ -1139,14 +1147,14 @@ function fl2Deploy(g, seat) {
   return R.flotta2Deploy(g, seat, { zone, ships }).g;
 }
 // a game past deployment, in the planning phase
-function fl2Begun() {
-  let g = R.dealFlotta2("A", { A: 0, B: 0 });
+function fl2Begun(opts) {
+  let g = R.dealFlotta2("A", { A: 0, B: 0 }, opts);
   g = fl2Deploy(g, "A");
   g = fl2Deploy(g, "B");
   return R.flotta2Begin(g).g;
 }
-function playFlotta2() {
-  let g = fl2Begun();
+function playFlotta2(opts) {
+  let g = fl2Begun(opts);
   fl2Census(g, "flotta2 begin");
   let rounds = 0;
   while (!g.done && rounds < 300) {
@@ -1164,8 +1172,8 @@ function playFlotta2() {
 }
 // The CPU opponent playing itself (and vs the random fuzzer): every bot order must
 // be legal, resolution deterministic, and the match must terminate.
-function playFlotta2Bot(levelA, levelB) {
-  let g = R.dealFlotta2("A", { A: 0, B: 0 });
+function playFlotta2Bot(levelA, levelB, opts) {
+  let g = R.dealFlotta2("A", { A: 0, B: 0 }, opts);
   g = R.flotta2Deploy(g, "A", R.flotta2BotDeploy(g, "A")).g;
   g = R.flotta2Deploy(g, "B", R.flotta2BotDeploy(g, "B")).g;
   g = R.flotta2Begin(g).g;
@@ -1189,8 +1197,8 @@ function playFlotta2Bot(levelA, levelB) {
   if (!g.done) fail("flotta2 bot", `${levelA} vs ${levelB} did not finish in 200 rounds`);
   return rounds;
 }
-function playFlotta2BotVsRandom(level) {
-  let g = R.dealFlotta2("A", { A: 0, B: 0 });
+function playFlotta2BotVsRandom(level, opts) {
+  let g = R.dealFlotta2("A", { A: 0, B: 0 }, opts);
   g = R.flotta2Deploy(g, "A", R.flotta2BotDeploy(g, "A")).g;
   g = fl2Deploy(g, "B");
   g = R.flotta2Begin(g).g;
@@ -1208,6 +1216,60 @@ function playFlotta2BotVsRandom(level) {
   }
   if (!g.done) fail("flotta2 bot", `${level} vs random did not finish`);
   return rounds;
+}
+function flotta2PirateTests() {
+  // pirate deal: the flag, a wind bearing, and interleaved deploy slices
+  let g = R.dealFlotta2("A", { A: 0, B: 0 }, { variant: "pirati" });
+  if (!g.pirate) fail("flotta2 pirati", "pirate flag not set");
+  if (typeof g.wind !== "number") fail("flotta2 pirati", "wind not initialised");
+  if (R.fl2ZonesFor(true).A.join() !== "0,2,4,6" || R.fl2ZonesFor(true).B.join() !== "1,3,5,7") fail("flotta2 pirati", "slices should alternate");
+  if (R.flotta2Deploy(g, "A", { zone: 3, ships: {} }) != null) fail("flotta2 pirati", "octant 3 is not A's in pirate mode");
+  if (R.flotta2Deploy(g, "A", { zone: 0, ships: {} }) == null) fail("flotta2 pirati", "octant 0 should be A's in pirate mode");
+
+  // wind pushes: faster running downwind than clawing upwind
+  if (!(R.fl2WindFactor(0, 1, 0) > R.fl2WindFactor(0, -1, 0))) fail("flotta2 pirati", "downwind should beat upwind");
+
+  // line of sight: a near contact (even a sub) is seen; there is no radar
+  let h = fl2Begun({ variant: "pirati" });
+  if (h.radar) fail("flotta2 pirati", "no radar in pirate mode");
+  const mine = h.ships.A.find((s) => s.type === "warship");
+  const eSub = h.ships.B.find((s) => s.type === "sub");
+  h.ships.A = [mine]; h.ships.B = [eSub];
+  mine.x = 0; mine.y = 0; mine.heading = 0; mine.path = [];
+  eSub.x = 0; eSub.y = 150; eSub.path = [];
+  if (!R.flotta2Seen(h, "A").has(eSub.id)) fail("flotta2 pirati", "a near sub should be seen by line of sight");
+  eSub.x = 5000; eSub.y = 0;
+  if (R.flotta2Seen(h, "A").has(eSub.id)) fail("flotta2 pirati", "a far contact should be unseen");
+
+  // the scout has no cannons; a gunship fires a broadside
+  let f = fl2Begun({ variant: "pirati" });
+  const scout = f.ships.A.find((s) => s.type === "recon");
+  const gun = f.ships.A.find((s) => s.type === "warship");
+  if (R.flotta2Order(f, "A", { kind: "fire", ship: scout.id }) != null) fail("flotta2 pirati", "the scout has no cannons");
+  if (R.flotta2Order(f, "A", { kind: "fire", ship: gun.id }) == null) fail("flotta2 pirati", "a gunship should fire a broadside");
+
+  // a broadside hits a ship sitting abeam (perpendicular to the heading)
+  let c = fl2Begun({ variant: "pirati" });
+  const wa = c.ships.A.find((s) => s.type === "warship");
+  const tg = c.ships.B.find((s) => s.type === "frigate");
+  c.ships.A = [wa]; c.ships.B = [tg];
+  wa.x = 0; wa.y = 0; wa.heading = 0; wa.path = [];
+  tg.x = 0; tg.y = 200; tg.path = [];
+  const hp0 = tg.hp;
+  c = R.flotta2Order(c, "A", { kind: "fire", ship: wa.id }).g;
+  c = R.flotta2Order(c, "B", { kind: "move", ship: tg.id, path: [] }).g;
+  c = R.flotta2Resolve(c).g;
+  if (c.ships.B[0] && c.ships.B[0].hp >= hp0) fail("flotta2 pirati", "a broadside should hit a ship abeam");
+
+  // the wind veers as the match wears on
+  let w = fl2Begun({ variant: "pirati" });
+  const w0 = w.wind;
+  for (let i = 0; i < R.FL2_WIND_EVERY + 1 && !w.done; i++) {
+    w = R.flotta2Order(w, "A", { kind: "move", ship: w.ships.A[0].id, path: [] }).g;
+    w = R.flotta2Order(w, "B", { kind: "move", ship: w.ships.B[0].id, path: [] }).g;
+    w = R.flotta2Resolve(w).g;
+  }
+  if (w.wind === w0) fail("flotta2 pirati", "the wind should veer over the match");
 }
 function flotta2RuleTests() {
   // deal opens the deployment phase with one of each unit per side
@@ -1435,6 +1497,7 @@ const runs = [
   ["bestiario (onitama)", () => playBestiario()],
   ["flotta (battaglia navale)", () => playFlotta()],
   ["flotta 2 (fleet duel)", () => playFlotta2()],
+  ["flotta 2 · pirati (broadsides + wind)", () => playFlotta2({ variant: "pirati" })],
   ["paroliere (boggle)", () => playParoliere()],
   ["scala 40", () => playScala()],
 ];
@@ -1501,6 +1564,15 @@ for (const [label, run] of runs) {
   const dm = playFlotta2Bot("difficile", "medio");
   for (let i = 0; i < 60; i++) { playFlotta2BotVsRandom("medio"); playFlotta2BotVsRandom("difficile"); }
   console.log(`${failures === before ? "✓" : "✗"} ${"flotta 2 CPU (medio & difficile)".padEnd(44)} legal orders, deterministic, games end (${mm}/${dd}/${dm})`);
+}
+{
+  const before = failures;
+  const P = { variant: "pirati" };
+  const pmm = playFlotta2Bot("medio", "medio", P);
+  const pdd = playFlotta2Bot("difficile", "difficile", P);
+  for (let i = 0; i < 40; i++) { playFlotta2BotVsRandom("medio", P); playFlotta2BotVsRandom("difficile", P); }
+  flotta2PirateTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"flotta 2 pirati (wind, broadside, LoS)".padEnd(44)} alt zones, wind, cannons, sight, CPU (${pmm}/${pdd})`);
 }
 {
   const before = failures;
