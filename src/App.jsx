@@ -10355,6 +10355,9 @@ const PAROL_DICT_URL = {
   IT: "https://cdn.jsdelivr.net/npm/an-array-of-italian-words@1.2.0/words.json",
   EN: "https://cdn.jsdelivr.net/npm/an-array-of-english-words@2.0.0/index.json",
 };
+// Common Italian words the CDN wordlist happens to miss (it carries the plural
+// LINCI but not the singular LINCE, and a few loanwords). Merged into the IT set.
+const PAROL_EXTRA_IT = ["LINCE", "KOALA"];
 const parolDictCache = {}; // lang → Set (kept for the whole session once loaded)
 async function parolLoadDict(lang) {
   lang = parolLang(lang);
@@ -10379,6 +10382,7 @@ async function parolLoadDict(lang) {
       .replace(/[^A-Z]/g, "");
     if (w.length >= 3) set.add(w);
   }
+  if (lang === "IT") for (const w of PAROL_EXTRA_IT) set.add(w);
   parolDictCache[lang] = set;
   return set;
 }
