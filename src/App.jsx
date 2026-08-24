@@ -10352,12 +10352,11 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
 // tampered client could still cheat, same friends-not-tournaments trust as the
 // hidden hands. Accents are stripped so they match the accent-free board.
 const PAROL_DICT_URL = {
-  IT: "https://cdn.jsdelivr.net/npm/an-array-of-italian-words@1.2.0/words.json",
+  // napolux's list (~280k words) is far more complete than the old npm array, which
+  // missed common lemmas like LINCE and ERRARE. It's a plain newline-separated file.
+  IT: "https://cdn.jsdelivr.net/gh/napolux/paroleitaliane@master/paroleitaliane/280000_parole_italiane.txt",
   EN: "https://cdn.jsdelivr.net/npm/an-array-of-english-words@2.0.0/index.json",
 };
-// Common Italian words the CDN wordlist happens to miss (it carries the plural
-// LINCI but not the singular LINCE, and a few loanwords). Merged into the IT set.
-const PAROL_EXTRA_IT = ["LINCE", "KOALA"];
 const parolDictCache = {}; // lang → Set (kept for the whole session once loaded)
 async function parolLoadDict(lang) {
   lang = parolLang(lang);
@@ -10372,7 +10371,8 @@ async function parolLoadDict(lang) {
   }
   const res = await fetch(PAROL_DICT_URL[lang]);
   if (!res.ok) throw new Error("dict " + res.status);
-  const list = await res.json(); // a JSON array of lowercase words
+  const text = await res.text();
+  const list = text.trimStart().startsWith("[") ? JSON.parse(text) : text.split(/\r?\n/); // JSON array (EN) or newline list (IT)
   const set = new Set();
   for (const raw of list) {
     const w = String(raw)
@@ -10382,7 +10382,6 @@ async function parolLoadDict(lang) {
       .replace(/[^A-Z]/g, "");
     if (w.length >= 3) set.add(w);
   }
-  if (lang === "IT") for (const w of PAROL_EXTRA_IT) set.add(w);
   parolDictCache[lang] = set;
   return set;
 }
