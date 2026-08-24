@@ -1547,6 +1547,7 @@ function flotta2RuleTests() {
   if (meAfter && meAfter.hp < meHp) fail("flotta2 rules", "a firing ship must not take its own blast");
   const foeAfter = sb.ships.B.find((s) => s.id === near.id);
   if (foeAfter && foeAfter.hp >= foeHp) fail("flotta2 rules", "the shot should still hit the enemy caught in the blast");
+  if (!(sb.wrecks && sb.wrecks.some((wr) => wr.owner === "B" && wr.type === "sub"))) fail("flotta2 rules", "a sunk ship should leave a wreck on the field");
 }
 
 /* ── run ────────────────────────────────────────────────────── */

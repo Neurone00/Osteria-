@@ -2018,9 +2018,11 @@ function flotta2Resolve(gs) {
   }
   g.proj = survivors;
   if (g.impacts.length > 80) g.impacts = g.impacts.slice(-80); // keep the trail bounded
-  // 4) clear the dead
-  g.ships.A = g.ships.A.filter((s) => s.hp > 0);
-  g.ships.B = g.ships.B.filter((s) => s.hp > 0);
+  // 4) clear the dead — but leave a wreck where each ship went down (shown on the field)
+  for (const seat of ["A", "B"]) {
+    for (const s of g.ships[seat]) if (s.hp <= 0) (g.wrecks || (g.wrecks = [])).push({ x: s.x, y: s.y, type: s.type, owner: seat });
+    g.ships[seat] = g.ships[seat].filter((s) => s.hp > 0);
+  }
   // 5) advance the clock. Modern: a radar sweep every Nth round. Pirate: no radar
   //    (you see by line of sight) but the wind veers every Nth round.
   g.turn += 1;
@@ -10023,6 +10025,21 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       ctx.save(); ctx.globalAlpha = a;
       if (im.hit) { ctx.fillStyle = TH.hp; ctx.shadowColor = TH.hp; ctx.shadowBlur = 5; ctx.beginPath(); ctx.arc(p.x, p.y, 2.6, 0, 2 * Math.PI); ctx.fill(); }
       else { ctx.strokeStyle = "rgba(150,185,165,0.85)"; ctx.lineWidth = 1.2; const r = 4; ctx.beginPath(); ctx.moveTo(p.x - r, p.y - r); ctx.lineTo(p.x + r, p.y + r); ctx.moveTo(p.x + r, p.y - r); ctx.lineTo(p.x - r, p.y + r); ctx.stroke(); }
+      ctx.restore();
+    }
+    // wrecks — a listing, faded silhouette crossed out where each ship went down, so
+    // the riepilogo (fog lifted at the end) tells the whole story of the battle
+    if (!deploying) for (const wr of gs.wrecks || []) {
+      const p = w2s(wr);
+      const col = wr.owner === seat ? TH.green : TH.foe;
+      const u = Math.max(4, shipPx(wr.type) * 0.5);
+      ctx.save(); ctx.globalAlpha = 0.4;
+      ctx.translate(p.x, p.y); ctx.rotate(0.5); // a hull heeled over, going down
+      fl2Hull(ctx, wr.type, u, col, "rgba(0,0,0,0)", gs.pirate); // outline only, no fill
+      ctx.restore();
+      ctx.save(); ctx.globalAlpha = 0.7; ctx.strokeStyle = col; ctx.lineWidth = 1.6;
+      const r = u * 1.15;
+      ctx.beginPath(); ctx.moveTo(p.x - r, p.y - r); ctx.lineTo(p.x + r, p.y + r); ctx.moveTo(p.x + r, p.y - r); ctx.lineTo(p.x - r, p.y + r); ctx.stroke();
       ctx.restore();
     }
     if (!deploying) for (const s of gs.ships[opp]) if (seen.has(s.id)) drawShip(s, false);
