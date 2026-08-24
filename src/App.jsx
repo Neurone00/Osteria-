@@ -244,8 +244,11 @@ const GAMES = {
     board: true,
     cat: "tavolo",
     cta: { it: "Salpa!", en: "Set sail!" },
-    opts: [],
-    def: {},
+    opts: [
+      { k: "mode", label: "Giocatori", le: "Players", cycle: ["2p", "1p"], fmt: { "2p": "2P", "1p": "1P" }, hint: "Due giocatori su due telefoni, o uno contro la CPU", he: "Two players on two phones, or one vs the CPU" },
+      { k: "ai", label: "CPU", le: "CPU", cycle: ["medio", "difficile"], fmt: { medio: "Medio", difficile: "Difficile" }, hint: "Livello dell'avversario CPU", he: "CPU opponent level", when: (o) => o.mode === "1p" },
+    ],
+    def: { mode: "2p", ai: "medio" },
   },
   paroliere: {
     name: "Il Paroliere",
@@ -1999,6 +2002,126 @@ function flotta2Seen(gs, seat) {
     }
   }
   return seen;
+}
+
+/* ── Flotta 2 opponent AI ──────────────────────────────────────
+   Pure and deterministic (no RNG), so a bot game replays identically and can be
+   simulated. It plays one seat and reasons only about what that seat can SEE
+   (fair fog). Two levels: "medio" scores each candidate order with heuristics;
+   "difficile" also rolls each candidate through the real resolver — the engine is
+   pure, so it can look one move ahead cheaply — and keeps the best outcome. */
+const fl2HullSum = (gs, seat) => gs.ships[seat].reduce((a, s) => a + Math.max(0, s.hp), 0);
+// aim where a target will be by the time a shot reaches it (a couple of iterations)
+function fl2Lead(shooter, target, w) {
+  let t = fl2Dist(shooter, target) / w.speed;
+  let ax = target.x, ay = target.y;
+  for (let i = 0; i < 3; i++) { ax = target.x + (target.vx || 0) * t; ay = target.y + (target.vy || 0) * t; t = Math.hypot(ax - shooter.x, ay - shooter.y) / w.speed; }
+  return { x: ax, y: ay };
+}
+// how much enemy firepower can reach a point next round (for evasion sense)
+function fl2ThreatAt(gs, seat, pt, seenFoe) {
+  const foe = other(seat);
+  let t = 0;
+  for (const e of gs.ships[foe]) {
+    if (e.hp <= 0 || (seenFoe && !seenFoe.has(e.id))) continue;
+    const w = FL2_WEAPON[FL2_UNITS[e.type].weapon];
+    if (!w || w.kind === "strike") continue;
+    const reach = w.range + w.speed;
+    const d = fl2Dist(e, pt);
+    if (d <= reach) t += (w.dmgMax || 1) * (1 - d / reach);
+  }
+  return t;
+}
+// the candidate orders the bot will weigh for one seat
+function fl2BotCandidates(gs, seat) {
+  const foeSeat = other(seat);
+  const mine = gs.ships[seat].filter((s) => s.hp > 0);
+  const seen = flotta2Seen(gs, seat);
+  const foes = gs.ships[foeSeat].filter((s) => s.hp > 0 && seen.has(s.id));
+  const cx = foes.length ? foes.reduce((a, s) => a + s.x, 0) / foes.length : 0;
+  const cy = foes.length ? foes.reduce((a, s) => a + s.y, 0) / foes.length : 0;
+  const cands = [];
+  for (const s of mine) {
+    const u = FL2_UNITS[s.type];
+    const w = u.weapon ? FL2_WEAPON[u.weapon] : null;
+    if (w && w.kind !== "strike" && (s.cd || 0) === 0) {
+      for (const e of foes) { if (fl2Dist(s, e) <= w.range + w.speed * 2) cands.push({ kind: "fire", ship: s.id, aim: fl2Lead(s, e, w), _e: e }); }
+    }
+    if (w && w.kind === "strike") {
+      for (const e of foes) { if (fl2Dist(s, e) <= w.range) cands.push({ kind: "strike", ship: s.id, target: e.id, _e: e }); }
+      cands.push({ kind: "scan", ship: s.id, dir: { dx: (cx - s.x) || 1, dy: cy - s.y }, _info: !foes.length });
+    }
+    const tx = foes.length ? s.x + (cx - s.x) * 0.6 : s.x * 0.75, ty = foes.length ? s.y + (cy - s.y) * 0.6 : s.y * 0.75;
+    cands.push({ kind: "move", ship: s.id, path: [fl2Clamp(tx, ty)] });
+    const a = Math.atan2(s.y, s.x) + Math.PI / 2;
+    cands.push({ kind: "move", ship: s.id, path: [fl2Clamp(s.x + Math.cos(a) * u.speed * 2, s.y + Math.sin(a) * u.speed * 2)] });
+  }
+  return { cands, seen, foes };
+}
+function fl2HeuristicScore(gs, seat, c, seen) {
+  const s = fl2ShipById(gs, c.ship), u = FL2_UNITS[s.type];
+  if (c.kind === "fire") {
+    const w = FL2_WEAPON[u.weapon], e = c._e, d0 = fl2Dist(s, c.aim) || 1;
+    const reach = Math.min(d0, w.range);
+    const impact = { x: s.x + (c.aim.x - s.x) / d0 * reach, y: s.y + (c.aim.y - s.y) / d0 * reach };
+    const t = reach / w.speed, ep = { x: e.x + (e.vx || 0) * t, y: e.y + (e.vy || 0) * t };
+    const cover = Math.max(0, 1 - fl2Dist(impact, ep) / (w.aoe + u.size));
+    const dmg = w.dmgMin + (w.dmgMax - w.dmgMin) * cover;
+    return 22 * cover * w.dmgMax + (e.hp <= dmg ? 4 : 0) - 0.002 * d0;
+  }
+  if (c.kind === "strike") return 12 + (c._e.type === "recon" ? 6 : 0) + (c._e.hp <= FL2_STRIKE_DMG ? 6 : 0);
+  if (c.kind === "scan") return c._info ? 6 : 1;
+  // move: close to bring the enemy into range while cutting incoming threat
+  const dest = c.path[c.path.length - 1], w = u.weapon ? FL2_WEAPON[u.weapon] : null;
+  let nf = null, nd = Infinity;
+  for (const id of seen) { const e = fl2ShipById(gs, id); if (e && e.owner !== seat && e.hp > 0) { const d = fl2Dist(dest, e); if (d < nd) (nd = d), (nf = e); } }
+  const rangeGood = nf && w && w.kind !== "strike" ? (nd < w.range ? 4 : (fl2Dist(s, nf) - nd) * 0.02) : 0.6;
+  return 2 + rangeGood + (fl2ThreatAt(gs, seat, s, seen) - fl2ThreatAt(gs, seat, dest, seen)) * 2;
+}
+function fl2RolloutScore(gs, seat, c, seen) {
+  const foeSeat = other(seat);
+  const g = clone(gs);
+  const { _e, _info, ...myOrder } = c;
+  g.orders[seat] = myOrder;
+  const oppShip = g.ships[foeSeat].find((s) => s.hp > 0);
+  if (!oppShip) return fl2HeuristicScore(gs, seat, c, seen); // no foe to resolve against
+  g.orders[foeSeat] = { kind: "move", ship: oppShip.id, path: [] }; // assume a neutral hold — isolate my move
+  const bMine = fl2HullSum(gs, seat), bFoe = fl2HullSum(gs, foeSeat);
+  const r = flotta2Resolve(g);
+  if (!r) return -1;
+  const enemyLost = bFoe - fl2HullSum(r.g, foeSeat), myLost = bMine - fl2HullSum(r.g, seat);
+  const s2 = fl2ShipById(r.g, c.ship);
+  const threat = s2 ? fl2ThreatAt(r.g, seat, s2, seen) : 0;
+  return enemyLost * 12 - myLost * 9 - threat * 1.5 + fl2HeuristicScore(gs, seat, c, seen) * 0.15;
+}
+// Choose one legal order for `seat`. `level` is "medio" or "difficile".
+function flotta2Bot(gs, seat, level) {
+  if (gs.phase !== "plan" || gs.done || gs.orders[seat]) return null;
+  const mine = gs.ships[seat].filter((s) => s.hp > 0);
+  if (!mine.length) return null;
+  const { cands, seen } = fl2BotCandidates(gs, seat);
+  if (!cands.length) { const s = mine[0]; return { kind: "move", ship: s.id, path: [fl2Clamp(s.x * 0.7, s.y * 0.7)] }; }
+  const hard = level === "difficile" || level === "hard";
+  let best = null, bestV = -Infinity;
+  cands.forEach((c, i) => {
+    const v = (hard ? fl2RolloutScore(gs, seat, c, seen) : fl2HeuristicScore(gs, seat, c, seen)) + i * 1e-4; // deterministic tie-break
+    if (v > bestV) (bestV = v), (best = c);
+  });
+  const { _e, _info, ...order } = best;
+  return order;
+}
+// The bot's opening deployment: fleet in a home octant, aimed at the sea's centre.
+function flotta2BotDeploy(gs, seat) {
+  const zone = FL2_ZONES[seat][1];
+  const a0 = zone * (Math.PI / 4);
+  const ships = {};
+  const list = gs.ships[seat];
+  list.forEach((s, i) => {
+    const a = a0 + (Math.PI / 4) * ((i + 1) / (list.length + 1));
+    const rr = FL2_R * 0.75;
+    ships[s.id] = { x: Math.cos(a) * rr, y: Math.sin(a) * rr, path: [] };
+  });
+  return { zone, ships };
 }
 
 /* ── il paroliere (boggle) ─────────────────────────────────────
@@ -5472,6 +5595,15 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   };
 
   const start = () => (usesShuffle(room.game) ? beginPrepare("A", null) : dealNow(dealGame(room.game, room.opts, "A", null)));
+  // 1-player vs CPU: no second device needed. Seat B becomes the CPU and this one
+  // device drives both sides (the bot auto-plays B locally).
+  const startCpu = () => {
+    setSolo(true);
+    setSeat("A");
+    const withCpu = { ...room, names: { A: room.names.A || "Tu", B: "CPU" } };
+    roomRef.current = withCpu;
+    publish({ ...withCpu, status: "play", gs: dealGame(room.game, room.opts, "A", null), log: [], ev: null, anim: null });
+  };
   const again = () => {
     const g = room.gs;
     // Scopa runs the shuffle-and-cut ritual before every hand — mid-match the
@@ -5714,9 +5846,14 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           </div>
           <div style={{ marginTop: 14 }}>
             {host ? (
-              <Button full disabled={!seated} onClick={start}>
-                {seated ? dealCta(gm) : L("Aspetta il 2º giocatore…", "Waiting for player 2…")}
-              </Button>
+              (() => {
+                const solo1p = key === "flotta2" && room.opts.mode === "1p"; // vs CPU — no 2nd player needed
+                return (
+                  <Button full disabled={!seated && !solo1p} onClick={solo1p ? startCpu : start}>
+                    {seated || solo1p ? dealCta(gm) : L("Aspetta il 2º giocatore…", "Waiting for player 2…")}
+                  </Button>
+                );
+              })()
             ) : (
               <Micro>{room.names.A} {L("sta preparando il tavolo — un attimo.", "is setting the table — one moment.")}</Micro>
             )}
@@ -6042,8 +6179,9 @@ function RuleChips({ conf, opts, setOpt }) {
   // Cycling values (the point target) read as tap-to-change tiles with the
   // value shown big; on/off rules read as labelled switch rows underneath —
   // two clearly different affordances, each with its plain-language hint.
-  const cyc = conf.opts.filter((o) => !isToggleOpt(o));
-  const tog = conf.opts.filter((o) => isToggleOpt(o));
+  const shown = conf.opts.filter((o) => !o.when || o.when(opts)); // some rules only apply in a mode
+  const cyc = shown.filter((o) => !isToggleOpt(o));
+  const tog = shown.filter((o) => isToggleOpt(o));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {cyc.length > 0 && (
@@ -6133,7 +6271,9 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
       outer.style.transform = `translate3d(calc(-50% + ${d * st}px), 0, 0)`;
       outer.style.zIndex = String(ad < 0.5 ? 30 : Math.max(1, 10 - Math.round(ad)));
       outer.style.visibility = near ? "visible" : "hidden";
-      outer.style.pointerEvents = near ? "auto" : "none";
+      // only the centred card takes taps, so a tap on the visible surface always
+      // means "this one" — no guessing which overlapping neighbour was hit
+      outer.style.pointerEvents = ad < 0.5 ? "auto" : "none";
       if (inner) {
         const t = Math.min(1, ad);
         inner.style.transform = `scale(${1 - 0.14 * t})`;
@@ -6236,35 +6376,11 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     raf.current = requestAnimationFrame(glide);
   };
 
-  // a tap on a card's FRONT: the middle one flips to its back; a neighbour is
-  // brought to the middle (never rotating). The back never flips on a stray tap —
-  // only its own ↺ button turns it over — so its toggles and scroll work freely.
-  const onFace = (i, e) => {
+  // Only the centred card is tappable (see paint), so a tap always means "flip the
+  // one in the middle". Neighbours are reached by swiping — simple and unambiguous.
+  const onFace = () => {
     if (gest.current.blocked) return;
-    // The cards overlap (they sit `step` apart but are `cardW` wide) and the
-    // middle one has the highest z-index, so it catches taps meant for a peeking
-    // neighbour. Resolve the intended card from the tap's X position instead of
-    // trusting whichever overlapping element received the click.
-    let target = i;
-    const el = wrapRef.current;
-    if (el && e && typeof e.clientX === "number") {
-      const r = el.getBoundingClientRect();
-      const dx = e.clientX - (r.left + r.width / 2);
-      target = mod(Math.round(posRef.current + dx / stepRef.current));
-    }
-    if (target === mod(Math.round(posRef.current))) setFlip(true);
-    else if (host) {
-      setFlip(false);
-      // spin to the nearest copy of the tapped card
-      let best = target,
-        bestD = Infinity;
-      for (let k = -2; k <= 2; k++) {
-        const cand = target + k * N;
-        const dd = Math.abs(cand - posRef.current);
-        if (dd < bestD) (bestD = dd), (best = cand);
-      }
-      settle(best);
-    }
+    setFlip(true);
   };
 
   return (
@@ -9209,6 +9325,11 @@ function Fl2Btn({ icon, label, onTap, tone, bg, size = 46 }) {
 }
 function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, sound, setSound }) {
   const opp = other(seat);
+  // single-player: the CPU plays seat B; the human is A. The bot's move is computed
+  // locally each turn from the pure engine — no network, no server needed.
+  const botLevel = room.opts && room.opts.mode === "1p" ? room.opts.ai || "medio" : null;
+  const botActive = !!botLevel;
+  const BOT = "B";
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const [box, setBox] = useState({ w: 360, h: 560 });
@@ -9308,6 +9429,19 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   useEffect(() => {
     if (flotta2Ready(gs) && resolvedFor.current !== gs.turn) { resolvedFor.current = gs.turn; const r = flotta2Resolve(gs); if (r) commit(r); }
   }, [gs.orders && gs.orders.A, gs.orders && gs.orders.B, gs.turn]); // eslint-disable-line
+  // the CPU opponent (1-player): auto-submit seat B's deployment, then one order a
+  // round. Deterministic + guarded, so it fires once per phase/turn.
+  const botDep = useRef(false), botTurn = useRef(-1);
+  useEffect(() => {
+    if (!botActive || gs.done) return;
+    if (gs.phase === "deploy") {
+      botTurn.current = -1;
+      if (!gs.deploy[BOT] && !botDep.current) { botDep.current = true; const r = flotta2Deploy(gs, BOT, flotta2BotDeploy(gs, BOT)); if (r) commit(r); }
+    } else {
+      botDep.current = false;
+      if (!gs.orders[BOT] && botTurn.current !== gs.turn) { botTurn.current = gs.turn; const o = flotta2Bot(gs, BOT, botLevel); if (o) { const r = flotta2Order(gs, BOT, o); if (r) commit(r); } }
+    }
+  }, [botActive, gs.phase, gs.turn, gs.done, gs.deploy && gs.deploy.B, gs.orders && gs.orders.B]); // eslint-disable-line
   // re-send my own submission if a concurrent write clobbered the shared state
   const mineRef = useRef(null);
   useEffect(() => { mineRef.current = null; }, [gs.turn, gs.phase, seat]);
@@ -9798,9 +9932,14 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
           <button style={{ ...chromeBtn, borderColor: SON.foe, color: SON.foe }} onClick={onExit} aria-label="exit"><Ico n="exit" s={18} /></button>
         </div>
       </div>
-      {solo && (
+      {solo && !botActive && (
         <div onClick={onFlip} style={{ textAlign: "center", padding: "6px 8px", fontSize: 12.5, fontWeight: 600, color: SON.green, borderBottom: `1px solid rgba(70,255,156,0.12)`, cursor: "pointer" }}>
           <Ico n="flask" s={13} /> {L("Solo · sei", "Solo · you are")} {who(room, seat)} — {L("tocca per cambiare lato", "tap to switch sides")}
+        </div>
+      )}
+      {botActive && (
+        <div style={{ textAlign: "center", padding: "6px 8px", fontSize: 12, fontWeight: 600, color: SON.faint, borderBottom: `1px solid rgba(70,255,156,0.12)`, fontFamily: MONO, letterSpacing: "0.06em" }}>
+          {L("1 GIOCATORE · CPU", "1 PLAYER · CPU")} {botLevel === "difficile" ? L("· DIFFICILE", "· HARD") : L("· MEDIO", "· MEDIUM")}
         </div>
       )}
       <div style={{ textAlign: "center", minHeight: 18, padding: "5px 8px", fontFamily: MONO, fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: gs.done ? SON.green : SON.faint }}>{status}</div>

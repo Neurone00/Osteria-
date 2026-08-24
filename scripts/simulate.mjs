@@ -45,7 +45,7 @@ const EXPORTS = [
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
-  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn",
+  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1162,6 +1162,53 @@ function playFlotta2() {
   if (g.done && g.win && g.tally[g.win] !== 1) fail("flotta2", "winner's tally not bumped");
   return rounds;
 }
+// The CPU opponent playing itself (and vs the random fuzzer): every bot order must
+// be legal, resolution deterministic, and the match must terminate.
+function playFlotta2Bot(levelA, levelB) {
+  let g = R.dealFlotta2("A", { A: 0, B: 0 });
+  g = R.flotta2Deploy(g, "A", R.flotta2BotDeploy(g, "A")).g;
+  g = R.flotta2Deploy(g, "B", R.flotta2BotDeploy(g, "B")).g;
+  g = R.flotta2Begin(g).g;
+  fl2Census(g, "flotta2 bot begin");
+  let rounds = 0;
+  while (!g.done && rounds < 200) {
+    for (const s of ["A", "B"]) {
+      const lvl = s === "A" ? levelA : levelB;
+      const o = R.flotta2Bot(g, s, lvl);
+      if (!o) return fail("flotta2 bot", `bot ${s} produced no order`), rounds;
+      const r = R.flotta2Order(g, s, o);
+      if (!r) return fail("flotta2 bot", `bot ${s} illegal order: ${JSON.stringify(o)}`), rounds;
+      g = r.g;
+    }
+    if (!R.flotta2Ready(g)) return fail("flotta2 bot", "both bot orders in but round won't resolve"), rounds;
+    if (JSON.stringify(R.flotta2Resolve(g).g) !== JSON.stringify(R.flotta2Resolve(g).g)) return fail("flotta2 bot", "bot resolution is not deterministic"), rounds;
+    g = R.flotta2Resolve(g).g;
+    fl2Census(g, "flotta2 bot round");
+    rounds++;
+  }
+  if (!g.done) fail("flotta2 bot", `${levelA} vs ${levelB} did not finish in 200 rounds`);
+  return rounds;
+}
+function playFlotta2BotVsRandom(level) {
+  let g = R.dealFlotta2("A", { A: 0, B: 0 });
+  g = R.flotta2Deploy(g, "A", R.flotta2BotDeploy(g, "A")).g;
+  g = fl2Deploy(g, "B");
+  g = R.flotta2Begin(g).g;
+  let rounds = 0;
+  while (!g.done && rounds < 200) {
+    const o = R.flotta2Bot(g, "A", level);
+    const r = R.flotta2Order(g, "A", o);
+    if (!r) return fail("flotta2 bot", `illegal bot order vs random: ${JSON.stringify(o)}`), rounds;
+    g = r.g;
+    g = fl2SubmitRandom(g, "B");
+    if (!R.flotta2Ready(g)) return fail("flotta2 bot", "not ready vs random"), rounds;
+    g = R.flotta2Resolve(g).g;
+    fl2Census(g, "flotta2 bot v random");
+    rounds++;
+  }
+  if (!g.done) fail("flotta2 bot", `${level} vs random did not finish`);
+  return rounds;
+}
 function flotta2RuleTests() {
   // deal opens the deployment phase with one of each unit per side
   let g = R.dealFlotta2("A", { A: 0, B: 0 });
@@ -1444,6 +1491,16 @@ for (const [label, run] of runs) {
   const before = failures;
   flotta2RuleTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"flotta 2 rules".padEnd(44)} fleet, orders, coverage dmg, radar, fog, win`);
+}
+{
+  const before = failures;
+  // bot-vs-bot is deterministic (no RNG), so one run each level suffices; bot-vs-
+  // random is fuzzed over many deals to catch any illegal order the bot might emit.
+  const mm = playFlotta2Bot("medio", "medio");
+  const dd = playFlotta2Bot("difficile", "difficile");
+  const dm = playFlotta2Bot("difficile", "medio");
+  for (let i = 0; i < 60; i++) { playFlotta2BotVsRandom("medio"); playFlotta2BotVsRandom("difficile"); }
+  console.log(`${failures === before ? "✓" : "✗"} ${"flotta 2 CPU (medio & difficile)".padEnd(44)} legal orders, deterministic, games end (${mm}/${dd}/${dm})`);
 }
 {
   const before = failures;
