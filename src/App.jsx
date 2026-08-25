@@ -1824,6 +1824,7 @@ function flotta2Begin(gs) {
       }
       s.x = x;
       s.y = y;
+      s.trail = [{ x, y }]; // the debrief track: where the ship stood each round, from here on
       s.path = Array.isArray(sp.path) ? sp.path.map((p) => fl2Clamp(p.x, p.y)) : [];
       if (s.path.length) s.heading = Math.atan2(s.path[0].y - y, s.path[0].x - x);
     }
@@ -1945,8 +1946,9 @@ function flotta2Resolve(gs) {
   //    sail, the wind speeds or slows each run by its bearing.
   for (const s of g.ships.A.concat(g.ships.B)) {
     if (s.hp <= 0) continue;
-    if (firing.has(s.id)) { s.vx = 0; s.vy = 0; continue; }
-    fl2Advance(s, FL2_UNITS[s.type].speed, g.pirate ? g.wind : undefined);
+    if (firing.has(s.id)) { s.vx = 0; s.vy = 0; }
+    else fl2Advance(s, FL2_UNITS[s.type].speed, g.pirate ? g.wind : undefined);
+    (s.trail || (s.trail = [{ x: s.x, y: s.y }])).push({ x: s.x, y: s.y }); // log the round's end position for the debrief
   }
   // 2b) now fire. Pirate: a broadside from where the ship ended up. Modern: an aimed
   //     shot, straight from the ship's position with no vector lead.
@@ -2020,7 +2022,7 @@ function flotta2Resolve(gs) {
   if (g.impacts.length > 80) g.impacts = g.impacts.slice(-80); // keep the trail bounded
   // 4) clear the dead — but leave a wreck where each ship went down (shown on the field)
   for (const seat of ["A", "B"]) {
-    for (const s of g.ships[seat]) if (s.hp <= 0) (g.wrecks || (g.wrecks = [])).push({ x: s.x, y: s.y, type: s.type, owner: seat });
+    for (const s of g.ships[seat]) if (s.hp <= 0) (g.wrecks || (g.wrecks = [])).push({ x: s.x, y: s.y, type: s.type, owner: seat, trail: s.trail || [] });
     g.ships[seat] = g.ships[seat].filter((s) => s.hp > 0);
   }
   // 5) advance the clock. Modern: a radar sweep every Nth round. Pirate: no radar
@@ -10026,6 +10028,22 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       if (im.hit) { ctx.fillStyle = TH.hp; ctx.shadowColor = TH.hp; ctx.shadowBlur = 5; ctx.beginPath(); ctx.arc(p.x, p.y, 2.6, 0, 2 * Math.PI); ctx.fill(); }
       else { ctx.strokeStyle = "rgba(150,185,165,0.85)"; ctx.lineWidth = 1.2; const r = 4; ctx.beginPath(); ctx.moveTo(p.x - r, p.y - r); ctx.lineTo(p.x + r, p.y + r); ctx.moveTo(p.x + r, p.y - r); ctx.lineTo(p.x - r, p.y + r); ctx.stroke(); }
       ctx.restore();
+    }
+    // debrief: once the match is over, trace each ship's whole voyage (deploy → end)
+    // so the reveal shows HOW the battle unfolded, not just where it finished
+    if (gs.done) {
+      const track = (trail, owner) => {
+        if (!trail || trail.length < 2) return;
+        const col = owner === seat ? TH.green : TH.foe;
+        ctx.save(); ctx.globalAlpha = 0.5; ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.setLineDash([4, 4]);
+        const s0 = w2s(trail[0]); ctx.beginPath(); ctx.moveTo(s0.x, s0.y);
+        for (const q of trail) { const sp = w2s(q); ctx.lineTo(sp.x, sp.y); }
+        ctx.stroke(); ctx.setLineDash([]);
+        ctx.globalAlpha = 0.85; ctx.fillStyle = col; ctx.beginPath(); ctx.arc(s0.x, s0.y, 3, 0, 2 * Math.PI); ctx.fill(); // deploy anchor
+        ctx.restore();
+      };
+      for (const s of gs.ships.A.concat(gs.ships.B)) track(s.trail, s.owner);
+      for (const wr of gs.wrecks || []) track(wr.trail, wr.owner);
     }
     // wrecks — a listing, faded silhouette crossed out where each ship went down, so
     // the riepilogo (fog lifted at the end) tells the whole story of the battle

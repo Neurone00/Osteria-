@@ -1548,6 +1548,10 @@ function flotta2RuleTests() {
   const foeAfter = sb.ships.B.find((s) => s.id === near.id);
   if (foeAfter && foeAfter.hp >= foeHp) fail("flotta2 rules", "the shot should still hit the enemy caught in the blast");
   if (!(sb.wrecks && sb.wrecks.some((wr) => wr.owner === "B" && wr.type === "sub"))) fail("flotta2 rules", "a sunk ship should leave a wreck on the field");
+  // the debrief track: each ship logs its position every round, and a wreck keeps it
+  const meTrail = sb.ships.A.find((s) => s.id === shooter.id);
+  if (!(meTrail && Array.isArray(meTrail.trail) && meTrail.trail.length >= 2)) fail("flotta2 rules", "a surviving ship should log a debrief track");
+  if (!sb.wrecks.some((wr) => Array.isArray(wr.trail) && wr.trail.length >= 1)) fail("flotta2 rules", "a wreck should keep the sunk ship's track");
 }
 
 /* ── run ────────────────────────────────────────────────────── */
