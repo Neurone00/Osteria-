@@ -45,7 +45,7 @@ const EXPORTS = [
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
-  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision",
+  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision", "FL2_PIRATE_SPEED", "fl2Speed",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1215,6 +1215,22 @@ function flotta2PirateTests() {
   if (!R.flotta2Seen(h, "A").has(eSub.id)) fail("flotta2 pirati", "a near sub should be seen by line of sight");
   eSub.x = 5000; eSub.y = 0;
   if (R.flotta2Seen(h, "A").has(eSub.id)) fail("flotta2 pirati", "a far contact should be unseen");
+  // pirates sail twice as far each round
+  if (R.FL2_PIRATE_SPEED !== 2) fail("flotta2 pirati", "pirate move range should be doubled");
+  if (R.fl2Speed("warship", true) !== R.FL2_UNITS.warship.speed * 2) fail("flotta2 pirati", "pirate speed helper should double the range");
+  if (R.fl2Speed("warship", false) !== R.FL2_UNITS.warship.speed) fail("flotta2 pirati", "modern speed should be untouched");
+  // a pirate hull on a long route covers more than its base speed in one round (even upwind)
+  let mv = fl2Begun({ variant: "pirati" });
+  const runner = mv.ships.A.find((s) => s.type === "warship");
+  mv.ships.A = [runner]; mv.ships.B = [mv.ships.B[0]];
+  runner.x = 0; runner.y = 0; runner.heading = 0; runner.path = [{ x: R.FL2_R, y: 0 }];
+  const startX = runner.x;
+  mv = R.flotta2Order(mv, "A", { kind: "move", ship: runner.id, path: [{ x: R.FL2_R, y: 0 }] }).g;
+  mv = R.flotta2Order(mv, "B", { kind: "move", ship: mv.ships.B[0].id, path: [] }).g;
+  mv = R.flotta2Resolve(mv).g;
+  const moved = Math.abs(mv.ships.A[0].x - startX);
+  if (moved <= R.FL2_UNITS.warship.speed) fail("flotta2 pirati", "a pirate hull should out-sail its base move range");
+
   // the pirate lookout sees three times as far: a contact just past base vision is spotted
   if (R.FL2_PIRATE_SIGHT !== 3) fail("flotta2 pirati", "pirate sight should be tripled");
   if (R.fl2Vision("warship", true) !== R.FL2_UNITS.warship.vision * 3) fail("flotta2 pirati", "pirate vision helper should triple the range");

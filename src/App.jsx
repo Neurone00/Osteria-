@@ -1625,8 +1625,11 @@ const FL2_STRIKE_DMG = 0.5;
 const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals surface ships to both
 const FL2_MAX_TURNS = 31; // a match lasts at most this many rounds, else decided on ships left
 const FL2_PIRATE_SIGHT = 3; // pirates spot by eye alone — triple every hull's lookout range
+const FL2_PIRATE_SPEED = 2; // open-sea sailing — double every hull's move range
 // a hull's sighting range: on the open sea (pirate) the lookout sees three times as far
 const fl2Vision = (type, pirate) => FL2_UNITS[type].vision * (pirate ? FL2_PIRATE_SIGHT : 1);
+// a hull's move range per round: pirates sail twice as far
+const fl2Speed = (type, pirate) => FL2_UNITS[type].speed * (pirate ? FL2_PIRATE_SPEED : 1);
 // The recon/drone's scan: a long narrow beam instead of its round eye. It reaches
 // twice as far as normal vision (SCAN_LEN×) but is thin — a corridor of half-width
 // vision/SCAN_W. Once set it stays trained in that bearing every round until the
@@ -1947,7 +1950,7 @@ function flotta2Resolve(gs) {
   for (const s of g.ships.A.concat(g.ships.B)) {
     if (s.hp <= 0) continue;
     if (firing.has(s.id)) { s.vx = 0; s.vy = 0; }
-    else fl2Advance(s, FL2_UNITS[s.type].speed, g.pirate ? g.wind : undefined);
+    else fl2Advance(s, fl2Speed(s.type, g.pirate), g.pirate ? g.wind : undefined);
     (s.trail || (s.trail = [{ x: s.x, y: s.y }])).push({ x: s.x, y: s.y }); // log the round's end position for the debrief
   }
   // 2b) now fire. Pirate: a broadside from where the ship ended up. Modern: an aimed
@@ -2140,8 +2143,9 @@ function fl2BotCandidates(gs, seat) {
       }
       if (nf) {
         const brg = Math.atan2(nf.y - s.y, nf.x - s.x);
-        for (const perp of [brg + Math.PI / 2, brg - Math.PI / 2]) cands.push({ kind: "move", ship: s.id, path: [fl2Clamp(s.x + Math.cos(perp) * u.speed * 2, s.y + Math.sin(perp) * u.speed * 2)] }); // sail abeam → guns bear
-        cands.push({ kind: "move", ship: s.id, path: [fl2Clamp(s.x + Math.cos(brg) * u.speed * 1.5, s.y + Math.sin(brg) * u.speed * 1.5)] }); // close the range
+        const sp = fl2Speed(s.type, true);
+        for (const perp of [brg + Math.PI / 2, brg - Math.PI / 2]) cands.push({ kind: "move", ship: s.id, path: [fl2Clamp(s.x + Math.cos(perp) * sp * 2, s.y + Math.sin(perp) * sp * 2)] }); // sail abeam → guns bear
+        cands.push({ kind: "move", ship: s.id, path: [fl2Clamp(s.x + Math.cos(brg) * sp * 1.5, s.y + Math.sin(brg) * sp * 1.5)] }); // close the range
       } else cands.push({ kind: "move", ship: s.id, path: [fl2Clamp(s.x * 0.8, s.y * 0.8)] }); // no contact — stand toward the middle
       continue;
     }
@@ -9763,11 +9767,11 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     } else if (g.kind === "tapShip" && !g.moved) {
       setSel(g.id); setMode("menu");
     } else if (g.kind === "draw" && selShip) {
-      const trimmed = fl2TrimPath([{ x: selShip.x, y: selShip.y }, ...g.pts], 3 * FL2_UNITS[selShip.type].speed);
+      const trimmed = fl2TrimPath([{ x: selShip.x, y: selShip.y }, ...g.pts], 3 * fl2Speed(selShip.type, gs.pirate));
       if (trimmed.length >= 2) setDraft({ kind: "move", path: trimmed });
     } else if (g.kind === "droute" && selShip) {
       const start = dpos[selShip.id] || shipPos(selShip);
-      const trimmed = fl2TrimPath([start, ...g.pts], 3 * FL2_UNITS[selShip.type].speed);
+      const trimmed = fl2TrimPath([start, ...g.pts], 3 * fl2Speed(selShip.type, gs.pirate));
       // store just the waypoints (drop the start point) so the initial heading is well-defined
       setDpath((p) => ({ ...p, [selShip.id]: trimmed.length >= 2 ? trimmed.slice(1) : [] }));
       setMode("dmenu");
