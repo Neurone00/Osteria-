@@ -1064,6 +1064,7 @@ function yahtScore(gs, seat, cat) {
   const g = clone(gs);
   if (g.turn !== seat || !g.rolled || g.done || cat in g.scores[seat]) return null;
   g.scores[seat][cat] = yahtValue(cat, g.dice);
+  g.last = { seat, cat, pts: g.scores[seat][cat] }; // the presa just taken — shown to both
   g.turn = other(seat);
   g.dice = [0, 0, 0, 0, 0];
   g.keep = [false, false, false, false, false];
@@ -8773,6 +8774,14 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
           {oppTotal.total} punti · {Object.keys(oppScore).length}/13
         </Micro>
       </div>
+      {/* what the opponent last took — so you see their presa without opening the sheet */}
+      {gs.last && gs.last.seat === opp && (gs.last.cat in oppScore) && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 3 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontFamily: MONO, fontSize: 11, letterSpacing: "0.04em", color: T.ink60, background: T.paper, border: `1px solid ${T.line}`, borderRadius: 999, padding: "2px 9px" }}>
+            {L("ultima presa", "last take")}: <b style={{ color: T.ink }}>{(YCATS.find((c) => c.k === gs.last.cat) || {}).label || gs.last.cat}</b> · {gs.last.pts}
+          </span>
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
         <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
           <Ico n="help" s={15} /> come si conta
