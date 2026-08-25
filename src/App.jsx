@@ -1635,7 +1635,7 @@ const FL2_PIRATE_SPEED = 2; // open-sea sailing — double every hull's move ran
 // range (its hull + FL2_MINE_R) and it goes off for FL2_MINE_DMG, then it's spent.
 const FL2_MINES = 3;         // mines laid per side
 const FL2_MINE_DMG = 2;      // hull taken by a ship that sets one off
-const FL2_MINE_R = 16;       // close range = the ship's own size + this
+const FL2_MINE_R = 34;       // close range = the ship's own size + this
 const FL2_MINE_DETECT = 150; // a mine is only spotted within this range of your ships
 // a hull's sighting range: on the open sea (pirate) the lookout sees three times as far
 const fl2Vision = (type, pirate) => FL2_UNITS[type].vision * (pirate ? FL2_PIRATE_SIGHT : 1);
@@ -1666,12 +1666,20 @@ function fl2ScanEnd(ship) {
 // The recon/helo may deploy in ANY octant. Nobody may deploy inside the central
 // no-deploy circle (radius R/2); ships go in the outer ring.
 const FL2_ZONES = { A: [2, 3, 4, 5], B: [6, 7, 0, 1] };
-// Pirate mode interleaves the slices instead of giving each side a contiguous half,
-// so the two fleets start woven around the chart rather than facing off across it.
-// Pirate: the whole compass is a shared pool — a coin toss decides who claims a
-// quadrant first, and the second can take any of the rest (never the same one).
-const FL2_ZONES_PIRATE = { A: [0, 1, 2, 3, 4, 5, 6, 7], B: [0, 1, 2, 3, 4, 5, 6, 7] };
+// Modern splits the ring into 8 octants (each side a contiguous half). Pirate uses
+// four big quadrants, split so the fleets start on opposite sides: each side picks
+// one of its two quadrants and lays its fleet — both at once, in secret.
+const FL2_QUAD = 4;
+const FL2_ZONES_PIRATE = { A: [0, 3], B: [1, 2] };
 const fl2ZonesFor = (pirate) => (pirate ? FL2_ZONES_PIRATE : FL2_ZONES);
+const fl2Sectors = (pirate) => (pirate ? FL2_QUAD : 8); // ring divisions
+// which sector (quadrant on pirate, octant on modern) a point falls in
+const fl2SectorOf = (x, y, pirate) => {
+  let a = Math.atan2(y, x);
+  if (a < 0) a += 2 * Math.PI;
+  const n = fl2Sectors(pirate);
+  return Math.floor(a / ((2 * Math.PI) / n)) % n;
+};
 // Pirate mode: units keep their stats but sail under sail-cloth names, and the wind
 // pushes them along — a speed bonus running with it, a penalty clawing into it.
 const FL2_PIRATE_NAME = { warship: "galeone", frigate: "fregata", sub: "sloop", recon: "goletta" };
@@ -1686,26 +1694,23 @@ function fl2WindFactor(wind, mvx, mvy) {
   return 0.65 + 0.6 * ((dot + 1) / 2);
 }
 const FL2_NODEPLOY = FL2_R / 2;
-const fl2Octant = (x, y) => {
-  let a = Math.atan2(y, x);
-  if (a < 0) a += 2 * Math.PI;
-  return Math.floor(a / (Math.PI / 4)) % 8;
-};
-// Can `type` (of `seat`) legally sit at (x,y)? Outer ring only; own octant unless
-// it's the recon, which may go in any octant.
-function fl2InZone(seat, type, octant, x, y, pirate) {
+// Can `type` (of `seat`) legally sit at (x,y)? Outer ring only; own sector unless
+// it's the recon, which may go anywhere in the ring. `sector` is an octant (modern)
+// or a quadrant (pirate).
+function fl2InZone(seat, type, sector, x, y, pirate) {
   const r = fl2Len(x, y);
   if (r < FL2_NODEPLOY || r > FL2_R) return false;
   if (type === "recon") return true; // the helo/scout deploys anywhere in the ring
-  return fl2Octant(x, y) === octant && fl2ZonesFor(pirate)[seat].includes(octant);
+  return fl2SectorOf(x, y, pirate) === sector && fl2ZonesFor(pirate)[seat].includes(sector);
 }
-// Spread n ships across an octant at ~0.75R, for the opening auto-layout.
-function fl2PlaceInOctant(octant, n) {
-  const a0 = octant * (Math.PI / 4);
+// Spread n ships across a sector at ~0.75R, for the opening auto-layout.
+function fl2PlaceInOctant(sector, n, pirate) {
+  const seg = (2 * Math.PI) / fl2Sectors(pirate);
+  const a0 = sector * seg;
   const pts = [];
   for (let i = 0; i < n; i++) {
     const t = (i + 1) / (n + 1);
-    const a = a0 + (Math.PI / 4) * t;
+    const a = a0 + seg * t;
     const rr = FL2_R * 0.75;
     pts.push({ x: Math.cos(a) * rr, y: Math.sin(a) * rr });
   }
@@ -1778,14 +1783,10 @@ function dealFlotta2(dealer, tally, opts) {
   const pirate = !!(opts && opts.variant === "pirati");
   const zones = fl2ZonesFor(pirate);
   const ships = { A: [], B: [] };
-  // Pirate opening ritual: a random wind, and a doubloon toss (rum = host, skull =
-  // guest) that decides who claims a quadrant first. Faces the shared-pool deploy.
-  const coin = pirate ? (Math.random() < 0.5 ? "rum" : "skull") : null;
-  const first = pirate ? (coin === "rum" ? "A" : "B") : null;
   const bombe = pirate && !!(opts && opts.bombe); // the mines house rule (pirate only)
-  const defZone = pirate ? { A: 0, B: 4 } : { A: zones.A[1], B: zones.B[1] }; // distinct until the player picks
+  const defZone = pirate ? { A: zones.A[0], B: zones.B[0] } : { A: zones.A[1], B: zones.B[1] }; // a default sector until the player picks
   ["A", "B"].forEach((seat) => {
-    const pts = fl2PlaceInOctant(defZone[seat], FL2_FLEET.length);
+    const pts = fl2PlaceInOctant(defZone[seat], FL2_FLEET.length, pirate);
     FL2_FLEET.forEach((type, i) => {
       const p = pts[i];
       ships[seat].push(fl2Ship(type, seat, `${seat}${i}`, p.x, p.y, Math.atan2(-p.y, -p.x)));
@@ -1795,8 +1796,6 @@ function dealFlotta2(dealer, tally, opts) {
     R: FL2_R,
     pirate, // sea-chart variant: broadsides, line-of-sight, wind
     wind: pirate ? Math.random() * 2 * Math.PI : null, // random opening bearing; veers over the match
-    coin, // the doubloon face this game (rum | skull), null when modern
-    first, // who claims a quadrant first (the coin winner), null when modern
     bombe, // the mines house rule is on
     mines: { A: null, B: null }, // each side's laid mines (null until submitted)
     phase: "deploy", // deploy → (mines) → plan → (resolve) → plan …
@@ -1818,17 +1817,12 @@ function dealFlotta2(dealer, tally, opts) {
     last: null,
   };
 }
-// Submit a whole fleet deployment: a chosen octant + a position (and optional
-// initial route) per ship. Positions are clamped legal on apply, so a bad submit
-// can't put a ship out of bounds. Held until both sides are in.
+// Submit a whole fleet deployment: a chosen sector (octant on modern, quadrant on
+// pirate) + a position (and optional initial route) per ship. Positions are clamped
+// legal on apply. Both sides deploy at once, in secret — held until both are in.
 function flotta2Deploy(gs, seat, placement) {
   if (gs.phase !== "deploy" || gs.deploy[seat]) return null;
   if (!placement || !fl2ZonesFor(gs.pirate)[seat].includes(placement.zone)) return null;
-  if (gs.pirate && gs.first) {
-    const foe = seat === "A" ? "B" : "A";
-    if (seat !== gs.first && !gs.deploy[gs.first]) return null; // wait — the coin winner claims a quadrant first
-    if (gs.deploy[foe] && gs.deploy[foe].zone === placement.zone) return null; // can't share the taken quadrant
-  }
   const g = clone(gs);
   g.deploy[seat] = placement;
   return { g, quiet: true, ev: { t: "deploy" } };
@@ -1846,9 +1840,9 @@ function flotta2Begin(gs) {
       let x = typeof sp.x === "number" ? sp.x : s.x;
       let y = typeof sp.y === "number" ? sp.y : s.y;
       if (!fl2InZone(seat, s.type, pl.zone, x, y, g.pirate)) {
-        // snap to a safe spot: mid-ring at the octant's centre (recon → own zone)
-        const oct = s.type === "recon" ? pl.zone : pl.zone;
-        const a = oct * (Math.PI / 4) + Math.PI / 8;
+        // snap to a safe spot: mid-ring at the sector's centre
+        const seg = (2 * Math.PI) / fl2Sectors(g.pirate);
+        const a = pl.zone * seg + seg / 2;
         x = Math.cos(a) * FL2_R * 0.75;
         y = Math.sin(a) * FL2_R * 0.75;
       }
@@ -2306,17 +2300,15 @@ function flotta2Bot(gs, seat, level) {
   const { _e, _info, ...order } = best;
   return order;
 }
-// The bot's opening deployment: fleet in a home octant, aimed at the sea's centre.
+// The bot's opening deployment: fleet in a home sector, aimed at the sea's centre.
 function flotta2BotDeploy(gs, seat) {
-  const foe = seat === "A" ? "B" : "A";
-  const taken = gs.pirate && gs.deploy[foe] ? gs.deploy[foe].zone : null;
-  const avail = fl2ZonesFor(gs.pirate)[seat];
-  const zone = avail.find((z) => z !== taken) ?? avail[1];
-  const a0 = zone * (Math.PI / 4);
+  const zone = fl2ZonesFor(gs.pirate)[seat][0];
+  const seg = (2 * Math.PI) / fl2Sectors(gs.pirate);
+  const a0 = zone * seg;
   const ships = {};
   const list = gs.ships[seat];
   list.forEach((s, i) => {
-    const a = a0 + (Math.PI / 4) * ((i + 1) / (list.length + 1));
+    const a = a0 + seg * ((i + 1) / (list.length + 1));
     const rr = FL2_R * 0.75;
     ships[s.id] = { x: Math.cos(a) * rr, y: Math.sin(a) * rr, path: [] };
   });
@@ -9642,89 +9634,6 @@ function Fl2Btn({ icon, label, onTap, tone, bg, size = 38 }) {
     </div>
   );
 }
-// One face of the golden doubloon: a gold blank with a rope rim and an engraved
-// device — a bottle of rum on one side, a skull-and-crossbones on the other.
-function fl2CoinFace(kind, S) {
-  const ink = "#6a4a12";
-  const hole = "#d9ab45"; // knocked-back gold for cut-outs (eye sockets, label)
-  return (
-    <svg viewBox="0 0 100 100" width={S} height={S} style={{ display: "block" }}>
-      <defs>
-        <radialGradient id={`dbl-${kind}`} cx="38%" cy="30%" r="80%">
-          <stop offset="0%" stopColor="#fae89a" />
-          <stop offset="55%" stopColor="#e3b74a" />
-          <stop offset="100%" stopColor="#a4761d" />
-        </radialGradient>
-      </defs>
-      <circle cx="50" cy="50" r="48" fill={`url(#dbl-${kind})`} stroke="#7a5a1e" strokeWidth="1.6" />
-      <circle cx="50" cy="50" r="43.5" fill="none" stroke="#856421" strokeWidth="1.3" strokeDasharray="1.8 2.2" />
-      <circle cx="50" cy="50" r="40" fill="none" stroke="#9a7526" strokeWidth="0.7" opacity="0.6" />
-      {kind === "rum" ? (
-        <>
-          <g fill={ink}>
-            {/* a bottle of rum: cork, neck, shoulders, body */}
-            <rect x="46" y="20" width="8" height="5" rx="1.4" />
-            <rect x="46.5" y="24.5" width="7" height="9" />
-            <path d="M43 33.5q-5 3-5 10.5v24q0 4 4 4h16q4 0 4-4v-24q0-7.5-5-10.5z" />
-          </g>
-          {/* the label with three X's — the old mark for strong drink */}
-          <rect x="40.5" y="47" width="19" height="14" rx="1.5" fill={hole} />
-          <g stroke={ink} strokeWidth="1.7" strokeLinecap="round">
-            <path d="M44 51.5l3.4 5M47.4 51.5l-3.4 5" />
-            <path d="M48.3 51.5l3.4 5M51.7 51.5l-3.4 5" />
-            <path d="M52.6 51.5l3.4 5M56 51.5l-3.4 5" />
-          </g>
-        </>
-      ) : (
-        <>
-          <g fill={ink}>
-            {/* crossbones behind */}
-            <g stroke={ink} strokeWidth="4.2" strokeLinecap="round">
-              <line x1="31" y1="60" x2="69" y2="76" /><line x1="69" y1="60" x2="31" y2="76" />
-            </g>
-            <circle cx="30" cy="59" r="3.3" /><circle cx="70" cy="77" r="3.3" />
-            <circle cx="70" cy="59" r="3.3" /><circle cx="30" cy="77" r="3.3" />
-            {/* the skull */}
-            <path d="M50 26c-12 0-20 8-20 19 0 7 3 12 7 15v6c0 2 2 3 4 3h18c2 0 4-1 4-3v-6c4-3 7-8 7-15 0-11-8-19-20-19z" />
-          </g>
-          {/* sockets, nose and teeth knocked out in gold */}
-          <g fill={hole}>
-            <ellipse cx="42" cy="45" rx="5" ry="6" />
-            <ellipse cx="58" cy="45" rx="5" ry="6" />
-            <path d="M50 50l3.2 6h-6.4z" />
-          </g>
-          <g stroke={hole} strokeWidth="1.5" strokeLinecap="round">
-            <path d="M41 62h18" /><path d="M46 62v6M50 62v6M54 62v6" />
-          </g>
-        </>
-      )}
-    </svg>
-  );
-}
-// The doubloon toss: a 3-D coin flip that eases to the face this game landed on.
-function Fl2Doubloon({ face, S = 150 }) {
-  const [deg, setDeg] = useState(0);
-  useEffect(() => {
-    const target = 360 * 4 + (face === "skull" ? 180 : 0);
-    const t0 = nowMs(), dur = 1700;
-    let raf;
-    const tick = () => {
-      const k = Math.min(1, (nowMs() - t0) / dur);
-      setDeg(target * (1 - Math.pow(1 - k, 3)));
-      if (k < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [face]);
-  return (
-    <div style={{ width: S, height: S, perspective: 700, filter: "drop-shadow(0 8px 14px rgba(0,0,0,0.55))" }}>
-      <div style={{ width: "100%", height: "100%", position: "relative", transformStyle: "preserve-3d", transform: `rotateY(${deg}deg)` }}>
-        <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden" }}>{fl2CoinFace("rum", S)}</div>
-        <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>{fl2CoinFace("skull", S)}</div>
-      </div>
-    </div>
-  );
-}
 function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, sound, setSound }) {
   const opp = other(seat);
   // single-player: the CPU plays seat B; the human is A. The bot's move is computed
@@ -9747,7 +9656,6 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   const [mode, setMode] = useState(null); // null | "menu" | "move" | "fire"
   const [draft, setDraft] = useState(null);
   const [revealField, setRevealField] = useState(false); // end-of-match: drop the fog and study the board
-  const [coinSeen, setCoinSeen] = useState(false); // the pirate deploy opens with a doubloon toss, shown once
   const [, force] = useState(0);
   const gest = useRef(null); // active one-finger gesture
   const pointers = useRef(new Map()); // live pointers, for pinch
@@ -9760,12 +9668,8 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   const submittedDeploy = deploying && !!gs.deploy[seat];
   const submittedMines = laying && gs.mines[seat] != null;
   const submittedOrder = !deploying && !laying && !!gs.orders[seat];
-  // pirate deploy is sequential: the coin winner claims a quadrant first, then the
-  // other picks from what's left (never the taken one). deployWait = it's not my turn yet.
   const foeSeat = seat === "A" ? "B" : "A";
-  const takenZone = gs.pirate && gs.first ? (gs.deploy[foeSeat] ? gs.deploy[foeSeat].zone : null) : null;
-  const deployWait = deploying && gs.pirate && gs.first && seat !== gs.first && !gs.deploy[gs.first];
-  const canAct = deploying ? !submittedDeploy && !gs.done && !deployWait : laying ? !submittedMines && !gs.done : !submittedOrder && !gs.done;
+  const canAct = deploying ? !submittedDeploy && !gs.done : laying ? !submittedMines && !gs.done : !submittedOrder && !gs.done;
 
   // deployment working state (local until Ready)
   const [dzone, setDzone] = useState(null);
@@ -9783,33 +9687,31 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     return () => window.removeEventListener("resize", measure);
   }, []);
 
-  // auto-layout ships in an octant's ring
+  // auto-layout ships across a sector's ring (octant on modern, quadrant on pirate)
+  const secSeg = (2 * Math.PI) / fl2Sectors(gs.pirate);
   const autoPlace = (zone) => {
-    const a0 = zone * (Math.PI / 4);
+    const a0 = zone * secSeg;
     const out = {};
     const n = myShips.length;
     myShips.forEach((s, i) => {
-      const a = a0 + (Math.PI / 4) * ((i + 1) / (n + 1));
+      const a = a0 + secSeg * ((i + 1) / (n + 1));
       const rr = gs.R * 0.72;
       out[s.id] = { x: Math.cos(a) * rr, y: Math.sin(a) * rr };
     });
     return out;
   };
-  // pick a default octant + placement when entering deploy or switching sides
+  // pick a default sector + placement when entering deploy or switching sides
   // (solo flips seat, so re-seed for whoever hasn't deployed yet)
   useEffect(() => {
     if (deploying && !gs.deploy[seat]) {
-      const avail = fl2ZonesFor(gs.pirate)[seat].filter((z) => z !== takenZone); // never default onto the taken quadrant
-      const z = avail.includes(seat === "A" ? 0 : 4) ? (seat === "A" ? 0 : 4) : avail[0];
+      const z = fl2ZonesFor(gs.pirate)[seat][0];
       setDzone(z);
       setDpos(autoPlace(z));
       setDpath({});
       setSel(null);
       setMode(null);
     }
-  }, [deploying, seat, takenZone]); // eslint-disable-line
-  // the pirate deploy opens with a doubloon toss; show it again for each fresh deploy
-  useEffect(() => { if (!deploying) setCoinSeen(false); }, [deploying]);
+  }, [deploying, seat]); // eslint-disable-line
   useEffect(() => { if (!laying) setDmines([]); }, [laying]); // each fresh mines phase starts empty
 
   // a fresh round / phase change → clear staging, note the moment, and snapshot
@@ -9863,9 +9765,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     if (!botActive || gs.done) return;
     if (gs.phase === "deploy") {
       botTurn.current = -1;
-      // pirate: if the bot lost the toss it must wait for the winner to claim first
-      const botCanDeploy = !gs.first || gs.first === BOT || !!gs.deploy[gs.first];
-      if (!gs.deploy[BOT] && botCanDeploy) { const r = flotta2Deploy(gs, BOT, flotta2BotDeploy(gs, BOT)); if (r) commit(r); }
+      if (!gs.deploy[BOT]) { const r = flotta2Deploy(gs, BOT, flotta2BotDeploy(gs, BOT)); if (r) commit(r); }
     } else if (gs.phase === "mines") {
       botTurn.current = -1;
       if (gs.mines[BOT] == null) { const r = flotta2Mines(gs, BOT, flotta2BotMines(gs, BOT)); if (r) commit(r); }
@@ -9920,7 +9820,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     let a = Math.atan2(p.y, p.x);
     if (a < 0) a += 2 * Math.PI;
     if (type !== "recon" && dzone != null) {
-      const a0 = dzone * (Math.PI / 4) + 0.05, a1 = (dzone + 1) * (Math.PI / 4) - 0.05;
+      const a0 = dzone * secSeg + 0.05, a1 = (dzone + 1) * secSeg - 0.05;
       a = Math.max(a0, Math.min(a1, a));
     }
     return { x: Math.cos(a) * r, y: Math.sin(a) * r };
@@ -10021,9 +9921,9 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
         });
       } else if (deploying) {
         const wp = s2w(x, y);
-        const oct = fl2Octant(wp.x, wp.y);
-        if (fl2ZonesFor(gs.pirate)[seat].includes(oct) && oct !== takenZone) {
-          if (oct !== dzone) { setDzone(oct); setDpos(autoPlace(oct)); setDpath({}); } // only a NEW quadrant re-lays; re-tapping the current one keeps your placement
+        const oct = fl2SectorOf(wp.x, wp.y, gs.pirate);
+        if (fl2ZonesFor(gs.pirate)[seat].includes(oct)) {
+          if (oct !== dzone) { setDzone(oct); setDpos(autoPlace(oct)); setDpath({}); } // only a NEW sector re-lays; re-tapping the current one keeps your placement
           setSel(null); setMode(null);
         }
       } else { setSel(null); setMode(null); setDraft(null); }
@@ -10117,13 +10017,12 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       }
       ctx.restore();
     }
-    // deploy overlays: your octants, chosen zone, no-deploy circle
+    // deploy overlays: your zones (quadrants in pirate, octants otherwise), chosen zone, no-deploy circle
     if (deploying) {
       for (const oct of fl2ZonesFor(gs.pirate)[seat]) {
-        const a0 = oct * (Math.PI / 4);
-        ctx.beginPath(); ctx.moveTo(c0.x, c0.y); ctx.arc(c0.x, c0.y, rpx, a0, a0 + Math.PI / 4); ctx.closePath();
-        if (oct === takenZone) ctx.fillStyle = RED(0.12); // the opponent's claimed quadrant — off limits
-        else ctx.fillStyle = oct === dzone ? G(0.14) : G(0.04);
+        const a0 = oct * secSeg;
+        ctx.beginPath(); ctx.moveTo(c0.x, c0.y); ctx.arc(c0.x, c0.y, rpx, a0, a0 + secSeg); ctx.closePath();
+        ctx.fillStyle = oct === dzone ? G(0.14) : G(0.04);
         ctx.fill();
       }
       // central no-deploy circle
@@ -10504,7 +10403,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   const status = gs.done
     ? gs.win === seat ? L("Vittoria!", "Victory!") : gs.win ? L("Sconfitta", "Defeated") : L("Pari", "Draw")
     : deploying
-    ? deployWait ? L(`${who(room, gs.first)} sceglie il quadrante…`, `${who(room, gs.first)} is choosing a quadrant…`) : submittedDeploy ? L("Schierato — aspetta l'avversario", "Deployed — waiting for the other player") : dzone == null ? L("Tocca un settore per schierare", "Tap a sector to deploy") : mode === "droute" ? L("Disegna la rotta iniziale", "Draw the initial route") : mode === "dmenu" ? L("Rotta iniziale · o trascina la nave", "Initial route · or drag the ship") : L("Trascina le navi · tocca per la rotta · poi Pronto", "Drag ships · tap for a route · then Ready")
+    ? submittedDeploy ? L("Schierato — aspetta l'avversario", "Deployed — waiting for the other player") : dzone == null ? (gs.pirate ? L("Scegli un quadrante e disponi le navi", "Pick a quadrant and place your ships") : L("Tocca un settore per schierare", "Tap a sector to deploy")) : mode === "droute" ? L("Disegna la rotta iniziale", "Draw the initial route") : mode === "dmenu" ? L("Rotta iniziale · o trascina la nave", "Initial route · or drag the ship") : L("Trascina le navi · tocca per la rotta · poi Pronto", "Drag ships · tap for a route · then Ready")
     : laying
     ? submittedMines ? L("Mine posate — aspetta l'avversario", "Mines laid — waiting for the other player") : L(`Posa fino a ${FL2_MINES} mine · poi Pronto`, `Lay up to ${FL2_MINES} mines · then Ready`)
     : submittedOrder ? L("Ordine dato — aspetta l'avversario", "Order set — waiting")
@@ -10630,22 +10529,6 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
           </button>
         )}
       </div>
-
-      {/* pirate opening: the doubloon toss decides who claims a quadrant first */}
-      {deploying && gs.pirate && gs.coin && !coinSeen && (
-        <div className="fade" style={{ position: "absolute", inset: 0, zIndex: 61, background: "rgba(24,15,4,0.94)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
-          <div style={{ fontFamily: MONO, fontSize: 11.5, letterSpacing: "0.18em", textTransform: "uppercase", color: "#cdb082", marginBottom: 22 }}>{L("Lancio del doblone", "The doubloon toss")}</div>
-          <Fl2Doubloon face={gs.coin} />
-          <div style={{ marginTop: 22, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: "#f0d072" }}>{gs.coin === "rum" ? L("Il Rum", "The Rum") : L("Il Teschio", "The Skull")}</div>
-          <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 12, letterSpacing: "0.08em", color: "#cdb082", maxWidth: 280, lineHeight: 1.5 }}>
-            <b style={{ color: "#f0d072" }}>{who(room, gs.first)}</b> {seat === gs.first ? L("— scegli per primo il quadrante", "— you claim a quadrant first") : L("sceglie per primo il quadrante", "claims a quadrant first")}
-          </div>
-          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => setCoinSeen(true)}
-            style={{ marginTop: 26, ...chromeBtn, width: "auto", padding: "0 22px", height: 44, borderColor: "#cdb082", color: "#f0d072", display: "inline-flex", flexDirection: "row", gap: 8, fontWeight: 700, fontSize: 15 }}>
-            <Ico n="check" s={17} /> {L("Avanti", "Continue")}
-          </button>
-        </div>
-      )}
 
       {/* end of match: fog lifted, a floating control brings the verdict back */}
       {gs.done && revealField && (
