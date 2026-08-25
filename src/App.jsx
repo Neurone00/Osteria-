@@ -1958,14 +1958,19 @@ function flotta2Resolve(gs) {
       ship.scan = { dx: o.dir.dx / m, dy: o.dir.dy / m };
     }
   }
-  // 2) ships slide along their standing plans (a firing ship stays put). Under
-  //    sail, the wind speeds or slows each run by its bearing.
-  for (const s of g.ships.A.concat(g.ships.B)) {
-    if (s.hp <= 0) continue;
-    if (firing.has(s.id)) { s.vx = 0; s.vy = 0; }
-    else fl2Advance(s, fl2Speed(s.type, g.pirate), g.pirate ? g.wind : undefined);
-    (s.trail || (s.trail = [{ x: s.x, y: s.y }])).push({ x: s.x, y: s.y }); // log the round's end position for the debrief
-  }
+  // 2) ships slide along their standing plans (a firing ship stays put). Under sail,
+  //    the wind speeds or slows each run by its bearing. Order differs by variant:
+  //    modern resolves shots AFTER the move (you shoot where they ended up); pirate
+  //    resolves the broadside FIRST, against where ships stand this round, then sails.
+  const advanceShips = () => {
+    for (const s of g.ships.A.concat(g.ships.B)) {
+      if (s.hp <= 0) continue;
+      if (firing.has(s.id)) { s.vx = 0; s.vy = 0; }
+      else fl2Advance(s, fl2Speed(s.type, g.pirate), g.pirate ? g.wind : undefined);
+      (s.trail || (s.trail = [{ x: s.x, y: s.y }])).push({ x: s.x, y: s.y }); // round's end position for the debrief
+    }
+  };
+  if (!g.pirate) advanceShips(); // modern: move, then shoot
   // 2b) now fire. Pirate: a broadside from where the ship ended up. Modern: an aimed
   //     shot, straight from the ship's position with no vector lead.
   for (const seat of ["A", "B"]) {
@@ -2035,6 +2040,7 @@ function flotta2Resolve(gs) {
     if (!detonated && p.life > 0 && p.travelled < p.range) survivors.push(p);
   }
   g.proj = survivors;
+  if (g.pirate) advanceShips(); // pirate: the broadside has spoken — now the ships sail
   if (g.impacts.length > 80) g.impacts = g.impacts.slice(-80); // keep the trail bounded
   // 4) clear the dead — but leave a wreck where each ship went down (shown on the field)
   for (const seat of ["A", "B"]) {
@@ -10489,7 +10495,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
           : mineN !== foeN ? L(`Limite di ${FL2_MAX_TURNS} turni · vince chi ha più navi`, `${FL2_MAX_TURNS}-turn limit · most ships left wins`) : L(`Limite di ${FL2_MAX_TURNS} turni · vince chi ha più scafo`, `${FL2_MAX_TURNS}-turn limit · most hull left wins`);
         const btn = { ...chromeBtn, width: "100%", height: 46, borderRadius: 12, display: "inline-flex", flexDirection: "row", gap: 8, fontWeight: 700, fontSize: 15 };
         return (
-          <div className="fade" style={{ position: "absolute", inset: 0, zIndex: 60, background: "rgba(2,10,6,0.88)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
+          <div className="fade" style={{ position: "absolute", inset: 0, zIndex: 60, background: gs.pirate ? "rgba(233,223,199,0.95)" : "rgba(2,10,6,0.88)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
             <div className="pop" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(44px,15vw,84px)", lineHeight: 0.95, color: col, textShadow: `0 0 26px ${col}` }}>{head}</div>
             <div style={{ fontFamily: MONO, fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase", color: TH.faint, marginTop: 12, maxWidth: 300, lineHeight: 1.5 }}>{reason}</div>
             <div style={{ display: "flex", gap: 22, marginTop: 22, fontFamily: MONO, fontSize: 13, alignItems: "stretch" }}>

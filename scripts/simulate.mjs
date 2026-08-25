@@ -1306,6 +1306,22 @@ function flotta2PirateTests() {
   c = R.flotta2Resolve(c).g;
   if (c.ships.B[0] && c.ships.B[0].hp >= hp0) fail("flotta2 pirati", "a broadside should hit a ship abeam");
 
+  // pirate shots resolve BEFORE movement: a target abeam is hit even though it
+  // ordered a move that would carry it out of the corridor
+  let mo = fl2Begun({ variant: "pirati" });
+  const gun2 = mo.ships.A.find((s) => s.type === "warship");
+  const runner2 = mo.ships.B.find((s) => s.type === "frigate");
+  mo.ships.A = [gun2]; mo.ships.B = [runner2];
+  gun2.x = 0; gun2.y = 0; gun2.heading = 0; gun2.path = [];
+  runner2.x = 0; runner2.y = 150; runner2.path = []; // abeam the +y beam
+  const rHp = runner2.hp;
+  mo = R.flotta2Order(mo, "A", { kind: "fire", ship: gun2.id }).g;
+  mo = R.flotta2Order(mo, "B", { kind: "move", ship: runner2.id, path: [{ x: R.FL2_R, y: 150 }] }).g; // flee along the beam-normal
+  mo = R.flotta2Resolve(mo).g;
+  const rAfter = mo.ships.B.find((s) => s.id === runner2.id);
+  if (rAfter && rAfter.hp >= rHp) fail("flotta2 pirati", "a broadside should resolve before the target moves");
+  if (rAfter && Math.abs(rAfter.x) < 1) fail("flotta2 pirati", "the target should still move after the broadside resolves");
+
   // the wind veers as the match wears on
   let w = fl2Begun({ variant: "pirati" });
   const w0 = w.wind;
