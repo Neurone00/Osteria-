@@ -6554,7 +6554,13 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
   const onUp = () => {
     const d = drag.current;
     drag.current = null;
-    if (!d || d.axis !== "x" || d.moved < 6 || !host) return; // taps are handled per-card
+    if (!d || !host) return;
+    if (d.axis !== "x" || d.moved < 6) {
+      // a tap (which also stopped any glide): rest on a whole card so a gap-tap that
+      // hits no card still re-centres. A tap that lands on a card flips it via onFace.
+      if (Math.abs(posRef.current - Math.round(posRef.current)) > 0.001) settle(Math.round(posRef.current));
+      return;
+    }
     let v = (-d.vel / stepRef.current) * 16;
     v = Math.max(-1.3, Math.min(1.3, v));
     cancelAnimationFrame(raf.current);
@@ -6568,11 +6574,20 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
     raf.current = requestAnimationFrame(glide);
   };
 
-  // Only the centred card is tappable (see paint), so a tap always means "flip the
-  // one in the middle". Neighbours are reached by swiping — simple and unambiguous.
-  const onFace = () => {
+  // Only the centred card is tappable (see paint), so the clicked `i` IS the card
+  // under the finger. Snap exactly onto it and flip THAT one — even if the carousel
+  // was still gliding when tapped (midIdx alone lags a frame behind and would flip
+  // the previously-settled card instead).
+  const onFace = (i) => {
     if (gest.current.blocked) return;
+    cancelAnimationFrame(raf.current);
+    let best = i, bestD = Infinity;
+    for (let k = -2; k <= 2; k++) { const cand = i + k * N; const dd = Math.abs(cand - posRef.current); if (dd < bestD) (bestD = dd), (best = cand); }
+    posRef.current = best; // centre the tapped card
+    paint();
+    setMidIdx(mod(i));
     setFlip(true);
+    if (host && onSettle) onSettle(mod(i)); // keep the guest's centre in sync
   };
 
   return (
