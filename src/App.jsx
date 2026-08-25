@@ -1767,10 +1767,10 @@ function dealFlotta2(dealer, tally, opts) {
   const pirate = !!(opts && opts.variant === "pirati");
   const zones = fl2ZonesFor(pirate);
   const ships = { A: [], B: [] };
-  // Pirate opening ritual: a random wind, and a doubloon toss (woman = host, parrot =
+  // Pirate opening ritual: a random wind, and a doubloon toss (rum = host, skull =
   // guest) that decides who claims a quadrant first. Faces the shared-pool deploy.
-  const coin = pirate ? (Math.random() < 0.5 ? "woman" : "parrot") : null;
-  const first = pirate ? (coin === "woman" ? "A" : "B") : null;
+  const coin = pirate ? (Math.random() < 0.5 ? "rum" : "skull") : null;
+  const first = pirate ? (coin === "rum" ? "A" : "B") : null;
   const defZone = pirate ? { A: 0, B: 4 } : { A: zones.A[1], B: zones.B[1] }; // distinct until the player picks
   ["A", "B"].forEach((seat) => {
     const pts = fl2PlaceInOctant(defZone[seat], FL2_FLEET.length);
@@ -9513,9 +9513,10 @@ function Fl2Btn({ icon, label, onTap, tone, bg, size = 46 }) {
   );
 }
 // One face of the golden doubloon: a gold blank with a rope rim and an engraved
-// device — a standing nude (the figurehead) on one side, a parrot on the other.
+// device — a bottle of rum on one side, a skull-and-crossbones on the other.
 function fl2CoinFace(kind, S) {
   const ink = "#6a4a12";
+  const hole = "#d9ab45"; // knocked-back gold for cut-outs (eye sockets, label)
   return (
     <svg viewBox="0 0 100 100" width={S} height={S} style={{ display: "block" }}>
       <defs>
@@ -9528,25 +9529,44 @@ function fl2CoinFace(kind, S) {
       <circle cx="50" cy="50" r="48" fill={`url(#dbl-${kind})`} stroke="#7a5a1e" strokeWidth="1.6" />
       <circle cx="50" cy="50" r="43.5" fill="none" stroke="#856421" strokeWidth="1.3" strokeDasharray="1.8 2.2" />
       <circle cx="50" cy="50" r="40" fill="none" stroke="#9a7526" strokeWidth="0.7" opacity="0.6" />
-      {kind === "woman" ? (
-        <g fill={ink}>
-          {/* the figurehead — a standing nude: head, narrow shoulders, nipped waist,
-              full hips and legs to the feet (a classical hourglass engraving) */}
-          <circle cx="50" cy="20.5" r="5" />
-          <path d="M50 25.5C47 25.5 45 27 45 31C44 34 43 37 44 40C45 43 46 45 46 47C46 50 43 53 43 57C43 61 44 66 45 71C45 75 46 78 46 81L49 81C49 76 49 70 49 64C49 63 50 62 50 62C50 62 51 63 51 64C51 70 51 76 51 81L54 81C54 78 55 75 55 71C56 66 57 61 57 57C57 53 54 50 54 47C54 45 55 43 56 40C57 37 56 34 55 31C55 27 53 25.5 50 25.5Z" />
-        </g>
+      {kind === "rum" ? (
+        <>
+          <g fill={ink}>
+            {/* a bottle of rum: cork, neck, shoulders, body */}
+            <rect x="46" y="20" width="8" height="5" rx="1.4" />
+            <rect x="46.5" y="24.5" width="7" height="9" />
+            <path d="M43 33.5q-5 3-5 10.5v24q0 4 4 4h16q4 0 4-4v-24q0-7.5-5-10.5z" />
+          </g>
+          {/* the label with three X's — the old mark for strong drink */}
+          <rect x="40.5" y="47" width="19" height="14" rx="1.5" fill={hole} />
+          <g stroke={ink} strokeWidth="1.7" strokeLinecap="round">
+            <path d="M44 51.5l3.4 5M47.4 51.5l-3.4 5" />
+            <path d="M48.3 51.5l3.4 5M51.7 51.5l-3.4 5" />
+            <path d="M52.6 51.5l3.4 5M56 51.5l-3.4 5" />
+          </g>
+        </>
       ) : (
-        <g fill={ink}>
-          {/* the parrot on its perch */}
-          <path d="M58 64l15 13-4-15z" />
-          <ellipse cx="54" cy="53" rx="12.5" ry="16.5" transform="rotate(12 54 53)" />
-          <circle cx="45" cy="38" r="8.6" />
-          <path d="M37.5 35.5c-8 .6-8.4 5.2-6 6.6 2-1.4 3.8-1.2 5.6-.6-1.4 2.2 0 4 2.2 3.8 3-.4 4.6-3.4 4.4-6.2-.2-2.6-3-3.8-6.2-3.6z" />
-          <path d="M56 44c8 5 7.6 12 5.6 20-6-2-9.4-7-10.6-13-.6-3.4 1-6 5-7z" fill="#8a6a22" />
-          <path d="M52 70l0 7M58 70l0 7" stroke="#7a5a1e" strokeWidth="1.5" />
-          <rect x="39" y="77" width="32" height="3" rx="1.5" fill="#7a5a1e" />
-          <circle cx="47" cy="36" r="1.7" fill="#fae89a" />
-        </g>
+        <>
+          <g fill={ink}>
+            {/* crossbones behind */}
+            <g stroke={ink} strokeWidth="4.2" strokeLinecap="round">
+              <line x1="31" y1="60" x2="69" y2="76" /><line x1="69" y1="60" x2="31" y2="76" />
+            </g>
+            <circle cx="30" cy="59" r="3.3" /><circle cx="70" cy="77" r="3.3" />
+            <circle cx="70" cy="59" r="3.3" /><circle cx="30" cy="77" r="3.3" />
+            {/* the skull */}
+            <path d="M50 26c-12 0-20 8-20 19 0 7 3 12 7 15v6c0 2 2 3 4 3h18c2 0 4-1 4-3v-6c4-3 7-8 7-15 0-11-8-19-20-19z" />
+          </g>
+          {/* sockets, nose and teeth knocked out in gold */}
+          <g fill={hole}>
+            <ellipse cx="42" cy="45" rx="5" ry="6" />
+            <ellipse cx="58" cy="45" rx="5" ry="6" />
+            <path d="M50 50l3.2 6h-6.4z" />
+          </g>
+          <g stroke={hole} strokeWidth="1.5" strokeLinecap="round">
+            <path d="M41 62h18" /><path d="M46 62v6M50 62v6M54 62v6" />
+          </g>
+        </>
       )}
     </svg>
   );
@@ -9555,7 +9575,7 @@ function fl2CoinFace(kind, S) {
 function Fl2Doubloon({ face, S = 150 }) {
   const [deg, setDeg] = useState(0);
   useEffect(() => {
-    const target = 360 * 4 + (face === "parrot" ? 180 : 0);
+    const target = 360 * 4 + (face === "skull" ? 180 : 0);
     const t0 = nowMs(), dur = 1700;
     let raf;
     const tick = () => {
@@ -9569,8 +9589,8 @@ function Fl2Doubloon({ face, S = 150 }) {
   return (
     <div style={{ width: S, height: S, perspective: 700, filter: "drop-shadow(0 8px 14px rgba(0,0,0,0.55))" }}>
       <div style={{ width: "100%", height: "100%", position: "relative", transformStyle: "preserve-3d", transform: `rotateY(${deg}deg)` }}>
-        <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden" }}>{fl2CoinFace("woman", S)}</div>
-        <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>{fl2CoinFace("parrot", S)}</div>
+        <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden" }}>{fl2CoinFace("rum", S)}</div>
+        <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>{fl2CoinFace("skull", S)}</div>
       </div>
     </div>
   );
@@ -10435,7 +10455,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
         <div className="fade" style={{ position: "absolute", inset: 0, zIndex: 61, background: "rgba(24,15,4,0.94)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
           <div style={{ fontFamily: MONO, fontSize: 11.5, letterSpacing: "0.18em", textTransform: "uppercase", color: "#cdb082", marginBottom: 22 }}>{L("Lancio del doblone", "The doubloon toss")}</div>
           <Fl2Doubloon face={gs.coin} />
-          <div style={{ marginTop: 22, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: "#f0d072" }}>{gs.coin === "woman" ? L("La Sirena", "The Siren") : L("Il Pappagallo", "The Parrot")}</div>
+          <div style={{ marginTop: 22, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: "#f0d072" }}>{gs.coin === "rum" ? L("Il Rum", "The Rum") : L("Il Teschio", "The Skull")}</div>
           <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 12, letterSpacing: "0.08em", color: "#cdb082", maxWidth: 280, lineHeight: 1.5 }}>
             <b style={{ color: "#f0d072" }}>{who(room, gs.first)}</b> {seat === gs.first ? L("— scegli per primo il quadrante", "— you claim a quadrant first") : L("sceglie per primo il quadrante", "claims a quadrant first")}
           </div>

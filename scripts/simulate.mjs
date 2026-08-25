@@ -1199,8 +1199,8 @@ function flotta2PirateTests() {
   let g = R.dealFlotta2("A", { A: 0, B: 0 }, { variant: "pirati" });
   if (!g.pirate) fail("flotta2 pirati", "pirate flag not set");
   if (typeof g.wind !== "number" || g.wind < 0 || g.wind > 2 * Math.PI) fail("flotta2 pirati", "wind should be a random 360° bearing");
-  if (!["woman", "parrot"].includes(g.coin)) fail("flotta2 pirati", "the doubloon should land on a face");
-  if (g.first !== (g.coin === "woman" ? "A" : "B")) fail("flotta2 pirati", "the coin face should decide who deploys first");
+  if (!["rum", "skull"].includes(g.coin)) fail("flotta2 pirati", "the doubloon should land on a face");
+  if (g.first !== (g.coin === "rum" ? "A" : "B")) fail("flotta2 pirati", "the coin face should decide who deploys first");
   if (R.fl2ZonesFor(true).A.length !== 8 || R.fl2ZonesFor(true).B.length !== 8) fail("flotta2 pirati", "every quadrant should be a shared option");
   // the coin winner claims a quadrant first; the loser must wait, then can't share it
   const loser = g.first === "A" ? "B" : "A";
