@@ -1135,8 +1135,8 @@ function fl2SubmitRandom(g, seat) {
   return r.g;
 }
 // build a legal deployment for one side (ships spread in one of its octants)
-function fl2Deploy(g, seat) {
-  const zone = R.fl2ZonesFor(g.pirate)[seat][1];
+function fl2Deploy(g, seat, zone) {
+  if (zone == null) zone = R.fl2ZonesFor(g.pirate)[seat][seat === "A" ? 1 : 3]; // distinct octants per side
   const a0 = zone * (Math.PI / 4);
   const ships = {};
   g.ships[seat].forEach((s, i) => {
@@ -1146,11 +1146,12 @@ function fl2Deploy(g, seat) {
   });
   return R.flotta2Deploy(g, seat, { zone, ships }).g;
 }
-// a game past deployment, in the planning phase
+// a game past deployment, in the planning phase (pirate: deploy in coin-winner order)
 function fl2Begun(opts) {
   let g = R.dealFlotta2("A", { A: 0, B: 0 }, opts);
-  g = fl2Deploy(g, "A");
-  g = fl2Deploy(g, "B");
+  const order = g.first ? [g.first, g.first === "A" ? "B" : "A"] : ["A", "B"];
+  g = fl2Deploy(g, order[0]);
+  g = fl2Deploy(g, order[1]);
   return R.flotta2Begin(g).g;
 }
 function playFlotta2(opts) {
@@ -1174,8 +1175,9 @@ function playFlotta2(opts) {
 // be legal, resolution deterministic, and the match must terminate.
 function playFlotta2BotVsRandom(level, opts) {
   let g = R.dealFlotta2("A", { A: 0, B: 0 }, opts);
-  g = R.flotta2Deploy(g, "A", R.flotta2BotDeploy(g, "A")).g;
-  g = fl2Deploy(g, "B");
+  // deploy in coin-winner order (pirate); A is the bot, B the fuzzer
+  const order = g.first ? [g.first, g.first === "A" ? "B" : "A"] : ["A", "B"];
+  for (const s of order) g = s === "A" ? R.flotta2Deploy(g, "A", R.flotta2BotDeploy(g, "A")).g : fl2Deploy(g, "B");
   g = R.flotta2Begin(g).g;
   let rounds = 0;
   while (!g.done && rounds < 200) {
@@ -1193,13 +1195,19 @@ function playFlotta2BotVsRandom(level, opts) {
   return rounds;
 }
 function flotta2PirateTests() {
-  // pirate deal: the flag, a wind bearing, and interleaved deploy slices
+  // pirate deal: the flag, a random wind bearing, the doubloon toss and shared quadrants
   let g = R.dealFlotta2("A", { A: 0, B: 0 }, { variant: "pirati" });
   if (!g.pirate) fail("flotta2 pirati", "pirate flag not set");
-  if (typeof g.wind !== "number") fail("flotta2 pirati", "wind not initialised");
-  if (R.fl2ZonesFor(true).A.join() !== "0,2,4,6" || R.fl2ZonesFor(true).B.join() !== "1,3,5,7") fail("flotta2 pirati", "slices should alternate");
-  if (R.flotta2Deploy(g, "A", { zone: 3, ships: {} }) != null) fail("flotta2 pirati", "octant 3 is not A's in pirate mode");
-  if (R.flotta2Deploy(g, "A", { zone: 0, ships: {} }) == null) fail("flotta2 pirati", "octant 0 should be A's in pirate mode");
+  if (typeof g.wind !== "number" || g.wind < 0 || g.wind > 2 * Math.PI) fail("flotta2 pirati", "wind should be a random 360° bearing");
+  if (!["woman", "parrot"].includes(g.coin)) fail("flotta2 pirati", "the doubloon should land on a face");
+  if (g.first !== (g.coin === "woman" ? "A" : "B")) fail("flotta2 pirati", "the coin face should decide who deploys first");
+  if (R.fl2ZonesFor(true).A.length !== 8 || R.fl2ZonesFor(true).B.length !== 8) fail("flotta2 pirati", "every quadrant should be a shared option");
+  // the coin winner claims a quadrant first; the loser must wait, then can't share it
+  const loser = g.first === "A" ? "B" : "A";
+  if (R.flotta2Deploy(g, loser, { zone: 2, ships: {} }) != null) fail("flotta2 pirati", "the loser can't deploy before the winner");
+  g = R.flotta2Deploy(g, g.first, { zone: 3, ships: {} }).g; // winner claims octant 3
+  if (R.flotta2Deploy(g, loser, { zone: 3, ships: {} }) != null) fail("flotta2 pirati", "the loser can't take the winner's quadrant");
+  if (R.flotta2Deploy(g, loser, { zone: 5, ships: {} }) == null) fail("flotta2 pirati", "the loser can take any free quadrant");
 
   // wind pushes: faster running downwind than clawing upwind
   if (!(R.fl2WindFactor(0, 1, 0) > R.fl2WindFactor(0, -1, 0))) fail("flotta2 pirati", "downwind should beat upwind");

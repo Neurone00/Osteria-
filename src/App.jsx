@@ -1657,7 +1657,9 @@ function fl2ScanEnd(ship) {
 const FL2_ZONES = { A: [2, 3, 4, 5], B: [6, 7, 0, 1] };
 // Pirate mode interleaves the slices instead of giving each side a contiguous half,
 // so the two fleets start woven around the chart rather than facing off across it.
-const FL2_ZONES_PIRATE = { A: [0, 2, 4, 6], B: [1, 3, 5, 7] };
+// Pirate: the whole compass is a shared pool — a coin toss decides who claims a
+// quadrant first, and the second can take any of the rest (never the same one).
+const FL2_ZONES_PIRATE = { A: [0, 1, 2, 3, 4, 5, 6, 7], B: [0, 1, 2, 3, 4, 5, 6, 7] };
 const fl2ZonesFor = (pirate) => (pirate ? FL2_ZONES_PIRATE : FL2_ZONES);
 // Pirate mode: units keep their stats but sail under sail-cloth names, and the wind
 // pushes them along — a speed bonus running with it, a penalty clawing into it.
@@ -1765,7 +1767,11 @@ function dealFlotta2(dealer, tally, opts) {
   const pirate = !!(opts && opts.variant === "pirati");
   const zones = fl2ZonesFor(pirate);
   const ships = { A: [], B: [] };
-  const defZone = { A: zones.A[1], B: zones.B[1] }; // a default octant per side, until the player picks
+  // Pirate opening ritual: a random wind, and a doubloon toss (woman = host, parrot =
+  // guest) that decides who claims a quadrant first. Faces the shared-pool deploy.
+  const coin = pirate ? (Math.random() < 0.5 ? "woman" : "parrot") : null;
+  const first = pirate ? (coin === "woman" ? "A" : "B") : null;
+  const defZone = pirate ? { A: 0, B: 4 } : { A: zones.A[1], B: zones.B[1] }; // distinct until the player picks
   ["A", "B"].forEach((seat) => {
     const pts = fl2PlaceInOctant(defZone[seat], FL2_FLEET.length);
     FL2_FLEET.forEach((type, i) => {
@@ -1776,7 +1782,9 @@ function dealFlotta2(dealer, tally, opts) {
   return {
     R: FL2_R,
     pirate, // sea-chart variant: broadsides, line-of-sight, wind
-    wind: pirate ? 0 : null, // bearing the wind blows toward (rad); veers over the match
+    wind: pirate ? Math.random() * 2 * Math.PI : null, // random opening bearing; veers over the match
+    coin, // the doubloon face this game (woman | parrot), null when modern
+    first, // who claims a quadrant first (the coin winner), null when modern
     phase: "deploy", // deploy → plan → (resolve) → plan …
     turn: 1,
     ships,
@@ -1802,6 +1810,11 @@ function dealFlotta2(dealer, tally, opts) {
 function flotta2Deploy(gs, seat, placement) {
   if (gs.phase !== "deploy" || gs.deploy[seat]) return null;
   if (!placement || !fl2ZonesFor(gs.pirate)[seat].includes(placement.zone)) return null;
+  if (gs.pirate && gs.first) {
+    const foe = seat === "A" ? "B" : "A";
+    if (seat !== gs.first && !gs.deploy[gs.first]) return null; // wait — the coin winner claims a quadrant first
+    if (gs.deploy[foe] && gs.deploy[foe].zone === placement.zone) return null; // can't share the taken quadrant
+  }
   const g = clone(gs);
   g.deploy[seat] = placement;
   return { g, quiet: true, ev: { t: "deploy" } };
@@ -2243,7 +2256,10 @@ function flotta2Bot(gs, seat, level) {
 }
 // The bot's opening deployment: fleet in a home octant, aimed at the sea's centre.
 function flotta2BotDeploy(gs, seat) {
-  const zone = fl2ZonesFor(gs.pirate)[seat][1];
+  const foe = seat === "A" ? "B" : "A";
+  const taken = gs.pirate && gs.deploy[foe] ? gs.deploy[foe].zone : null;
+  const avail = fl2ZonesFor(gs.pirate)[seat];
+  const zone = avail.find((z) => z !== taken) ?? avail[1];
   const a0 = zone * (Math.PI / 4);
   const ships = {};
   const list = gs.ships[seat];
@@ -9496,6 +9512,69 @@ function Fl2Btn({ icon, label, onTap, tone, bg, size = 46 }) {
     </div>
   );
 }
+// One face of the golden doubloon: a gold blank with a rope rim and an engraved
+// device — a standing nude (the figurehead) on one side, a parrot on the other.
+function fl2CoinFace(kind, S) {
+  const ink = "#6a4a12";
+  return (
+    <svg viewBox="0 0 100 100" width={S} height={S} style={{ display: "block" }}>
+      <defs>
+        <radialGradient id={`dbl-${kind}`} cx="38%" cy="30%" r="80%">
+          <stop offset="0%" stopColor="#fae89a" />
+          <stop offset="55%" stopColor="#e3b74a" />
+          <stop offset="100%" stopColor="#a4761d" />
+        </radialGradient>
+      </defs>
+      <circle cx="50" cy="50" r="48" fill={`url(#dbl-${kind})`} stroke="#7a5a1e" strokeWidth="1.6" />
+      <circle cx="50" cy="50" r="43.5" fill="none" stroke="#856421" strokeWidth="1.3" strokeDasharray="1.8 2.2" />
+      <circle cx="50" cy="50" r="40" fill="none" stroke="#9a7526" strokeWidth="0.7" opacity="0.6" />
+      {kind === "woman" ? (
+        <g fill={ink}>
+          {/* the figurehead — a standing nude: head, narrow shoulders, nipped waist,
+              full hips and legs to the feet (a classical hourglass engraving) */}
+          <circle cx="50" cy="20.5" r="5" />
+          <path d="M50 25.5C47 25.5 45 27 45 31C44 34 43 37 44 40C45 43 46 45 46 47C46 50 43 53 43 57C43 61 44 66 45 71C45 75 46 78 46 81L49 81C49 76 49 70 49 64C49 63 50 62 50 62C50 62 51 63 51 64C51 70 51 76 51 81L54 81C54 78 55 75 55 71C56 66 57 61 57 57C57 53 54 50 54 47C54 45 55 43 56 40C57 37 56 34 55 31C55 27 53 25.5 50 25.5Z" />
+        </g>
+      ) : (
+        <g fill={ink}>
+          {/* the parrot on its perch */}
+          <path d="M58 64l15 13-4-15z" />
+          <ellipse cx="54" cy="53" rx="12.5" ry="16.5" transform="rotate(12 54 53)" />
+          <circle cx="45" cy="38" r="8.6" />
+          <path d="M37.5 35.5c-8 .6-8.4 5.2-6 6.6 2-1.4 3.8-1.2 5.6-.6-1.4 2.2 0 4 2.2 3.8 3-.4 4.6-3.4 4.4-6.2-.2-2.6-3-3.8-6.2-3.6z" />
+          <path d="M56 44c8 5 7.6 12 5.6 20-6-2-9.4-7-10.6-13-.6-3.4 1-6 5-7z" fill="#8a6a22" />
+          <path d="M52 70l0 7M58 70l0 7" stroke="#7a5a1e" strokeWidth="1.5" />
+          <rect x="39" y="77" width="32" height="3" rx="1.5" fill="#7a5a1e" />
+          <circle cx="47" cy="36" r="1.7" fill="#fae89a" />
+        </g>
+      )}
+    </svg>
+  );
+}
+// The doubloon toss: a 3-D coin flip that eases to the face this game landed on.
+function Fl2Doubloon({ face, S = 150 }) {
+  const [deg, setDeg] = useState(0);
+  useEffect(() => {
+    const target = 360 * 4 + (face === "parrot" ? 180 : 0);
+    const t0 = nowMs(), dur = 1700;
+    let raf;
+    const tick = () => {
+      const k = Math.min(1, (nowMs() - t0) / dur);
+      setDeg(target * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [face]);
+  return (
+    <div style={{ width: S, height: S, perspective: 700, filter: "drop-shadow(0 8px 14px rgba(0,0,0,0.55))" }}>
+      <div style={{ width: "100%", height: "100%", position: "relative", transformStyle: "preserve-3d", transform: `rotateY(${deg}deg)` }}>
+        <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden" }}>{fl2CoinFace("woman", S)}</div>
+        <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>{fl2CoinFace("parrot", S)}</div>
+      </div>
+    </div>
+  );
+}
 function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, sound, setSound }) {
   const opp = other(seat);
   // single-player: the CPU plays seat B; the human is A. The bot's move is computed
@@ -9518,6 +9597,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   const [mode, setMode] = useState(null); // null | "menu" | "move" | "fire"
   const [draft, setDraft] = useState(null);
   const [revealField, setRevealField] = useState(false); // end-of-match: drop the fog and study the board
+  const [coinSeen, setCoinSeen] = useState(false); // the pirate deploy opens with a doubloon toss, shown once
   const [, force] = useState(0);
   const gest = useRef(null); // active one-finger gesture
   const pointers = useRef(new Map()); // live pointers, for pinch
@@ -9528,7 +9608,12 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   const seen = flotta2Seen(gs, seat);
   const submittedDeploy = deploying && !!gs.deploy[seat];
   const submittedOrder = !deploying && !!gs.orders[seat];
-  const canAct = deploying ? !submittedDeploy && !gs.done : !submittedOrder && !gs.done;
+  // pirate deploy is sequential: the coin winner claims a quadrant first, then the
+  // other picks from what's left (never the taken one). deployWait = it's not my turn yet.
+  const foeSeat = seat === "A" ? "B" : "A";
+  const takenZone = gs.pirate && gs.first ? (gs.deploy[foeSeat] ? gs.deploy[foeSeat].zone : null) : null;
+  const deployWait = deploying && gs.pirate && gs.first && seat !== gs.first && !gs.deploy[gs.first];
+  const canAct = deploying ? !submittedDeploy && !gs.done && !deployWait : !submittedOrder && !gs.done;
 
   // deployment working state (local until Ready)
   const [dzone, setDzone] = useState(null);
@@ -9559,14 +9644,17 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   // (solo flips seat, so re-seed for whoever hasn't deployed yet)
   useEffect(() => {
     if (deploying && !gs.deploy[seat]) {
-      const z = fl2ZonesFor(gs.pirate)[seat][1];
+      const avail = fl2ZonesFor(gs.pirate)[seat].filter((z) => z !== takenZone); // never default onto the taken quadrant
+      const z = avail.includes(seat === "A" ? 0 : 4) ? (seat === "A" ? 0 : 4) : avail[0];
       setDzone(z);
       setDpos(autoPlace(z));
       setDpath({});
       setSel(null);
       setMode(null);
     }
-  }, [deploying, seat]); // eslint-disable-line
+  }, [deploying, seat, takenZone]); // eslint-disable-line
+  // the pirate deploy opens with a doubloon toss; show it again for each fresh deploy
+  useEffect(() => { if (!deploying) setCoinSeen(false); }, [deploying]);
 
   // a fresh round / phase change → clear staging, note the moment, and snapshot
   // positions so ships/shots can glide from where they were to where they are
@@ -9615,12 +9703,14 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     if (!botActive || gs.done) return;
     if (gs.phase === "deploy") {
       botTurn.current = -1;
-      if (!gs.deploy[BOT] && !botDep.current) { botDep.current = true; const r = flotta2Deploy(gs, BOT, flotta2BotDeploy(gs, BOT)); if (r) commit(r); }
+      // pirate: if the bot lost the toss it must wait for the winner to claim first
+      const botCanDeploy = !gs.first || gs.first === BOT || !!gs.deploy[gs.first];
+      if (!gs.deploy[BOT] && botCanDeploy) { const r = flotta2Deploy(gs, BOT, flotta2BotDeploy(gs, BOT)); if (r) commit(r); }
     } else {
       botDep.current = false;
       if (!gs.orders[BOT] && botTurn.current !== gs.turn) { botTurn.current = gs.turn; const o = flotta2Bot(gs, BOT, botLevel); if (o) { const r = flotta2Order(gs, BOT, o); if (r) commit(r); } }
     }
-  }, [botActive, gs.phase, gs.turn, gs.done, gs.deploy && gs.deploy.B, gs.orders && gs.orders.B]); // eslint-disable-line
+  }, [botActive, gs.phase, gs.turn, gs.done, gs.deploy && gs.deploy.A, gs.deploy && gs.deploy.B, gs.orders && gs.orders.B]); // eslint-disable-line
   // re-send my own submission if a concurrent write clobbered the shared state
   const mineRef = useRef(null);
   useEffect(() => { mineRef.current = null; }, [gs.turn, gs.phase, seat]);
@@ -9760,7 +9850,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       if (deploying) {
         const wp = s2w(x, y);
         const oct = fl2Octant(wp.x, wp.y);
-        if (fl2ZonesFor(gs.pirate)[seat].includes(oct)) { setDzone(oct); setDpos(autoPlace(oct)); setDpath({}); setSel(null); setMode(null); }
+        if (fl2ZonesFor(gs.pirate)[seat].includes(oct) && oct !== takenZone) { setDzone(oct); setDpos(autoPlace(oct)); setDpath({}); setSel(null); setMode(null); }
       } else { setSel(null); setMode(null); setDraft(null); }
     } else if (g.kind === "place" && !g.moved) {
       setSel(g.id); setMode("dmenu"); // tapped a placed ship → deploy options (draw its route)
@@ -9853,7 +9943,8 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       for (const oct of fl2ZonesFor(gs.pirate)[seat]) {
         const a0 = oct * (Math.PI / 4);
         ctx.beginPath(); ctx.moveTo(c0.x, c0.y); ctx.arc(c0.x, c0.y, rpx, a0, a0 + Math.PI / 4); ctx.closePath();
-        ctx.fillStyle = oct === dzone ? G(0.14) : G(0.04);
+        if (oct === takenZone) ctx.fillStyle = RED(0.12); // the opponent's claimed quadrant — off limits
+        else ctx.fillStyle = oct === dzone ? G(0.14) : G(0.04);
         ctx.fill();
       }
       // central no-deploy circle
@@ -10220,7 +10311,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   const status = gs.done
     ? gs.win === seat ? L("Vittoria!", "Victory!") : gs.win ? L("Sconfitta", "Defeated") : L("Pari", "Draw")
     : deploying
-    ? submittedDeploy ? L("Schierato — aspetta l'avversario", "Deployed — waiting for the other player") : dzone == null ? L("Tocca un settore per schierare", "Tap a sector to deploy") : mode === "droute" ? L("Disegna la rotta iniziale", "Draw the initial route") : mode === "dmenu" ? L("Rotta iniziale · o trascina la nave", "Initial route · or drag the ship") : L("Trascina le navi · tocca per la rotta · poi Pronto", "Drag ships · tap for a route · then Ready")
+    ? deployWait ? L(`${who(room, gs.first)} sceglie il quadrante…`, `${who(room, gs.first)} is choosing a quadrant…`) : submittedDeploy ? L("Schierato — aspetta l'avversario", "Deployed — waiting for the other player") : dzone == null ? L("Tocca un settore per schierare", "Tap a sector to deploy") : mode === "droute" ? L("Disegna la rotta iniziale", "Draw the initial route") : mode === "dmenu" ? L("Rotta iniziale · o trascina la nave", "Initial route · or drag the ship") : L("Trascina le navi · tocca per la rotta · poi Pronto", "Drag ships · tap for a route · then Ready")
     : submittedOrder ? L("Ordine dato — aspetta l'avversario", "Order set — waiting")
     : sel ? (mode === "move" ? L("Disegna la rotta", "Draw the route") : mode === "fire" ? (gs.pirate ? L("Bordata pronta — conferma", "Broadside ready — confirm") : (selShip && (FL2_WEAPON[FL2_UNITS[selShip.type].weapon].shots || 1) > 1 ? L(`Tocca fino a ${FL2_WEAPON[FL2_UNITS[selShip.type].weapon].shots} bersagli`, `Tap up to ${FL2_WEAPON[FL2_UNITS[selShip.type].weapon].shots} targets`) : L("Trascina per mirare", "Drag to aim"))) : mode === "strike" ? L("Tocca la nave nemica da colpire", "Tap the enemy ship to strike") : mode === "scan" ? L("Trascina per orientare la scansione", "Drag to aim the scan") : L("Muovi o spara", "Move or fire"))
     : L("Tocca una tua nave", "Tap one of your ships");
@@ -10338,6 +10429,22 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
           </button>
         )}
       </div>
+
+      {/* pirate opening: the doubloon toss decides who claims a quadrant first */}
+      {deploying && gs.pirate && gs.coin && !coinSeen && (
+        <div className="fade" style={{ position: "absolute", inset: 0, zIndex: 61, background: "rgba(24,15,4,0.94)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
+          <div style={{ fontFamily: MONO, fontSize: 11.5, letterSpacing: "0.18em", textTransform: "uppercase", color: "#cdb082", marginBottom: 22 }}>{L("Lancio del doblone", "The doubloon toss")}</div>
+          <Fl2Doubloon face={gs.coin} />
+          <div style={{ marginTop: 22, fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: "#f0d072" }}>{gs.coin === "woman" ? L("La Sirena", "The Siren") : L("Il Pappagallo", "The Parrot")}</div>
+          <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 12, letterSpacing: "0.08em", color: "#cdb082", maxWidth: 280, lineHeight: 1.5 }}>
+            <b style={{ color: "#f0d072" }}>{who(room, gs.first)}</b> {seat === gs.first ? L("— scegli per primo il quadrante", "— you claim a quadrant first") : L("sceglie per primo il quadrante", "claims a quadrant first")}
+          </div>
+          <button onPointerDown={(e) => e.stopPropagation()} onClick={() => setCoinSeen(true)}
+            style={{ marginTop: 26, ...chromeBtn, width: "auto", padding: "0 22px", height: 44, borderColor: "#cdb082", color: "#f0d072", display: "inline-flex", flexDirection: "row", gap: 8, fontWeight: 700, fontSize: 15 }}>
+            <Ico n="check" s={17} /> {L("Avanti", "Continue")}
+          </button>
+        </div>
+      )}
 
       {/* end of match: fog lifted, a floating control brings the verdict back */}
       {gs.done && revealField && (
