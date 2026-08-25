@@ -421,6 +421,7 @@ function scopaPlay(gs, seat, cardId, take, o) {
     g.table = g.table.filter((c) => !take.includes(c.id));
     g.piles[seat].push(...got, card);
     g.last = seat;
+    g.lastPresa = { seat, cards: [...got, card].map((c) => ({ s: c.s, v: c.v })) }; // the cards this capture swept — shown by the table
     const finalPlay = g.deck.length === 0 && g.hands.A.length === 0 && g.hands.B.length === 0;
     if (g.table.length === 0 && !finalPlay && !aceSweep) {
       g.scope[seat] += 1;
@@ -439,6 +440,7 @@ function scopaPlay(gs, seat, cardId, take, o) {
     // a scopa — the table is untouched), so the last-taker credit follows too.
     g.piles[seat].push(card);
     g.last = seat;
+    g.lastPresa = { seat, cards: [{ s: card.s, v: card.v }] };
     kind = "take";
     ev = { t: "bank" };
   } else g.table.push(card);
@@ -6855,6 +6857,16 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
             />
           ))}
         </div>
+        {/* the last sweep — the piles are face-down, so this is the one glimpse of
+            what was captured most recently, and whose it is */}
+        {isScopa && gs.lastPresa && gs.lastPresa.cards.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <Micro style={{ whiteSpace: "nowrap" }}>{L("ultima presa", "last capture")} · {who(room, gs.lastPresa.seat)}</Micro>
+            <div style={{ display: "flex", gap: 3 }}>
+              {gs.lastPresa.cards.map((c, i) => <Card key={i} card={c} size="xs" rot={0} />)}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* piles */}
