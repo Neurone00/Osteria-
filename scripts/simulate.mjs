@@ -45,7 +45,7 @@ const EXPORTS = [
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
-  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision", "FL2_PIRATE_SPEED", "fl2Speed",
+  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision", "FL2_PIRATE_SPEED", "fl2Speed", "flotta2Mines", "flotta2MinesReady", "flotta2StartPlay", "flotta2BotMines", "FL2_MINES", "FL2_MINE_DMG", "FL2_MINE_R",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1152,7 +1152,10 @@ function fl2Begun(opts) {
   const order = g.first ? [g.first, g.first === "A" ? "B" : "A"] : ["A", "B"];
   g = fl2Deploy(g, order[0]);
   g = fl2Deploy(g, order[1]);
-  return R.flotta2Begin(g).g;
+  g = R.flotta2Begin(g).g;
+  // with the mines rule on, an extra sub-phase opens — lay none and start play
+  if (g.phase === "mines") { g = R.flotta2Mines(g, "A", []).g; g = R.flotta2Mines(g, "B", []).g; g = R.flotta2StartPlay(g).g; }
+  return g;
 }
 function playFlotta2(opts) {
   let g = fl2Begun(opts);
@@ -1321,6 +1324,32 @@ function flotta2PirateTests() {
   const rAfter = mo.ships.B.find((s) => s.id === runner2.id);
   if (rAfter && rAfter.hp >= rHp) fail("flotta2 pirati", "a broadside should resolve before the target moves");
   if (rAfter && Math.abs(rAfter.x) < 1) fail("flotta2 pirati", "the target should still move after the broadside resolves");
+
+  // bombe (mines): after deploy each side lays mines; an enemy hull that sails onto
+  // one eats 2 hull and the mine is spent
+  let bm = R.dealFlotta2("A", { A: 0, B: 0 }, { variant: "pirati", bombe: true });
+  if (!bm.bombe) fail("flotta2 pirati", "the bombe flag should be set");
+  const bo = bm.first === "B" ? ["B", "A"] : ["A", "B"];
+  bm = fl2Deploy(bm, bo[0]); bm = fl2Deploy(bm, bo[1]);
+  bm = R.flotta2Begin(bm).g;
+  if (bm.phase !== "mines") fail("flotta2 pirati", "bombe should open a mines sub-phase");
+  bm = R.flotta2Mines(bm, "A", [{ x: 40, y: 0 }]).g; // A mines the point B will sail onto
+  bm = R.flotta2Mines(bm, "B", []).g;
+  if (!R.flotta2MinesReady(bm)) fail("flotta2 pirati", "both mine submissions should ready play");
+  bm = R.flotta2StartPlay(bm).g;
+  if (bm.phase !== "plan") fail("flotta2 pirati", "laying mines should open play");
+  const bShip = bm.ships.B.find((s) => s.type === "warship"), aShip = bm.ships.A[0];
+  bm.ships.A = [aShip]; bm.ships.B = [bShip];
+  aShip.x = 0; aShip.y = -900; aShip.path = []; // A holds well clear of its own mine
+  bShip.x = 0; bShip.y = 0; bShip.path = [{ x: 40, y: 0 }]; // B sails the short hop onto it
+  const bHp0 = bShip.hp;
+  bm = R.flotta2Order(bm, "A", { kind: "move", ship: aShip.id, path: [] }).g;
+  bm = R.flotta2Order(bm, "B", { kind: "move", ship: bShip.id, path: [{ x: 40, y: 0 }] }).g;
+  bm = R.flotta2Resolve(bm).g;
+  const bShipAfter = bm.ships.B.find((s) => s.id === bShip.id);
+  if (bShipAfter && bShipAfter.hp > bHp0 - R.FL2_MINE_DMG + 0.001) fail("flotta2 pirati", "sailing onto an enemy mine should cost 2 hull");
+  if (bm.mines.A.length !== 0) fail("flotta2 pirati", "a mine that bites should be spent");
+  if (R.flotta2BotMines(bm, "A").length !== R.FL2_MINES) fail("flotta2 pirati", "the bot should lay a full spread of mines");
 
   // the wind veers as the match wears on
   let w = fl2Begun({ variant: "pirati" });

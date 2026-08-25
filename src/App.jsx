@@ -248,8 +248,9 @@ const GAMES = {
       { k: "variant", label: "Stile", le: "Style", cycle: ["moderno", "pirati"], fmt: { moderno: "Moderno", pirati: "Pirati" }, hint: "Moderno: sonar, missili. Pirati: carta nautica, cannonate di bordata, vento", he: "Modern: sonar, missiles. Pirate: sea chart, broadsides, wind" },
       { k: "mode", label: "Giocatori", le: "Players", cycle: ["2p", "1p"], fmt: { "2p": "2P", "1p": "1P" }, hint: "Due giocatori su due telefoni, o uno contro la CPU", he: "Two players on two phones, or one vs the CPU" },
       { k: "ai", label: "CPU", le: "CPU", cycle: ["medio", "difficile"], fmt: { medio: "Medio", difficile: "Difficile" }, hint: "Livello dell'avversario CPU", he: "CPU opponent level", when: (o) => o.mode === "1p" },
+      { k: "bombe", label: "Bombe", le: "Mines", cycle: [false, true], hint: "Pirati: dopo lo schieramento ognuno posa 3 mine; a distanza ravvicinata esplodono per 2 danni", he: "Pirate: after deploy each lays 3 mines; up close they blow for 2 damage", when: (o) => o.variant === "pirati" },
     ],
-    def: { variant: "moderno", mode: "2p", ai: "medio" },
+    def: { variant: "moderno", mode: "2p", ai: "medio", bombe: false },
   },
   paroliere: {
     name: "Il Paroliere",
@@ -1628,6 +1629,13 @@ const FL2_RADAR_EVERY = 3; // every Nth round a sweep reveals surface ships to b
 const FL2_MAX_TURNS = 31; // a match lasts at most this many rounds, else decided on ships left
 const FL2_PIRATE_SIGHT = 3; // pirates spot by eye alone — triple every hull's lookout range
 const FL2_PIRATE_SPEED = 2; // open-sea sailing — double every hull's move range
+// Pirate "bombe" house rule: after deploy each side lays a few floating mines. A
+// mine is unseen until an enemy ship is within FL2_MINE_DETECT; sail within close
+// range (its hull + FL2_MINE_R) and it goes off for FL2_MINE_DMG, then it's spent.
+const FL2_MINES = 3;         // mines laid per side
+const FL2_MINE_DMG = 2;      // hull taken by a ship that sets one off
+const FL2_MINE_R = 16;       // close range = the ship's own size + this
+const FL2_MINE_DETECT = 150; // a mine is only spotted within this range of your ships
 // a hull's sighting range: on the open sea (pirate) the lookout sees three times as far
 const fl2Vision = (type, pirate) => FL2_UNITS[type].vision * (pirate ? FL2_PIRATE_SIGHT : 1);
 // a hull's move range per round: pirates sail twice as far
@@ -1773,6 +1781,7 @@ function dealFlotta2(dealer, tally, opts) {
   // guest) that decides who claims a quadrant first. Faces the shared-pool deploy.
   const coin = pirate ? (Math.random() < 0.5 ? "rum" : "skull") : null;
   const first = pirate ? (coin === "rum" ? "A" : "B") : null;
+  const bombe = pirate && !!(opts && opts.bombe); // the mines house rule (pirate only)
   const defZone = pirate ? { A: 0, B: 4 } : { A: zones.A[1], B: zones.B[1] }; // distinct until the player picks
   ["A", "B"].forEach((seat) => {
     const pts = fl2PlaceInOctant(defZone[seat], FL2_FLEET.length);
@@ -1785,9 +1794,11 @@ function dealFlotta2(dealer, tally, opts) {
     R: FL2_R,
     pirate, // sea-chart variant: broadsides, line-of-sight, wind
     wind: pirate ? Math.random() * 2 * Math.PI : null, // random opening bearing; veers over the match
-    coin, // the doubloon face this game (woman | parrot), null when modern
+    coin, // the doubloon face this game (rum | skull), null when modern
     first, // who claims a quadrant first (the coin winner), null when modern
-    phase: "deploy", // deploy → plan → (resolve) → plan …
+    bombe, // the mines house rule is on
+    mines: { A: null, B: null }, // each side's laid mines (null until submitted)
+    phase: "deploy", // deploy → (mines) → plan → (resolve) → plan …
     turn: 1,
     ships,
     proj: [],
@@ -1847,6 +1858,25 @@ function flotta2Begin(gs) {
       if (s.path.length) s.heading = Math.atan2(s.path[0].y - y, s.path[0].x - x);
     }
   }
+  // With the mines rule on, an extra sub-phase lets each side lay its bombe before play.
+  g.phase = g.bombe ? "mines" : "plan";
+  g.turn = 1;
+  g.last = { t: "begin" };
+  return { g, kind: "lay", nojolt: true, ev: { t: "begin" } };
+}
+// Lay this side's mines (0–FL2_MINES points, clamped into the sea). Held until both sides submit.
+function flotta2Mines(gs, seat, points) {
+  if (gs.phase !== "mines" || !gs.bombe || gs.mines[seat] != null) return null;
+  if (!Array.isArray(points)) return null;
+  const g = clone(gs);
+  g.mines[seat] = points.slice(0, FL2_MINES).map((p) => fl2Clamp(p.x, p.y));
+  return { g, quiet: true, ev: { t: "mines" } };
+}
+const flotta2MinesReady = (gs) => gs.phase === "mines" && gs.mines && gs.mines.A != null && gs.mines.B != null;
+// Both sides have laid — open play.
+function flotta2StartPlay(gs) {
+  if (!flotta2MinesReady(gs)) return null;
+  const g = clone(gs);
   g.phase = "plan";
   g.turn = 1;
   g.last = { t: "begin" };
@@ -2043,6 +2073,19 @@ function flotta2Resolve(gs) {
   }
   g.proj = survivors;
   if (g.pirate) advanceShips(); // pirate: the broadside has spoken — now the ships sail
+  // 3b) mines: an enemy hull that has strayed within close range sets one off (2 hull),
+  //     then the mine is spent. Your own ships know where your mines lie, so they pass safe.
+  if (g.bombe) for (const owner of ["A", "B"]) {
+    if (!g.mines[owner] || !g.mines[owner].length) continue;
+    const foe = owner === "A" ? "B" : "A";
+    const survive = [];
+    for (const m of g.mines[owner]) {
+      const hit = g.ships[foe].find((s) => s.hp > 0 && fl2Dist(s, m) <= FL2_UNITS[s.type].size + FL2_MINE_R);
+      if (hit) { hit.hp -= FL2_MINE_DMG; g.boom.push({ x: m.x, y: m.y, r: FL2_UNITS[hit.type].size + FL2_MINE_R }); g.hits.push({ x: m.x, y: m.y }); g.impacts.push({ x: m.x, y: m.y, turn: g.turn, hit: true }); }
+      else survive.push(m);
+    }
+    g.mines[owner] = survive;
+  }
   if (g.impacts.length > 80) g.impacts = g.impacts.slice(-80); // keep the trail bounded
   // 4) clear the dead — but leave a wreck where each ship went down (shown on the field)
   for (const seat of ["A", "B"]) {
@@ -2277,6 +2320,20 @@ function flotta2BotDeploy(gs, seat) {
     ships[s.id] = { x: Math.cos(a) * rr, y: Math.sin(a) * rr, path: [] };
   });
   return { zone, ships };
+}
+// The bot's mines: a ring of them scattered between the sea's centre and where the
+// enemy fleet sits, to seed the lanes it's likely to sail. Deterministic.
+function flotta2BotMines(gs, seat) {
+  const foe = seat === "A" ? "B" : "A";
+  const es = gs.ships[foe];
+  const cx = es.length ? es.reduce((a, s) => a + s.x, 0) / es.length : 0;
+  const cy = es.length ? es.reduce((a, s) => a + s.y, 0) / es.length : 0;
+  const pts = [];
+  for (let i = 0; i < FL2_MINES; i++) {
+    const a = (i / FL2_MINES) * 2 * Math.PI;
+    pts.push({ x: cx * 0.6 + Math.cos(a) * FL2_R * 0.18, y: cy * 0.6 + Math.sin(a) * FL2_R * 0.18 });
+  }
+  return pts;
 }
 
 /* ── il paroliere (boggle) ─────────────────────────────────────
@@ -9688,22 +9745,27 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   const roundAt = useRef(0);
 
   const deploying = gs.phase === "deploy";
+  const laying = gs.phase === "mines"; // the bombe sub-phase: drop your mines
   const myShips = gs.ships[seat];
   const seen = flotta2Seen(gs, seat);
   const submittedDeploy = deploying && !!gs.deploy[seat];
-  const submittedOrder = !deploying && !!gs.orders[seat];
+  const submittedMines = laying && gs.mines[seat] != null;
+  const submittedOrder = !deploying && !laying && !!gs.orders[seat];
   // pirate deploy is sequential: the coin winner claims a quadrant first, then the
   // other picks from what's left (never the taken one). deployWait = it's not my turn yet.
   const foeSeat = seat === "A" ? "B" : "A";
   const takenZone = gs.pirate && gs.first ? (gs.deploy[foeSeat] ? gs.deploy[foeSeat].zone : null) : null;
   const deployWait = deploying && gs.pirate && gs.first && seat !== gs.first && !gs.deploy[gs.first];
-  const canAct = deploying ? !submittedDeploy && !gs.done && !deployWait : !submittedOrder && !gs.done;
+  const canAct = deploying ? !submittedDeploy && !gs.done && !deployWait : laying ? !submittedMines && !gs.done : !submittedOrder && !gs.done;
 
   // deployment working state (local until Ready)
   const [dzone, setDzone] = useState(null);
   const [dpos, setDpos] = useState({}); // id → {x,y}
   const [dpath, setDpath] = useState({}); // id → initial route drawn during deploy
+  const [dmines, setDmines] = useState([]); // mines staged during the bombe sub-phase
   const selShip = sel ? myShips.find((s) => s.id === sel) : null;
+  // which enemy mines you can see: only those close to one of your ships (own always shown)
+  const minesSeen = gs.bombe && gs.mines[foeSeat] ? gs.mines[foeSeat].filter((m) => (gs.done ? true : myShips.some((s) => fl2Dist(s, m) <= FL2_MINE_DETECT))) : [];
 
   useEffect(() => {
     const measure = () => { const el = wrapRef.current; if (el) setBox({ w: el.clientWidth, h: el.clientHeight }); };
@@ -9739,6 +9801,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   }, [deploying, seat, takenZone]); // eslint-disable-line
   // the pirate deploy opens with a doubloon toss; show it again for each fresh deploy
   useEffect(() => { if (!deploying) setCoinSeen(false); }, [deploying]);
+  useEffect(() => { if (!laying) setDmines([]); }, [laying]); // each fresh mines phase starts empty
 
   // a fresh round / phase change → clear staging, note the moment, and snapshot
   // positions so ships/shots can glide from where they were to where they are
@@ -9770,11 +9833,15 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     return () => cancelAnimationFrame(raf);
   }, [reduceMotion]);
 
-  // both deployed → open play (guarded so each client begins once)
+  // both deployed → open play (or the mines sub-phase); both mines laid → open play
   const begunRef = useRef(false);
   useEffect(() => {
     if (flotta2DeployReady(gs) && !begunRef.current) { begunRef.current = true; const r = flotta2Begin(gs); if (r) commit(r); }
   }, [gs.deploy && gs.deploy.A, gs.deploy && gs.deploy.B]); // eslint-disable-line
+  const playRef = useRef(false);
+  useEffect(() => {
+    if (flotta2MinesReady(gs) && !playRef.current) { playRef.current = true; const r = flotta2StartPlay(gs); if (r) commit(r); }
+  }, [gs.mines && gs.mines.A, gs.mines && gs.mines.B]); // eslint-disable-line
   // both ordered → resolve the round (guarded once per turn)
   const resolvedFor = useRef(-1);
   useEffect(() => {
@@ -9790,11 +9857,14 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       // pirate: if the bot lost the toss it must wait for the winner to claim first
       const botCanDeploy = !gs.first || gs.first === BOT || !!gs.deploy[gs.first];
       if (!gs.deploy[BOT] && botCanDeploy) { const r = flotta2Deploy(gs, BOT, flotta2BotDeploy(gs, BOT)); if (r) commit(r); }
+    } else if (gs.phase === "mines") {
+      botTurn.current = -1;
+      if (gs.mines[BOT] == null) { const r = flotta2Mines(gs, BOT, flotta2BotMines(gs, BOT)); if (r) commit(r); }
     } else {
       botDep.current = false;
       if (!gs.orders[BOT] && botTurn.current !== gs.turn) { botTurn.current = gs.turn; const o = flotta2Bot(gs, BOT, botLevel); if (o) { const r = flotta2Order(gs, BOT, o); if (r) commit(r); } }
     }
-  }, [botActive, gs.phase, gs.turn, gs.done, gs.deploy && gs.deploy.A, gs.deploy && gs.deploy.B, gs.orders && gs.orders.B]); // eslint-disable-line
+  }, [botActive, gs.phase, gs.turn, gs.done, gs.deploy && gs.deploy.A, gs.deploy && gs.deploy.B, gs.mines && gs.mines.A, gs.mines && gs.mines.B, gs.orders && gs.orders.B]); // eslint-disable-line
   // re-send my own submission if a concurrent write clobbered the shared state
   const mineRef = useRef(null);
   useEffect(() => { mineRef.current = null; }, [gs.turn, gs.phase, seat]);
@@ -9860,6 +9930,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     if (pointers.current.size !== 1) return;
     const { x, y } = l;
     if (!canAct) { gest.current = { kind: "pan", sx: x, sy: y, ox: pan.x, oy: pan.y }; force((n) => n + 1); return; }
+    if (laying) { gest.current = { kind: "tapPan", sx: x, sy: y, ox: pan.x, oy: pan.y, moved: false, mine: s2w(x, y) }; return; }
     if (deploying) {
       if (mode === "droute" && selShip) { gest.current = { kind: "droute", pts: [s2w(x, y)] }; return; }
       const s = hitShip(x, y);
@@ -9931,7 +10002,15 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     gest.current = null;
     const { x, y } = local(e);
     if (g.kind === "tapPan" && !g.moved) {
-      if (deploying) {
+      if (laying) {
+        const wp = g.mine || s2w(x, y);
+        setDmines((ms) => {
+          const near = ms.findIndex((m) => Math.hypot(m.x - wp.x, m.y - wp.y) <= gs.R * 0.06);
+          if (near >= 0) return ms.filter((_, i) => i !== near); // tap a mine to lift it
+          if (ms.length >= FL2_MINES) return ms; // already at the limit
+          return [...ms, wp];
+        });
+      } else if (deploying) {
         const wp = s2w(x, y);
         const oct = fl2Octant(wp.x, wp.y);
         if (fl2ZonesFor(gs.pirate)[seat].includes(oct) && oct !== takenZone) {
@@ -9971,6 +10050,10 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     const placement = { zone: dzone, ships };
     const r = flotta2Deploy(gs, seat, placement);
     if (r) { mineRef.current = placement; commit(r); }
+  };
+  const submitMines = () => {
+    const r = flotta2Mines(gs, seat, dmines);
+    if (r) commit(r);
   };
 
   /* ── paint ── */
@@ -10242,6 +10325,20 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       ctx.beginPath(); ctx.moveTo(p.x - r, p.y - r); ctx.lineTo(p.x + r, p.y + r); ctx.moveTo(p.x + r, p.y - r); ctx.lineTo(p.x - r, p.y + r); ctx.stroke();
       ctx.restore();
     }
+    // mines: a spiked ball. Yours (and the ones you're staging) always show; an enemy's
+    // shows only once one of your ships is within sighting range of it.
+    if (gs.bombe) {
+      const drawMine = (m, col, faint) => {
+        const p = w2s(m), rr = Math.max(5, 9 * scale);
+        ctx.save(); ctx.globalAlpha = faint ? 0.85 : 1; ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.arc(p.x, p.y, rr * 0.6, 0, 2 * Math.PI); ctx.fill();
+        for (let k = 0; k < 8; k++) { const a = (k / 8) * 2 * Math.PI; ctx.beginPath(); ctx.moveTo(p.x + Math.cos(a) * rr * 0.6, p.y + Math.sin(a) * rr * 0.6); ctx.lineTo(p.x + Math.cos(a) * rr, p.y + Math.sin(a) * rr); ctx.stroke(); }
+        ctx.restore();
+      };
+      const own = laying && canAct ? dmines : gs.mines[seat] || [];
+      for (const m of own) drawMine(m, TH.green);
+      for (const m of minesSeen) drawMine(m, TH.foe, true);
+    }
     if (!deploying) for (const s of gs.ships[opp]) if (seen.has(s.id)) drawShip(s, false);
     for (const s of myShips) drawShip(s, true);
     if (!deploying) for (const pr of gs.proj) {
@@ -10399,6 +10496,8 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     ? gs.win === seat ? L("Vittoria!", "Victory!") : gs.win ? L("Sconfitta", "Defeated") : L("Pari", "Draw")
     : deploying
     ? deployWait ? L(`${who(room, gs.first)} sceglie il quadrante…`, `${who(room, gs.first)} is choosing a quadrant…`) : submittedDeploy ? L("Schierato — aspetta l'avversario", "Deployed — waiting for the other player") : dzone == null ? L("Tocca un settore per schierare", "Tap a sector to deploy") : mode === "droute" ? L("Disegna la rotta iniziale", "Draw the initial route") : mode === "dmenu" ? L("Rotta iniziale · o trascina la nave", "Initial route · or drag the ship") : L("Trascina le navi · tocca per la rotta · poi Pronto", "Drag ships · tap for a route · then Ready")
+    : laying
+    ? submittedMines ? L("Mine posate — aspetta l'avversario", "Mines laid — waiting for the other player") : L(`Posa fino a ${FL2_MINES} mine · poi Pronto`, `Lay up to ${FL2_MINES} mines · then Ready`)
     : submittedOrder ? L("Ordine dato — aspetta l'avversario", "Order set — waiting")
     : sel ? (mode === "move" ? L("Disegna la rotta", "Draw the route") : mode === "fire" ? (gs.pirate ? L("Bordata pronta — conferma", "Broadside ready — confirm") : (selShip && (FL2_WEAPON[FL2_UNITS[selShip.type].weapon].shots || 1) > 1 ? L(`Tocca fino a ${FL2_WEAPON[FL2_UNITS[selShip.type].weapon].shots} bersagli`, `Tap up to ${FL2_WEAPON[FL2_UNITS[selShip.type].weapon].shots} targets`) : L("Trascina per mirare", "Drag to aim"))) : mode === "strike" ? L("Tocca la nave nemica da colpire", "Tap the enemy ship to strike") : mode === "scan" ? L("Trascina per orientare la scansione", "Drag to aim the scan") : L("Muovi o spara", "Move or fire"))
     : L("Tocca una tua nave", "Tap one of your ships");
@@ -10508,10 +10607,16 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 14px", borderTop: `1px solid ${G(0.15)}` }}>
         <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.1em" }}>
           <span style={{ color: TH.green }}>{who(room, seat)}</span> {myShips.length}
-          {!deploying && <> · <span style={{ color: TH.foe }}>{who(room, opp)}</span> {gs.radar ? gs.ships[opp].length : `${seen.size}?`}</>}
+          {laying && <> · <span style={{ color: TH.foe }}>{L("mine", "mines")}</span> {dmines.length}/{FL2_MINES}</>}
+          {!deploying && !laying && <> · <span style={{ color: TH.foe }}>{who(room, opp)}</span> {gs.radar ? gs.ships[opp].length : `${seen.size}?`}</>}
         </span>
         {deploying && canAct && (
           <button onClick={submitDeploy} disabled={dzone == null} style={{ ...chromeBtn, display: "inline-flex", flexDirection: "row", alignItems: "center", justifyContent: "center", width: "auto", padding: "0 18px", height: 40, gap: 8, opacity: dzone == null ? 0.4 : 1, fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" }}>
+            <Ico n="check" s={18} /> {L("Pronto", "Ready")}
+          </button>
+        )}
+        {laying && canAct && (
+          <button onClick={submitMines} style={{ ...chromeBtn, display: "inline-flex", flexDirection: "row", alignItems: "center", justifyContent: "center", width: "auto", padding: "0 18px", height: 40, gap: 8, fontWeight: 700, fontSize: 14, whiteSpace: "nowrap" }}>
             <Ico n="check" s={18} /> {L("Pronto", "Ready")}
           </button>
         )}
