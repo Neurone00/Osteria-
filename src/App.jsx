@@ -9554,7 +9554,7 @@ function fl2Hull(ctx, type, u, edge, fill, pirate) {
   }
 }
 // A round icon button that reveals a tooltip on long-press.
-function Fl2Btn({ icon, label, onTap, tone, bg, size = 46 }) {
+function Fl2Btn({ icon, label, onTap, tone, bg, size = 38 }) {
   const [tip, setTip] = useState(false);
   const t = useRef(null);
   const arm = () => (t.current = setTimeout(() => setTip(true), 380));
@@ -9934,7 +9934,10 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       if (deploying) {
         const wp = s2w(x, y);
         const oct = fl2Octant(wp.x, wp.y);
-        if (fl2ZonesFor(gs.pirate)[seat].includes(oct) && oct !== takenZone) { setDzone(oct); setDpos(autoPlace(oct)); setDpath({}); setSel(null); setMode(null); }
+        if (fl2ZonesFor(gs.pirate)[seat].includes(oct) && oct !== takenZone) {
+          if (oct !== dzone) { setDzone(oct); setDpos(autoPlace(oct)); setDpath({}); } // only a NEW quadrant re-lays; re-tapping the current one keeps your placement
+          setSel(null); setMode(null);
+        }
       } else { setSel(null); setMode(null); setDraft(null); }
     } else if (g.kind === "place" && !g.moved) {
       setSel(g.id); setMode("dmenu"); // tapped a placed ship → deploy options (draw its route)
