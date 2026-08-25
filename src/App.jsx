@@ -5014,6 +5014,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const seenAnim = useRef(null);
   const soundRef = useRef(true);
   const seatRef = useRef("A");
+  const claimRef = useRef(false); // joining by code with no saved seat → claim the free one on first presence
   const typedName = useRef(false); // did the user type their name (vs it coming from prefs)?
   const deepJoined = useRef(false);
   const deepRef = useRef(undefined);
@@ -5201,6 +5202,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           clearTimeout(timer);
           setLink("waiting");
           if (!host) ws.send(JSON.stringify({ type: "hello", name: nm || "Ospite" }));
+          // Declare our seat so the room knows which chairs are taken. When joining by
+          // code with no saved seat, hold off — the first presence tells us which seat
+          // is free, and we claim that one (so a returning host lands on the empty seat).
+          if (!claimRef.current) ws.send(JSON.stringify({ type: "seat", seat: seatRef.current }));
           give(true);
         };
         ws.onerror = () => {
@@ -5220,8 +5225,18 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             return;
           }
           if (d.type === "state") receive(d.room);
-          else if (d.type === "presence") setLink(d.n > 1 ? "live" : "waiting");
-          else if (d.type === "hello" && seatRef.current === "A") {
+          else if (d.type === "presence") {
+            setLink(d.n > 1 ? "live" : "waiting");
+            // claim the free chair on first presence, then settle onto it
+            if (claimRef.current && d.held) {
+              claimRef.current = false;
+              const free = !d.held.A ? "A" : !d.held.B ? "B" : null;
+              const pick = free || "B"; // both taken (shouldn't happen) → default guest
+              setSeat(pick); seatRef.current = pick;
+              try { ws.send(JSON.stringify({ type: "seat", seat: pick })); } catch {}
+              saveSession({ code, seat: pick, name: nm || "Ospite", room: roomRef.current });
+            }
+          } else if (d.type === "hello" && seatRef.current === "A") {
             const cur = roomRef.current;
             if (cur) publish({ ...cur, names: { ...cur.names, B: d.name } });
           }
@@ -5330,6 +5345,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       anim: null,
     };
     setSeat("A");
+    seatRef.current = "A";
+    claimRef.current = false; // the host owns seat A from the start
     roomRef.current = fresh;
     setRoom(fresh);
     setLink("waiting");
@@ -5375,16 +5392,26 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const joinTable = async (forceCode) => {
     const code = (typeof forceCode === "string" ? forceCode : codeIn).trim().toUpperCase();
     if (code.length !== 4) return setMsg(L("Il codice è di quattro lettere.","The code is four letters."));
-    setSeat("B");
+    // If this device was already at this table, reclaim its own seat and hand — so a
+    // host (or guest) who dropped can come back in with just the code. Otherwise take
+    // the seat that's free: the relay's presence tells us which chair is empty.
+    const sess = await loadSession();
+    const rejoin = !!(sess && sess.code === code && (sess.seat === "A" || sess.seat === "B"));
+    const mySeat = rejoin ? sess.seat : "B"; // provisional when claiming — corrected on first presence
+    const nm = rejoin ? (sess.name || name.trim() || (mySeat === "A" ? "Oste" : "Ospite")) : (name.trim() || "Ospite");
+    claimRef.current = !rejoin && !hasStore(); // fresh relay join → claim the empty chair
+    setSeat(mySeat);
+    seatRef.current = mySeat;
     setLink("waiting");
+    if (rejoin && sess.room) { roomRef.current = sess.room; setRoom(sess.room); }
     if (hasStore()) {
       const r = await storeRead(code);
       if (!r) return setMsg(`${L("Nessun tavolo al codice","No table at code")} ${code}.`);
       roomRef.current = r;
       setRoom(r);
       openStorage(code);
-      await netRef.current.hello(name.trim() || "Ospite");
-    } else if (await openRelay(code, false, name.trim() || "Ospite")) {
+      if (!rejoin) await netRef.current.hello(name.trim() || "Ospite");
+    } else if (await openRelay(code, mySeat === "A", nm)) {
       setTimeout(() => {
         if (!roomRef.current) {
           netRef.current?.close();
@@ -5392,10 +5419,11 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           setScreen("home");
         }
       }, 3500);
+      if (rejoin && mySeat === "A" && sess.room) setTimeout(() => netRef.current?.send(roomRef.current), 250);
     } else {
-      await openPeer(code, false, name.trim() || "Ospite");
+      await openPeer(code, mySeat === "A", nm);
     }
-    saveSession({ code, seat: "B", name: name.trim() || "Ospite" });
+    saveSession({ code, seat: mySeat, name: nm, room: rejoin ? sess.room : undefined });
     setScreen("table");
   };
 
@@ -5532,6 +5560,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     const cur = roomRef.current;
     if (reconnectingRef.current || !cur) return;
     reconnectingRef.current = true;
+    claimRef.current = false; // a reconnect keeps its own seat, never re-claims
     setReconnecting(true);
     setLink("waiting");
     try {
@@ -5601,6 +5630,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       }
       setName(s.name || "");
       setSeat(s.seat || "A");
+      seatRef.current = s.seat || "A";
+      claimRef.current = false; // a saved session already knows its seat
       setCodeIn(s.code);
       setLink("waiting");
       if (hasStore()) {

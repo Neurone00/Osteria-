@@ -145,9 +145,20 @@ export class Table {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  // Presence carries which seats are currently held, so a phone rejoining with the
+  // code can claim the empty one (e.g. take over after the host dropped) instead of
+  // colliding with a seat that's already live.
   announce() {
     const sockets = this.ctx.getWebSockets();
-    const note = JSON.stringify({ type: "presence", n: sockets.length });
+    const held = { A: false, B: false };
+    for (const ws of sockets) {
+      let a = null;
+      try {
+        a = ws.deserializeAttachment();
+      } catch {}
+      if (a && (a.seat === "A" || a.seat === "B")) held[a.seat] = true;
+    }
+    const note = JSON.stringify({ type: "presence", n: sockets.length, held });
     for (const ws of sockets) {
       try {
         ws.send(note);
@@ -160,6 +171,13 @@ export class Table {
     try {
       data = JSON.parse(raw);
     } catch {
+      return;
+    }
+    // A socket declares which seat it holds; kept in a hibernation-safe attachment
+    // and reflected back to everyone via presence. Not relayed to the peer.
+    if (data.type === "seat" && (data.seat === "A" || data.seat === "B")) {
+      ws.serializeAttachment({ seat: data.seat });
+      this.announce();
       return;
     }
     if (data.type === "state" && data.room) {
