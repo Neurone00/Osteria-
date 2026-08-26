@@ -279,11 +279,11 @@ const isCard = (game) => !GAMES[game].dice;
 // (Paroliere is letter dice); otherwise derive from how it plays.
 const gameCat = (game) => GAMES[game].cat || (GAMES[game].dice ? "dadi" : GAMES[game].board ? "tavolo" : "carte");
 // The start button, kept short (the card already shows the game's name) and given
-// a little flavour per shelf: cards are dealt, dice get shaken, boards get set up.
+// a little flavour per shelf: cards are dealt, dice get thrown, boards get set up.
 const dealCta = (gm) => {
   if (gm.cta) return L(gm.cta.it, gm.cta.en); // a game can name its own start button
   const c = gm.cat || (gm.dice ? "dadi" : gm.board ? "tavolo" : "carte");
-  return c === "dadi" ? L("Scuoti!", "Shake!") : c === "tavolo" ? L("Schiera!", "Deploy!") : L("Distribuisci", "Deal");
+  return c === "dadi" ? L("Lancia!", "Roll!") : c === "tavolo" ? L("Schiera!", "Deploy!") : L("Distribuisci", "Deal");
 };
 const GAME_CATS = [
   ["carte", "Carte", "Cards"],
