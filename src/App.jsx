@@ -4581,6 +4581,40 @@ function CaptureReveal({ room, seat }) {
   );
 }
 
+// Rubamazzo's scopa moment: a big shaking "Rubato!" across the middle when a whole
+// pile is stolen off the top card. Fires on both screens from the shared anim.
+function RubatoFlash({ room }) {
+  const [shot, setShot] = useState(null);
+  const seen = useRef(null);
+  useEffect(() => {
+    const a = room?.anim;
+    const ev = room?.ev;
+    if (!a || a.id === seen.current) return;
+    seen.current = a.id;
+    if (ev && ev.t === "steal") setShot({ id: a.id, n: ev.n });
+  }, [room?.anim?.id]);
+  useEffect(() => {
+    if (!shot) return;
+    const t = setTimeout(() => setShot(null), 1600);
+    return () => clearTimeout(t);
+  }, [shot && shot.id]);
+  if (!shot) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 56, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, pointerEvents: "none", padding: 20 }}>
+      <div
+        key={`r${shot.id}`}
+        className="scopaflash"
+        style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(52px, 18vw, 120px)", color: "#A5342F", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.10)", whiteSpace: "nowrap", lineHeight: 1 }}
+      >
+        Rubato<span style={{ color: T.ink }}>!</span>
+      </div>
+      <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: T.ink60 || T.ink }}>
+        {shot.n} {L("carte", "cards")}
+      </div>
+    </div>
+  );
+}
+
 // The scopas a player has swept this hand — always shown (independent of the
 // show-points toggle), since a scopa is a public event you want to keep count of.
 function ScopeTag({ n, cards }) {
@@ -6913,6 +6947,7 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
       {isScopa && <CaptureReveal room={room} seat={seat} />}
+      {!isScopa && <RubatoFlash room={room} />}
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
