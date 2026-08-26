@@ -45,7 +45,7 @@ const EXPORTS = [
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
-  "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "fl2Sectors", "fl2SectorOf", "FL2_QUAD", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision", "FL2_PIRATE_SPEED", "fl2Speed", "flotta2Mines", "flotta2MinesReady", "flotta2StartPlay", "flotta2BotMines", "FL2_MINES", "FL2_MINE_DMG", "FL2_MINE_R",
+  "mergeSimSlots", "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "fl2Sectors", "fl2SectorOf", "FL2_QUAD", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision", "FL2_PIRATE_SPEED", "fl2Speed", "flotta2Mines", "flotta2MinesReady", "flotta2StartPlay", "flotta2BotMines", "FL2_MINES", "FL2_MINE_DMG", "FL2_MINE_R",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
   "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
 ];
@@ -1218,6 +1218,23 @@ function flotta2PirateTests() {
   if (R.flotta2Deploy(g, "A", { zone: za[1], ships: {} }) != null) fail("flotta2 pirati", "a side can't deploy twice");
   if (R.flotta2Deploy(g, "B", { zone: za[0], ships: {} }) != null) fail("flotta2 pirati", "B can't take A's quadrant");
   if (R.flotta2Deploy(g, "B", { zone: zb[0], ships: {} }) == null) fail("flotta2 pirati", "B can deploy into its own quadrant");
+
+  // simultaneous deploy: both seats submit on the SAME version. Neither slot may be
+  // lost to last-writer-wins, or a player hangs on "waiting" — mergeSimSlots must
+  // union them on either side, whichever copy each device ends up keeping.
+  {
+    let d0 = R.dealFlotta2("A", { A: 0, B: 0 }, { variant: "pirati" });
+    const rA = { code: "TEST", v: 2, ts: 10, gs: R.flotta2Deploy(d0, "A", { zone: za[0], ships: {} }).g };
+    const rB = { code: "TEST", v: 2, ts: 10, gs: R.flotta2Deploy(d0, "B", { zone: zb[0], ships: {} }).g };
+    const onA = R.mergeSimSlots(rA, rB); // A keeps its own copy, folds in B's slot
+    const onB = R.mergeSimSlots(rB, rA); // B keeps its own copy, folds in A's slot
+    if (!onA.gs.deploy.A || !onA.gs.deploy.B) fail("flotta2 pirati", "merge must keep both deploys on A's device");
+    if (!onB.gs.deploy.A || !onB.gs.deploy.B) fail("flotta2 pirati", "merge must keep both deploys on B's device");
+    if (!R.flotta2DeployReady(onA.gs) || !R.flotta2DeployReady(onB.gs)) fail("flotta2 pirati", "the merged state should be ready to begin");
+    if (!R.flotta2Begin(onA.gs)) fail("flotta2 pirati", "begin should fire from the merged deploy");
+    // a no-op for a normal game with no deploy slots
+    if (R.mergeSimSlots({ code: "X", gs: { phase: "play" } }, { code: "X", gs: { phase: "play" } }).gs.phase !== "play") fail("flotta2 pirati", "merge must be a no-op off the deploy/mines phases");
+  }
 
   // wind pushes: faster running downwind than clawing upwind
   if (!(R.fl2WindFactor(0, 1, 0) > R.fl2WindFactor(0, -1, 0))) fail("flotta2 pirati", "downwind should beat upwind");

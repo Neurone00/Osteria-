@@ -51,6 +51,31 @@ function shuffle(a) {
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const tilt = (id) => (((id.charCodeAt(0) * 31 + id.charCodeAt(1) * 7) % 9) - 4) * 0.9;
 
+// Flotta2's deploy and mines are the one moment both players write at the SAME
+// version — each fills its own slot (deploy[seat] / mines[seat]) at once. Plain
+// last-writer-wins would drop one seat's submission and hang the other on "waiting"
+// forever, since each side keeps its own slot and so never re-sends. So on every
+// incoming update we union the two independent slots into the base we're keeping:
+// fold in any slot the base is missing but the other copy has. Only acts when both
+// rooms sit in the same such phase; a no-op for every other game and phase.
+function mergeSimSlots(base, other) {
+  if (!base || !other || !base.gs || !other.gs || base.code !== other.code) return base;
+  const gb = base.gs, go = other.gs;
+  if (!gb.deploy || !go.deploy || gb.phase !== go.phase) return base;
+  if (gb.phase !== "deploy" && gb.phase !== "mines") return base;
+  let gs = gb, changed = false;
+  for (const slot of ["deploy", "mines"]) {
+    if (!gb[slot] || !go[slot]) continue;
+    for (const s of ["A", "B"]) {
+      if (gb[slot][s] == null && go[slot][s] != null) {
+        if (!changed) { gs = { ...gb, deploy: { ...gb.deploy }, mines: gb.mines ? { ...gb.mines } : gb.mines }; changed = true; }
+        gs[slot] = { ...gs[slot], [s]: go[slot][s] };
+      }
+    }
+  }
+  return changed ? { ...base, gs } : base;
+}
+
 // Deterministic PRNG so a shuffle is a pure function of the seed the UI gathers
 // from the player's tapping (timing, rhythm, frame counter). Pure — no globals.
 function mulberry32(a) {
@@ -5208,12 +5233,17 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const receive = useCallback((r) => {
     if (!r || !r.code) return;
     const cur = roomRef.current;
-    // Higher version wins. Turn-free Condottieri means two moves can land on the
-    // same version at once; break that tie by timestamp so both devices converge
-    // on the later write (one move is dropped, but the state never diverges).
-    if (cur && (r.v < cur.v || (r.v === cur.v && (r.ts || 0) <= (cur.ts || 0)))) return;
-    roomRef.current = r;
-    setRoom(r);
+    // Higher version wins. Turn-free Condottieri (and flotta2's simultaneous deploy)
+    // mean two moves can land on the same version at once; break that tie by
+    // timestamp so both devices converge on the later write.
+    const keepCur = !!(cur && (r.v < cur.v || (r.v === cur.v && (r.ts || 0) <= (cur.ts || 0))));
+    const base = keepCur ? cur : r;
+    // Even when we keep our own copy (or adopt theirs), never lose the other seat's
+    // flotta2 deploy/mines slot to the drop — fold it in, so the phase can advance.
+    const next = cur ? mergeSimSlots(base, keepCur ? r : cur) : base;
+    if (next === cur) return; // nothing newer, and no slot to fold in
+    roomRef.current = next;
+    setRoom(next);
     setPick(null);
     setLink("live");
   }, []);
