@@ -894,7 +894,15 @@ function briscolaPlay(gs, seat, cardId) {
 }
 
 /* ── dice ─────────────────────────────────────────────────────── */
-const rollN = (n) => Array.from({ length: n }, () => 1 + Math.floor(Math.random() * 6));
+// A throw of n dice. With no seed it's plain entropy (bots, simulation); given one
+// — gathered from how long the player held the throw button — it runs a seeded
+// stream, so the wind-up genuinely stirs the result, the dice cousin of the
+// tap-timed card shuffle. It never *fixes* the outcome (the seed also folds in
+// fresh entropy), so a longer hold sways the throw without letting you rig it.
+const rollN = (n, seed) => {
+  const d6 = seed == null ? () => Math.random() : mulberry32(seed >>> 0);
+  return Array.from({ length: n }, () => 1 + Math.floor(d6() * 6));
+};
 
 /* ── perudo / dudo ─────────────────────────────────────────────
    Two players, five dice each, hidden. Bid a quantity of a face across ALL dice;
@@ -917,10 +925,10 @@ function dealPerudo(starter, tally) {
     win: null,
   };
 }
-function perudoRoll(gs, seat) {
+function perudoRoll(gs, seat, seed) {
   const g = clone(gs);
   if (g.phase !== "roll" || g.turn !== seat || g.rolled[seat]) return null;
-  g.dice[seat] = rollN(g.counts[seat]);
+  g.dice[seat] = rollN(g.counts[seat], seed);
   g.rolled[seat] = true;
   if (g.rolled.A && g.rolled.B) {
     g.phase = "bid";
@@ -1046,10 +1054,12 @@ function dealYahtzee(dealer, tally) {
     win: null,
   };
 }
-function yahtRoll(gs, seat) {
+function yahtRoll(gs, seat, seed) {
   const g = clone(gs);
   if (g.turn !== seat || g.rollsLeft <= 0 || g.done) return null;
-  g.dice = g.dice.map((d, i) => (g.rolled && g.keep[i] ? d : 1 + Math.floor(Math.random() * 6)));
+  const rng = seed == null ? null : mulberry32(seed >>> 0);
+  const d6 = () => 1 + Math.floor((rng ? rng() : Math.random()) * 6);
+  g.dice = g.dice.map((d, i) => (g.rolled && g.keep[i] ? d : d6()));
   g.rollsLeft -= 1;
   g.rolled = true;
   return { g, kind: "take", nojolt: true, ev: { t: "roll" } };
@@ -1195,10 +1205,10 @@ function farkleTake(g, seat, sel) {
   return pts;
 }
 // The opening roll of a turn (nothing to set aside yet). A dead roll busts.
-function farkleRoll(gs, seat) {
+function farkleRoll(gs, seat, seed) {
   const g = clone(gs);
   if (g.turn !== seat || g.done || g.rolled) return null;
-  g.dice = rollN(g.live);
+  g.dice = rollN(g.live, seed);
   g.rolled = true;
   g.hot = false;
   g.farkle = false;
@@ -1213,10 +1223,10 @@ function farkleRoll(gs, seat) {
   return { g, kind: "take", nojolt: true, ev: { t: "roll" } };
 }
 // Set the pick aside, then roll on (risking a Farkle).
-function farkleRollOn(gs, seat, sel) {
+function farkleRollOn(gs, seat, sel, seed) {
   const g = clone(gs);
   if (farkleTake(g, seat, sel) == null) return null;
-  g.dice = rollN(g.live);
+  g.dice = rollN(g.live, seed);
   g.rolled = true;
   g.farkle = false;
   g.pick = [];
@@ -4136,6 +4146,60 @@ function Button({ children, onClick, disabled, soft, kind = "solid", full, tone 
       }}
     >
       {children}
+    </button>
+  );
+}
+
+// The dice equivalent of the tap-timed shuffle: press and hold to wind up a throw,
+// and how long you hold stirs the throw's seed. A quick tap still throws (a short
+// wind-up), so nobody who just wants to roll is slowed down. The seed folds in fresh
+// entropy too, so holding sways the dice without ever letting you rig them.
+const CHARGE_FULL = 1100; // ms to a "full" wind-up — purely how far the fill travels
+const throwSeed = (holdMs) => ((((Math.max(0, holdMs) | 0) + 1) * 2654435761) ^ (Math.floor(Math.random() * 0xffffffff) >>> 0)) >>> 0;
+function ChargeButton({ children, onThrow, disabled, tone, line }) {
+  const ink = tone || T.ink;
+  const [fill, setFill] = useState(0);
+  const t0 = useRef(0), raf = useRef(0), held = useRef(false);
+  const stop = () => { held.current = false; cancelAnimationFrame(raf.current); setFill(0); };
+  useEffect(() => () => cancelAnimationFrame(raf.current), []);
+  const start = (e) => {
+    if (disabled) return;
+    e.preventDefault();
+    held.current = true;
+    t0.current = nowMs();
+    try { navigator.vibrate?.(8); } catch {}
+    const tick = () => {
+      if (!held.current) return;
+      setFill(Math.min(1, (nowMs() - t0.current) / CHARGE_FULL));
+      raf.current = requestAnimationFrame(tick);
+    };
+    raf.current = requestAnimationFrame(tick);
+  };
+  const release = () => {
+    if (!held.current) return;
+    const hold = nowMs() - t0.current;
+    stop();
+    try { navigator.vibrate?.([10, 18, 34]); } catch {}
+    onThrow(throwSeed(hold));
+  };
+  return (
+    <button
+      onPointerDown={start}
+      onPointerUp={release}
+      onPointerLeave={stop}
+      onPointerCancel={stop}
+      disabled={disabled}
+      style={{
+        position: "relative", overflow: "hidden", width: "100%",
+        background: disabled || line ? "transparent" : ink, color: disabled ? T.ink30 : line ? ink : T.bg,
+        border: `1.5px solid ${disabled ? T.line : ink}`, borderRadius: 12, padding: line ? "13px 16px" : "15px 18px",
+        fontFamily: BRAND, fontSize: 16, fontWeight: 600, letterSpacing: "0.01em", whiteSpace: "nowrap",
+        cursor: disabled ? "default" : "pointer", WebkitTapHighlightColor: "transparent", touchAction: "none",
+        transform: fill > 0 ? `scale(${1 + fill * 0.02})` : "none", transition: "transform 60ms linear",
+      }}
+    >
+      <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${fill * 100}%`, background: line ? "rgba(18,18,18,0.10)" : "rgba(255,255,255,0.20)", pointerEvents: "none" }} />
+      <span style={{ position: "relative" }}>{children}</span>
     </button>
   );
 }
@@ -8612,8 +8676,8 @@ function Perudo({ room, gs, seat, mine, commit }) {
   const [bidFace, setBidFace] = useState(2);
   const rolled = gs.rolled[seat];
   const canRoll = gs.phase === "roll" && mine && !rolled;
-  const tapRoll = () => {
-    if (gs.phase === "roll" && gs.turn === seat && !gs.rolled[seat]) commit(perudoRoll(gs, seat));
+  const tapRoll = (seed) => {
+    if (gs.phase === "roll" && gs.turn === seat && !gs.rolled[seat]) commit(perudoRoll(gs, seat, seed));
   };
   useEffect(() => {
     if (gs.phase === "bid" && gs.turn === seat) {
@@ -8691,9 +8755,10 @@ function Perudo({ room, gs, seat, mine, commit }) {
       <div style={{ marginTop: 18 }}>
         {gs.phase === "roll" &&
           (mine && !rolled ? (
-            <Button full onClick={tapRoll}>
-              Lancia i dadi
-            </Button>
+            <>
+              <ChargeButton onThrow={tapRoll}>{L("Tieni premuto e lancia", "Hold and roll")}</ChargeButton>
+              <Micro style={{ textAlign: "center", marginTop: 6 }}>{L("più a lungo tieni, più mescoli il tiro", "the longer you hold, the more you stir the throw")}</Micro>
+            </>
           ) : (
             <Micro style={{ textAlign: "center" }}>{rolled ? `aspetta ${who(room, opp)}` : `lancia ${who(room, gs.turn)}`}</Micro>
           ))}
@@ -8769,8 +8834,8 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
   const oppTotal = yahtTotal(oppScore);
   const canRoll = mine && gs.rollsLeft > 0 && !gs.done;
   const canScore = mine && gs.rolled && !gs.done;
-  const tapRoll = () => {
-    if (mine && gs.rollsLeft > 0 && !gs.done) commit(yahtRoll(gs, seat));
+  const tapRoll = (seed) => {
+    if (mine && gs.rollsLeft > 0 && !gs.done) commit(yahtRoll(gs, seat, seed));
   };
   // Five of a kind → a big "Yahtzee!" flash for both players, once per roll.
   const [yflash, setYflash] = useState(0);
@@ -8905,9 +8970,9 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
         <div style={{ marginTop: 10 }}>
           {mine && !gs.done ? (
             gs.rollsLeft > 0 ? (
-              <Button full onClick={tapRoll}>
-                {gs.rolled ? `${L("Ritira","Reroll")} · ${gs.rollsLeft} ${L("rimasti","left")}` : L("Lancia i dadi","Roll the dice")}
-              </Button>
+              <ChargeButton onThrow={tapRoll}>
+                {gs.rolled ? `${L("Ritira","Reroll")} · ${gs.rollsLeft} ${L("rimasti","left")}` : L("Tieni premuto e lancia","Hold and roll")}
+              </ChargeButton>
             ) : (
               <Micro>{L("segna un punteggio qui sotto","score a box below")}</Micro>
             )
@@ -9108,15 +9173,18 @@ function Farkle({ room, gs, seat, mine, commit }) {
           {!mine || gs.done ? (
             <Micro style={{ textAlign: "center", display: "block" }}>{gs.done ? "" : `${L("tocca a", "over to")} ${who(room, opp)}`}</Micro>
           ) : !gs.rolled ? (
-            <Button full onClick={() => commit(farkleRoll(gs, seat))}>
-              {L("Lancia i dadi", "Roll the dice")}
-            </Button>
+            <>
+              <ChargeButton onThrow={(seed) => commit(farkleRoll(gs, seat, seed))}>
+                {L("Tieni premuto e lancia", "Hold and roll")}
+              </ChargeButton>
+              <Micro style={{ textAlign: "center", marginTop: 6 }}>{L("più a lungo tieni, più mescoli il tiro", "the longer you hold, the more you stir the throw")}</Micro>
+            </>
           ) : (
             <>
               <div style={{ display: "flex", gap: 8 }}>
-                <Button full kind="line" disabled={!valid} onClick={() => valid && commit(farkleRollOn(gs, seat, sel))}>
+                <ChargeButton line disabled={!valid} onThrow={(seed) => valid && commit(farkleRollOn(gs, seat, sel, seed))}>
                   {L("Rilancia", "Roll on")}
-                </Button>
+                </ChargeButton>
                 <Button full disabled={!valid || !opensOk} onClick={() => valid && opensOk && commit(farkleBank(gs, seat, sel))}>
                   {L("Incassa", "Bank")} {wouldBank}
                 </Button>
