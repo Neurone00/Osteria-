@@ -9679,7 +9679,7 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   const [dmines, setDmines] = useState([]); // mines staged during the bombe sub-phase
   const selShip = sel ? myShips.find((s) => s.id === sel) : null;
   // which enemy mines you can see: only those close to one of your ships (own always shown)
-  const minesSeen = gs.bombe && gs.mines[foeSeat] ? gs.mines[foeSeat].filter((m) => (gs.done ? true : myShips.some((s) => fl2Dist(s, m) <= FL2_MINE_DETECT))) : [];
+  const minesSeen = gs.bombe && gs.mines[foeSeat] && !laying ? gs.mines[foeSeat].filter((m) => (gs.done ? true : myShips.some((s) => fl2Dist(s, m) <= FL2_MINE_DETECT))) : [];
 
   useEffect(() => {
     const measure = () => { const el = wrapRef.current; if (el) setBox({ w: el.clientWidth, h: el.clientHeight }); };
@@ -10248,7 +10248,9 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
       for (const m of own) drawMine(m, TH.green);
       for (const m of minesSeen) drawMine(m, TH.foe, true);
     }
-    if (!deploying) for (const s of gs.ships[opp]) if (seen.has(s.id)) drawShip(s, false);
+    // enemy hulls stay hidden through mine-laying too — you seed the sea before any
+    // reveal, so a spotted foe can never steer where you drop your bombe
+    if (!deploying && !laying) for (const s of gs.ships[opp]) if (seen.has(s.id)) drawShip(s, false);
     for (const s of myShips) drawShip(s, true);
     if (!deploying) for (const pr of gs.proj) {
       const mineShot = pr.owner === seat;
