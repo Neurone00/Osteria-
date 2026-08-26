@@ -3596,6 +3596,27 @@ async function dropSession() {
   } catch {}
 }
 
+/* A stable per-device token. It rides along with every seat claim so the relay can
+   guarantee two phones never collapse onto the same player — even if they connect
+   at the same instant. Persisted in localStorage on a real host so a reload keeps
+   the same identity; a plain in-memory token in the artifact, where localStorage is
+   off-limits while window.storage exists (and where the relay never runs anyway). */
+const CLIENT = "osteria:client";
+let CID = null;
+function clientId() {
+  if (CID) return CID;
+  const gen = () => { try { return crypto.randomUUID(); } catch { return `c${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`; } };
+  CID = gen();
+  if (!hasStore()) {
+    try {
+      const v = localStorage.getItem(CLIENT);
+      if (v) CID = v;
+      else localStorage.setItem(CLIENT, CID);
+    } catch {}
+  }
+  return CID;
+}
+
 /* Local preferences that outlive a single table: the card face and each game's
    last-used house rules. Same artifact-safe pattern as the session — private
    window.storage inside the Claude artifact, localStorage on a self-hosted
@@ -5290,7 +5311,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           // Declare our seat so the room knows which chairs are taken. When joining by
           // code with no saved seat, hold off — the first presence tells us which seat
           // is free, and we claim that one (so a returning host lands on the empty seat).
-          if (!claimRef.current) ws.send(JSON.stringify({ type: "seat", seat: seatRef.current }));
+          if (!claimRef.current) ws.send(JSON.stringify({ type: "seat", seat: seatRef.current, cid: clientId() }));
           give(true);
         };
         ws.onerror = () => {
@@ -5318,9 +5339,17 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               const free = !d.held.A ? "A" : !d.held.B ? "B" : null;
               const pick = free || "B"; // both taken (shouldn't happen) → default guest
               setSeat(pick); seatRef.current = pick;
-              try { ws.send(JSON.stringify({ type: "seat", seat: pick })); } catch {}
+              try { ws.send(JSON.stringify({ type: "seat", seat: pick, cid: clientId() })); } catch {}
               saveSession({ code, seat: pick, name: nm || "Ospite", room: roomRef.current });
             }
+          } else if (d.type === "seattaken") {
+            // the relay refused our chair — another device already holds it. Take the
+            // other one, so two phones can never end up as the same player.
+            const flip = seatRef.current === "A" ? "B" : "A";
+            claimRef.current = false;
+            setSeat(flip); seatRef.current = flip;
+            try { ws.send(JSON.stringify({ type: "seat", seat: flip, cid: clientId() })); } catch {}
+            saveSession({ code, seat: flip, name: nm || "Ospite", room: roomRef.current });
           } else if (d.type === "hello" && seatRef.current === "A") {
             const cur = roomRef.current;
             if (cur) publish({ ...cur, names: { ...cur.names, B: d.name } });
@@ -5474,17 +5503,19 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     setScreen("table");
   };
 
-  const joinTable = async (forceCode) => {
+  const joinTable = async (forceCode, bumpGuest = false) => {
     const code = (typeof forceCode === "string" ? forceCode : codeIn).trim().toUpperCase();
     if (code.length !== 4) return setMsg(L("Il codice è di quattro lettere.","The code is four letters."));
     // If this device was already at this table, reclaim its own seat and hand — so a
     // host (or guest) who dropped can come back in with just the code. Otherwise take
     // the seat that's free: the relay's presence tells us which chair is empty.
+    // A bump guest skips the inference entirely — the bump host is always seat A, so
+    // the guest is seat B, declared outright (no racy presence snapshot to lose to).
     const sess = await loadSession();
     const rejoin = !!(sess && sess.code === code && (sess.seat === "A" || sess.seat === "B"));
     const mySeat = rejoin ? sess.seat : "B"; // provisional when claiming — corrected on first presence
     const nm = rejoin ? (sess.name || name.trim() || (mySeat === "A" ? "Oste" : "Ospite")) : (name.trim() || "Ospite");
-    claimRef.current = !rejoin && !hasStore(); // fresh relay join → claim the empty chair
+    claimRef.current = !rejoin && !hasStore() && !bumpGuest; // fresh relay join → claim the empty chair
     setSeat(mySeat);
     seatRef.current = mySeat;
     setLink("waiting");
@@ -5576,7 +5607,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           if (d.host) openTable(d.code);
           else {
             setCodeIn(d.code);
-            joinTable(d.code);
+            joinTable(d.code, true); // bump guest → seat B outright, no claim race
           }
         }
       };

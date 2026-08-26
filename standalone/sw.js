@@ -1,4 +1,4 @@
-const CACHE = "osteria-467771";
+const CACHE = "osteria-468314";
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.add("/")).then(() => self.skipWaiting()).catch(() => self.skipWaiting()));
 });

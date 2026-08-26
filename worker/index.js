@@ -145,20 +145,28 @@ export class Table {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  // Presence carries which seats are currently held, so a phone rejoining with the
-  // code can claim the empty one (e.g. take over after the host dropped) instead of
-  // colliding with a seat that's already live.
-  announce() {
-    const sockets = this.ctx.getWebSockets();
+  // Which seats are currently held, and by which device token. A held seat carries
+  // the holder's client id (or `true` for an old client that sent none), so a phone
+  // rejoining with the code can claim the empty chair — and the seat handler can
+  // refuse a chair already held by a *different* device.
+  heldMap() {
     const held = { A: false, B: false };
-    for (const ws of sockets) {
+    for (const ws of this.ctx.getWebSockets()) {
       let a = null;
       try {
         a = ws.deserializeAttachment();
       } catch {}
-      if (a && (a.seat === "A" || a.seat === "B")) held[a.seat] = true;
+      if (a && (a.seat === "A" || a.seat === "B")) held[a.seat] = a.cid || true;
     }
-    const note = JSON.stringify({ type: "presence", n: sockets.length, held });
+    return held;
+  }
+
+  // Presence carries the held map so a phone rejoining with the code can claim the
+  // empty one (e.g. take over after the host dropped) instead of colliding with a
+  // seat that's already live.
+  announce() {
+    const sockets = this.ctx.getWebSockets();
+    const note = JSON.stringify({ type: "presence", n: sockets.length, held: this.heldMap() });
     for (const ws of sockets) {
       try {
         ws.send(note);
@@ -174,9 +182,25 @@ export class Table {
       return;
     }
     // A socket declares which seat it holds; kept in a hibernation-safe attachment
-    // and reflected back to everyone via presence. Not relayed to the peer.
+    // and reflected back to everyone via presence. Not relayed to the peer. If a
+    // *different* device already holds that seat, refuse it — two phones must never
+    // land on the same player — and tell the caller so it can take the other chair.
     if (data.type === "seat" && (data.seat === "A" || data.seat === "B")) {
-      ws.serializeAttachment({ seat: data.seat });
+      const cid = typeof data.cid === "string" ? data.cid : null;
+      for (const peer of this.ctx.getWebSockets()) {
+        if (peer === ws) continue;
+        let a = null;
+        try {
+          a = peer.deserializeAttachment();
+        } catch {}
+        if (a && a.seat === data.seat && a.cid && cid && a.cid !== cid) {
+          try {
+            ws.send(JSON.stringify({ type: "seattaken", seat: data.seat, held: this.heldMap() }));
+          } catch {}
+          return;
+        }
+      }
+      ws.serializeAttachment({ seat: data.seat, cid });
       this.announce();
       return;
     }
