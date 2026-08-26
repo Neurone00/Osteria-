@@ -1667,10 +1667,11 @@ function fl2ScanEnd(ship) {
 // no-deploy circle (radius R/2); ships go in the outer ring.
 const FL2_ZONES = { A: [2, 3, 4, 5], B: [6, 7, 0, 1] };
 // Modern splits the ring into 8 octants (each side a contiguous half). Pirate uses
-// four big quadrants, split so the fleets start on opposite sides: each side picks
-// one of its two quadrants and lays its fleet — both at once, in secret.
+// four big quadrants, alternated so no two neighbours belong to the same side —
+// A owns the opposite pair 0 & 2, B owns 1 & 3. Each side picks one of its two and
+// lays its fleet — both at once, in secret.
 const FL2_QUAD = 4;
-const FL2_ZONES_PIRATE = { A: [0, 3], B: [1, 2] };
+const FL2_ZONES_PIRATE = { A: [0, 2], B: [1, 3] };
 const fl2ZonesFor = (pirate) => (pirate ? FL2_ZONES_PIRATE : FL2_ZONES);
 const fl2Sectors = (pirate) => (pirate ? FL2_QUAD : 8); // ring divisions
 // which sector (quadrant on pirate, octant on modern) a point falls in

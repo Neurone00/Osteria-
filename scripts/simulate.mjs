@@ -1205,9 +1205,12 @@ function flotta2PirateTests() {
   if (typeof g.wind !== "number" || g.wind < 0 || g.wind > 2 * Math.PI) fail("flotta2 pirati", "wind should be a random 360° bearing");
   if ("coin" in g || "first" in g) fail("flotta2 pirati", "the doubloon toss should be gone");
   if (R.fl2Sectors(true) !== 4) fail("flotta2 pirati", "pirate should split the ring into four quadrants");
-  // the sides get disjoint pairs of quadrants: A owns 0 & 3, B owns 1 & 2
+  // the sides get disjoint, alternated quadrants: A owns 0 & 2, B owns 1 & 3, so no
+  // two neighbouring quadrants belong to the same side
   const za = R.fl2ZonesFor(true).A, zb = R.fl2ZonesFor(true).B;
   if (za.length !== 2 || zb.length !== 2 || za.some((q) => zb.includes(q))) fail("flotta2 pirati", "each side should own two private quadrants");
+  const n = R.fl2Sectors(true);
+  for (const q of za) if (za.includes((q + 1) % n) || za.includes((q + n - 1) % n)) fail("flotta2 pirati", "a side's quadrants should alternate, never be adjacent");
   // both sides deploy at once, in secret — no ordering; each is confined to its own quadrants
   if (R.flotta2Deploy(g, "A", { zone: zb[0], ships: {} }) != null) fail("flotta2 pirati", "a side can't deploy into the other's quadrant");
   g = R.flotta2Deploy(g, "A", { zone: za[0], ships: {} }).g; // A claims one of its own
