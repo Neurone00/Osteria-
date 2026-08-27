@@ -3260,7 +3260,11 @@ function dealTactics(dealer, opts, tally) {
     simple, // essential rules: two classes, fixed company of 4, small board, no banners
     rules,
     board: tacticsBoard(simple, rules.random),
-    phase: "setup", // setup (draft + place, hidden & at once) → battle
+    // random maps open on a field handshake: both study the layout and accept it, or
+    // refuse to reroll — up to TACT_REFUSALS times each. Classic maps are fixed, so
+    // there's nothing to agree on and they go straight to setup.
+    phase: rules.random ? "field" : "setup", // field → setup (draft + place) → battle
+    field: rules.random ? { ok: { A: false, B: false }, refused: { A: 0, B: 0 } } : null,
     setup: { A: null, B: null }, // each seat's locked-in placements; hidden until both are in
     units: {}, // id → { id, owner, type, hp, max, q, r }
     order: [], // stable unit ids
@@ -3307,6 +3311,36 @@ function tacticsSimpleLegal(company) {
 // `placements` is [{ type, q, r }] — the drafted company, each on a legal hex.
 // Each seat locks in its own hidden company independently — no turn hand-off, so
 // nothing hangs on a turn-flip message arriving. Whoever's write makes both
+// The random-map handshake. Each side may refuse the field up to TACT_REFUSALS
+// times, rerolling a fresh layout that both must then approve again; when both
+// accept the same field, setup opens. A dropped accept re-sends (its slot is still
+// false) and converges, same as the setup lock-in below.
+const TACT_REFUSALS = 2;
+const tacticsFieldReady = (gs) => gs.phase === "field" && gs.field && gs.field.ok.A && gs.field.ok.B;
+function tacticsFieldAccept(gs, seat) {
+  if (gs.done || gs.phase !== "field" || !gs.field || gs.field.ok[seat]) return null;
+  const g = clone(gs);
+  g.field.ok[seat] = true;
+  if (g.field.ok.A && g.field.ok.B) g.phase = "setup"; // both agree → on to the company
+  return { g, quiet: true, ev: { t: "fieldok", seat } };
+}
+function tacticsFieldRefuse(gs, seat) {
+  if (gs.done || gs.phase !== "field" || !gs.field || gs.field.refused[seat] >= TACT_REFUSALS) return null;
+  const g = clone(gs);
+  g.field.refused[seat] += 1;
+  g.field.ok = { A: false, B: false }; // a fresh field — any prior approval is void
+  g.board = tacticsBoard(g.simple, true);
+  return { g, ev: { t: "fieldno", seat } };
+}
+// Safety net: both accepted but setup never opened (a lost/duplicated accept under
+// the live transport) — any seat resolves it deterministically.
+function tacticsFieldStart(gs) {
+  if (!tacticsFieldReady(gs) || gs.done) return null;
+  const g = clone(gs);
+  g.phase = "setup";
+  return { g, quiet: true, ev: { t: "fieldgo" } };
+}
+
 // companies present opens the battle; if two writes race and one is dropped, the
 // losing seat simply re-submits (its slot is still empty) and converges.
 function tacticsSetup(gs, seat, placements) {
@@ -7959,11 +7993,26 @@ function Tactics({ room, gs, seat, commit }) {
     }
   }, [gs.phase, gs.setup && gs.setup.A, gs.setup && gs.setup.B, gs.turn, seat]);
 
+  // random-map handshake: my acceptance survives a re-render so a dropped write can
+  // re-send. A refusal (mine or theirs) mints a fresh board, which clears the flag.
+  const fieldOkRef = useRef(false);
+  useEffect(() => { fieldOkRef.current = false; }, [gs.board && gs.board.castle && gs.board.castle.A, seat]); // new field → re-approve
+  useEffect(() => {
+    if (gs.phase === "field" && !gs.done && gs.field && !gs.field.ok[seat] && fieldOkRef.current) {
+      commit(tacticsFieldAccept(gs, seat)); // a dropped accept — send it again
+    }
+  }, [gs.phase, gs.field && gs.field.ok[seat]]); // eslint-disable-line
+  // self-heal: both accepted but setup never opened
+  useEffect(() => {
+    if (tacticsFieldReady(gs) && !gs.done) commit(tacticsFieldStart(gs));
+  }, [gs.phase, gs.field && gs.field.ok.A, gs.field && gs.field.ok.B]); // eslint-disable-line
+
   // big phase title cards: ROSTER / DEPLOYMENT while setting up, ALLE ARMI when
   // the battle opens and both companies are revealed at once
   useEffect(() => {
     let card = null;
     if (gs.phase === "battle" && !gs.done) card = { title: L("ALLE ARMI", "TO ARMS"), sub: null };
+    else if (gs.phase === "field" && !gs.done) card = { title: L("IL CAMPO", "THE FIELD"), sub: L("Accordo", "Handshake") };
     else if (gs.phase === "setup" && mySetup) card = step === "roster" ? { title: L("COMPAGNIA", "COMPANY"), sub: L("Fase 1", "Phase 1") } : { title: L("SCHIERAMENTO", "DEPLOYMENT"), sub: L("Fase 2", "Phase 2") };
     if (!card) return;
     setBanner(card);
@@ -8343,7 +8392,7 @@ function Tactics({ room, gs, seat, commit }) {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ width: 12, height: 12, borderRadius: 3, background: TSIDE[gs.turn], display: "inline-block", opacity: gs.done ? 0.3 : 1 }} />
           <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 13 }}>
-            {gs.phase === "battle" ? `${L("Mossa", "Move")} ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} ${L("di", "of")} ${TACT.MOVE_CAP}` : gs.phase === "setup" ? (step === "roster" ? L("Compagnia", "Company") : L("Schieramento", "Deployment")) : "…"}
+            {gs.phase === "battle" ? `${L("Mossa", "Move")} ${Math.min(gs.moves + 1, TACT.MOVE_CAP)} ${L("di", "of")} ${TACT.MOVE_CAP}` : gs.phase === "field" ? L("Il campo", "The field") : gs.phase === "setup" ? (step === "roster" ? L("Compagnia", "Company") : L("Schieramento", "Deployment")) : "…"}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
@@ -8551,6 +8600,32 @@ function Tactics({ room, gs, seat, commit }) {
             <button onClick={() => setInfo(null)} style={{ ...plain, cursor: "pointer", padding: 4, color: T.ink30, display: "grid", placeItems: "center", WebkitTapHighlightColor: "transparent" }}>
               <Ico n="plus" s={15} c={T.ink30} style={{ transform: "rotate(45deg)" }} />
             </button>
+          </div>
+        );
+      })()}
+
+      {gs.phase === "field" && !gs.done && gs.field && (() => {
+        const mineOk = gs.field.ok[seat], foeOk = gs.field.ok[other(seat)];
+        const left = TACT_REFUSALS - gs.field.refused[seat];
+        const accept = () => { fieldOkRef.current = true; commit(tacticsFieldAccept(gs, seat)); };
+        const refuse = () => { fieldOkRef.current = false; commit(tacticsFieldRefuse(gs, seat)); };
+        return (
+          <div style={{ marginTop: 12 }}>
+            <Micro style={{ textAlign: "center" }}>
+              {L("Campo casuale — accordatevi o rilanciate", "Random field — agree on it or reroll")} · {who(room, seat)} {mineOk ? "✓" : "…"} · {who(room, other(seat))} {foeOk ? "✓" : "…"}
+            </Micro>
+            {mineOk ? (
+              <Micro style={{ textAlign: "center", marginTop: 8 }}>{L("Hai accettato — in attesa dell’altro", "You accepted — waiting for the other")}</Micro>
+            ) : (
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <Button kind="outline" full disabled={left <= 0} onClick={refuse}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> {left > 0 ? L(`Rilancia · ${left}`, `Reroll · ${left}`) : L("Rifiuti finiti", "No refusals left")}</span>
+                </Button>
+                <Button kind="solid" full tone={me} onClick={accept}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="check" s={15} /> {L("Accetta il campo", "Accept the field")}</span>
+                </Button>
+              </div>
+            )}
           </div>
         );
       })()}

@@ -37,6 +37,7 @@ const EXPORTS = [
   "dealCamicia", "camiciaFlip", "demand",
   "makePeppaDeck", "dealPeppa", "peppaDraw", "peppaShed", "peppaShuffle", "peppaReady", "peppaReorder", "peppaOffer",
   "TACT", "dealTactics", "tacticsSetup", "tacticsActivate", "tacticsReach", "tacticsTargets",
+  "tacticsFieldAccept", "tacticsFieldRefuse", "tacticsFieldStart", "tacticsFieldReady", "TACT_REFUSALS",
   "tacticsRoll", "tacticsDeployable", "tacticsBoard", "hdist", "hkey", "unhkey", "HEX_DIRS",
   "dealBriscola", "briscolaPlay", "brisPoints",
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
@@ -271,6 +272,32 @@ function tacticsHexChecks() {
   for (const [dq, dr] of dirs) if (R.hdist(A, { q: dq, r: dr }) !== 1) fail("tactics hex", `neighbor ${dq},${dr} not at distance 1`);
   if (R.hdist({ q: 0, r: 0 }, { q: 2, r: -1 }) !== 2) fail("tactics hex", "distance math wrong");
 }
+function tacticsFieldTests() {
+  // classic (fixed) maps skip the handshake and go straight to setup
+  const cls = R.dealTactics("A", { random: false }, { A: 0, B: 0 });
+  if (cls.phase !== "setup" || cls.field != null) fail("tactics field", "a fixed map should skip the handshake");
+  // random maps open on the field handshake
+  let g = R.dealTactics("A", {}, { A: 0, B: 0 });
+  if (g.phase !== "field" || !g.field) fail("tactics field", "a random map should open on the handshake");
+  // one accept doesn't open setup; both do
+  g = R.tacticsFieldAccept(g, "A").g;
+  if (g.phase !== "field") fail("tactics field", "one acceptance shouldn't start setup");
+  if (R.tacticsFieldAccept(g, "A") != null) fail("tactics field", "can't accept twice");
+  g = R.tacticsFieldAccept(g, "B").g;
+  if (g.phase !== "setup") fail("tactics field", "both acceptances should open setup");
+  // a refusal voids approvals and rerolls the board
+  let r = R.dealTactics("A", {}, { A: 0, B: 0 });
+  r = R.tacticsFieldAccept(r, "A").g;
+  const rr = R.tacticsFieldRefuse(r, "B");
+  if (!rr) fail("tactics field", "a legal refusal was rejected");
+  r = rr.g;
+  if (r.field.ok.A || r.field.ok.B) fail("tactics field", "a refusal must void both approvals");
+  if (r.phase !== "field") fail("tactics field", "a refusal keeps the handshake open");
+  // refusals are capped at TACT_REFUSALS per seat
+  let cap = R.dealTactics("A", {}, { A: 0, B: 0 });
+  for (let i = 0; i < R.TACT_REFUSALS; i++) { const x = R.tacticsFieldRefuse(cap, "A"); if (!x) fail("tactics field", "refusal within cap rejected"); cap = x.g; }
+  if (R.tacticsFieldRefuse(cap, "A") != null) fail("tactics field", "a seat can't refuse more than the cap");
+}
 function tacticsConnectedKeys(openKeys) {
   const set = new Set(openKeys);
   const seen = new Set([openKeys[0]]);
@@ -326,7 +353,24 @@ function playTactics() {
   const simple = Math.random() < 0.5; // exercise both the essential and full rules
   const passAllies = Math.random() < 0.5; // and both the move-through-allies settings
   let g = R.dealTactics("A", { simple, passAllies }, { A: 0, B: 0 });
-  const openKeys = g.board.cells.map((c) => R.hkey(c.q, c.r)).filter((k) => !g.board.blocked[k]);
+  // random maps (the default) open on a field handshake: accept it, or refuse a few
+  // times first — each refusal rerolls the board and voids both approvals.
+  let fguard = 0;
+  while (g.phase === "field") {
+    if (++fguard > 20) return fail("tactics", "field handshake never resolved");
+    const seat = !g.field.ok.A ? "A" : "B";
+    if (g.field.refused[seat] < R.TACT_REFUSALS && Math.random() < 0.3) {
+      const r = R.tacticsFieldRefuse(g, seat);
+      if (!r) return fail("tactics", "a legal refusal was rejected");
+      g = r.g;
+      if (g.field.ok.A || g.field.ok.B) return fail("tactics", "a refusal should void both approvals");
+    } else {
+      const r = R.tacticsFieldAccept(g, seat);
+      if (!r) return fail("tactics", "a legal accept was rejected");
+      g = r.g;
+    }
+  }
+  let openKeys = g.board.cells.map((c) => R.hkey(c.q, c.r)).filter((k) => !g.board.blocked[k]);
   if (!tacticsConnectedKeys(openKeys)) return fail("tactics", "generated board is not fully connected");
   for (const k of g.board.banners) if (!openKeys.includes(k)) return fail("tactics", "a banner sits on a blocked or off-board hex");
   // roster + deployment are one hidden step: each seat drafts a company and
@@ -1765,6 +1809,11 @@ for (const [label, run] of runs) {
   const before = failures;
   tacticsHexChecks();
   console.log(`${failures === before ? "✓" : "✗"} ${"condottieri hex math".padEnd(44)} distance, neighbors, rounding`);
+}
+{
+  const before = failures;
+  tacticsFieldTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"condottieri field handshake".padEnd(44)} accept, refuse (max 2), reroll, classic skips`);
 }
 {
   const before = failures;
