@@ -132,6 +132,24 @@ shows *disconnected*, the **Reconnect** control in the header re-runs the handsh
 | Inside a Claude artifact | `window.storage` shared keys, polled every 1.2 s |
 | On the Cloudflare Worker | WebSocket to `/room/CODE`, relayed and persisted by a Durable Object |
 | Any other static host | WebRTC data channel via [PeerJS](https://peerjs.com), loaded from a CDN at runtime |
+| No network at all | **Web Bluetooth** — both phones connect to a shared Osteria BLE service and sync over it |
+
+### Bluetooth (offline, no network)
+
+On the home screen, under **Bluetooth**, one phone taps **Host** and the other **Join** (Web Bluetooth needs Chrome
+on Android or desktop). Because a browser page can only be a BLE *central*, never a peripheral, the two phones can't
+pair directly — they meet on a shared **Osteria GATT service** and sync the room over one notify+write
+characteristic, the state JSON fragmented into short `[msgId, total, index]` frames (a BLE write is MTU-capped) and
+reassembled on the far side. That shared service is the one piece that has to live outside the browser: run the
+bundled relay on any machine with Bluetooth —
+
+```bash
+npm install @abandonware/bleno
+npm run bt-relay        # advertises as "Osteria"; connect both phones to it
+```
+
+— or point the phones at any peripheral exposing the same service UUID (`scripts/bt-relay.mjs` has it). No Wi-Fi, no
+internet, no server. It's the same one-writer-per-move state as every other transport.
 
 For the self-hosted path the host's browser registers the peer id `osteria-tavolo-CODE` on PeerJS's free public
 broker, and the guest dials that id. After the handshake the two phones talk directly — the broker only introduces

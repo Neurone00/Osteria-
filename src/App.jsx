@@ -51,6 +51,26 @@ function shuffle(a) {
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const tilt = (id) => (((id.charCodeAt(0) * 31 + id.charCodeAt(1) * 7) % 9) - 4) * 0.9;
 
+/* ── Bluetooth transport (the fourth peer channel) ──────────────
+   A browser page can only be a GATT *central*, never a peripheral, so two phones
+   can't pair page-to-page directly — they meet on a shared Osteria BLE service (a
+   host peripheral or a small relay) and sync the room over one notify+write
+   characteristic. The room JSON is fragmented into short frames — [msgId, total,
+   index] + payload — because a BLE write is capped near the negotiated MTU; the far
+   side reassembles per msgId. Same state shape as the other three transports. */
+const BT_SERVICE = "6f737465-7269-6161-0000-000000000001"; // "oster…" — a fixed 128-bit UUID
+const BT_CHAR = "6f737465-7269-6161-0000-000000000002";
+const BT_FRAME = 180; // payload bytes per frame, comfortably under a long-write
+const btSupported = () => typeof navigator !== "undefined" && !!navigator.bluetooth;
+function btConcat(parts) {
+  let len = 0;
+  for (const p of parts) len += p.length;
+  const out = new Uint8Array(len);
+  let o = 0;
+  for (const p of parts) { out.set(p, o); o += p.length; }
+  return out;
+}
+
 // Flotta2's deploy and mines are the one moment both players write at the SAME
 // version — each fills its own slot (deploy[seat] / mines[seat]) at once. Plain
 // last-writer-wins would drop one seat's submission and hang the other on "waiting"
@@ -5802,6 +5822,77 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     [receive, publish]
   );
 
+  // Bluetooth: connect to the shared Osteria GATT service and sync the room over one
+  // notify+write characteristic. requestDevice must run from a user gesture (a tap).
+  // Host/guest is fixed at connect (seat A / seat B) since BLE has no relay presence.
+  const openBluetooth = useCallback(
+    async (host, nm) => {
+      if (!btSupported()) {
+        setMsg(L("Il Bluetooth non è disponibile in questo browser (serve Chrome su Android/desktop).", "Bluetooth isn't available in this browser (needs Chrome on Android/desktop)."));
+        return false;
+      }
+      let device, characteristic;
+      try {
+        device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }], optionalServices: [BT_SERVICE] });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(BT_SERVICE);
+        characteristic = await service.getCharacteristic(BT_CHAR);
+        await characteristic.startNotifications();
+      } catch (e) {
+        if (String(e).includes("cancel")) return false; // the user dismissed the chooser
+        setMsg(L("Nessun tavolo Bluetooth trovato. Assicurati che l'altro dispositivo sia in ascolto.", "No Bluetooth table found. Make sure the other device is listening."));
+        return false;
+      }
+      setLink("waiting");
+      // reassemble incoming frames per message id
+      const inbox = {};
+      characteristic.addEventListener("characteristicvaluechanged", (ev) => {
+        const dv = ev.target.value;
+        if (!dv || dv.byteLength < 3) return;
+        const id = dv.getUint8(0), total = dv.getUint8(1), idx = dv.getUint8(2);
+        const payload = new Uint8Array(dv.buffer.slice(dv.byteOffset + 3, dv.byteOffset + dv.byteLength));
+        const slot = inbox[id] || (inbox[id] = { total, parts: [] });
+        slot.parts[idx] = payload;
+        if (slot.parts.filter(Boolean).length !== slot.total) return;
+        delete inbox[id];
+        let d;
+        try { d = JSON.parse(new TextDecoder().decode(btConcat(slot.parts))); } catch { return; }
+        if (d && d.hello !== undefined) {
+          const cur = roomRef.current;
+          if (cur) publish({ ...cur, names: { ...cur.names, B: d.hello } });
+        } else if (d && d.type === "state" && d.room) {
+          setLink("live");
+          receive(d.room);
+        }
+      });
+      device.addEventListener("gattserverdisconnected", () => setLink("lost"));
+      // fragment the JSON into short frames and write them in order
+      let seq = 0;
+      const write = async (obj) => {
+        if (!device.gatt.connected) return;
+        const bytes = new TextEncoder().encode(JSON.stringify(obj));
+        const total = Math.max(1, Math.ceil(bytes.length / BT_FRAME));
+        const id = (seq = (seq + 1) & 0xff);
+        for (let i = 0; i < total; i++) {
+          const slice = bytes.subarray(i * BT_FRAME, (i + 1) * BT_FRAME);
+          const frame = new Uint8Array(3 + slice.length);
+          frame[0] = id; frame[1] = total; frame[2] = i;
+          frame.set(slice, 3);
+          try { await characteristic.writeValueWithResponse(frame); } catch { return; }
+        }
+      };
+      setLink("live");
+      if (!host) write({ hello: nm || "Ospite" });
+      netRef.current = {
+        send: (r) => { write({ type: "state", room: r }); },
+        hello: async (n) => { await write({ hello: n || "Ospite" }); return true; },
+        close: () => { try { device.gatt.disconnect(); } catch {} },
+      };
+      return true;
+    },
+    [receive, publish]
+  );
+
   /* ── lifecycle ── */
   const openTable = async (preCode) => {
     // preCode is only a real 4-letter code from the bump flow; when this is a
@@ -5835,6 +5926,38 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       netRef.current.send(fresh);
     } else await openPeer(code, true, name);
     saveSession({ code, seat: "A", name: name.trim() || "Oste", room: fresh });
+    setScreen("table");
+  };
+
+  // Host a table over Bluetooth: same fresh room as openTable, but the sync runs on
+  // the BLE characteristic instead of the relay. Host is seat A.
+  const openTableBluetooth = async () => {
+    const code = Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
+    const g0 = mostPlayedGame(boardRef.current);
+    const fresh = {
+      code, v: 0, ts: Date.now(),
+      names: { A: name.trim() || "Oste", B: null },
+      status: "lobby", game: g0,
+      opts: { ...GAMES[g0].def, ...(savedRules[g0] || {}) },
+      scores: showScores, gs: null, log: [], ev: null, anim: null,
+    };
+    setSeat("A"); seatRef.current = "A"; claimRef.current = false;
+    roomRef.current = fresh; setRoom(fresh); setLink("waiting");
+    const ok = await openBluetooth(true, name);
+    if (!ok) return;
+    netRef.current.send(fresh); // broadcast the opening state to whoever's on the wire
+    saveSession({ code, seat: "A", name: name.trim() || "Oste", room: fresh });
+    setScreen("table");
+  };
+  // Join a table over Bluetooth: guest is seat B, greets, and adopts the host's state.
+  const joinTableBluetooth = async () => {
+    const nm = name.trim() || "Ospite";
+    setSeat("B"); seatRef.current = "B"; claimRef.current = false;
+    setLink("waiting");
+    const ok = await openBluetooth(false, nm);
+    if (!ok) return;
+    await netRef.current.hello(nm);
+    saveSession({ code: "BT", seat: "B", name: nm });
     setScreen("table");
   };
 
@@ -6394,6 +6517,24 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                     {L("Entra", "Join")}
                   </Button>
                 </div>
+                {btSupported() && (
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 2px 4px" }}>
+                      <div style={{ flex: 1, height: 1, background: T.line }} />
+                      <Micro>Bluetooth</Micro>
+                      <div style={{ flex: 1, height: 1, background: T.line }} />
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <Button kind="line" full onClick={openTableBluetooth}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="bump" s={15} /> {L("Ospita", "Host")}</span>
+                      </Button>
+                      <Button kind="line" full onClick={joinTableBluetooth}>
+                        {L("Entra", "Join")}
+                      </Button>
+                    </div>
+                    <Micro style={{ textAlign: "center", marginTop: 6 }}>{L("Vicini, senza rete — scegli il tavolo Bluetooth", "Nearby, no network — pick the Bluetooth table")}</Micro>
+                  </>
+                )}
               </>
             ) : (
               <>

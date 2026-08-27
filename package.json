@@ -14,7 +14,8 @@
     "predeploy": "npm run bundle",
     "simulate": "node scripts/simulate.mjs",
     "smoke": "node scripts/smoke.mjs",
-    "test": "npm run smoke && npm run simulate"
+    "test": "npm run smoke && npm run simulate",
+    "bt-relay": "node scripts/bt-relay.mjs"
   },
   "dependencies": {
     "jsdom": "^30.0.1",

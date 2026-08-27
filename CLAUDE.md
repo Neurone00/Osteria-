@@ -38,9 +38,12 @@ standalone/        generated — the single file Cloudflare uploads. Never hand-
 - **`src/App.jsx` must keep running unmodified as a Claude artifact.** That means: no `localStorage`, no
   `sessionStorage`, and no imports beyond `react` on any code path that runs when `window.storage` exists. The
   browser-storage calls that do exist are gated behind `!hasStore()` and wrapped in try/catch. Keep it that way.
-- **Three transports, chosen at runtime, same state shape on all of them:** `window.storage` shared keys in the
-  artifact; a WebSocket to `/room/CODE` when served by the Worker; PeerJS as the fallback for dumb static hosts.
-  Adding a fourth is fine; branching the state shape is not.
+- **Four transports, chosen at runtime, same state shape on all of them:** `window.storage` shared keys in the
+  artifact; a WebSocket to `/room/CODE` when served by the Worker; PeerJS as the fallback for dumb static hosts;
+  and **Web Bluetooth** (`openBluetooth`) for offline, no-network play. A browser can only be a BLE *central*, so
+  the two phones meet on a shared Osteria GATT service — a host peripheral or the `scripts/bt-relay.mjs` relay —
+  and sync the room over one notify+write characteristic, the JSON fragmented into short `[msgId,total,index]`
+  frames because a BLE write is MTU-capped. Adding a fifth is fine; branching the state shape is not.
 - **One writer per move.** The player whose turn it is computes the whole next state, bumps `v`, and sends the
   lot. Receivers adopt anything with a higher `v` and ignore the rest. Turn-based play means writes never race —
   don't introduce partial/delta updates without solving that.
