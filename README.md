@@ -22,8 +22,47 @@ more the throw's seed is stirred — the dice cousin of the tap-timed shuffle.
 Cards land with a slam: overshoot animation, screen jolt, a synthesised thwack, and a haptic tap on phones.
 Sound and haptics can be turned off in the header; the whole motion set respects `prefers-reduced-motion`.
 
-Cards land with a slam: overshoot animation, screen jolt, a synthesised thwack, and a haptic tap on phones.
-Sound and haptics can be turned off in the header; the whole motion set respects `prefers-reduced-motion`.
+## Two phones, and installing it as an app
+
+The live game is **https://osteria.neurone00.workers.dev**.
+
+**Playing with a friend (two phones, over the internet):** this needs no build and no install.
+
+1. Both phones open the URL above.
+2. One taps **Open a table** — it shows a four-letter code.
+3. The other types that code and taps **Join**. (Or both tap **Bump** to be matched by proximity.)
+
+That's it — they're now in the same game. Both phones just need internet (Wi-Fi *or* mobile data; they don't have
+to be on the same network). The turn passes back and forth and each phone only shows its own hand.
+
+**Getting an app icon (and offline):** the site is a full PWA, so on the deployed URL Chrome offers **Install app**
+(Android) or *Add to Home Screen*. Once installed it opens like an app, works offline (the service worker caches
+it), and — because it always loads the live site — **updates itself whenever you `npm run deploy`**. No app store,
+no rebuild.
+
+**Making a shareable APK:** two routes, both auto-update from Cloudflare because they wrap the live URL:
+
+- *No code* — open [PWABuilder](https://www.pwabuilder.com), paste `https://osteria.neurone00.workers.dev`, and
+  download an Android package (a TWA). Same for [Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap).
+- *With the bundled config* — `capacitor.config.json` already points at the live URL. Build it yourself:
+
+  ```bash
+  npm install @capacitor/core @capacitor/cli @capacitor/android
+  npm run bundle              # standalone/ is the offline fallback baked into the apk
+  npx cap add android         # once
+  npx cap sync android
+  cd android && ./gradlew assembleDebug
+  # → android/app/build/outputs/apk/debug/app-debug.apk
+  ```
+
+  Because `server.url` is the Cloudflare URL, the installed APK shows the live site and auto-updates; the
+  `standalone/` bundle rides along as the offline fallback.
+
+**The one hard case — two phones with *no* internet at all.** A web page can't open a raw radio link (Bluetooth or
+Wi-Fi Direct) between two browsers, so truly offline two-phone play isn't possible from the website itself. The
+options are: a laptop running the bundled Bluetooth relay (`npm run bt-relay`, see below); putting both phones on
+one phone's hotspot (no internet needed, the relay/PeerJS still connect over the local link); or a native build with
+a Bluetooth plugin, which the Capacitor config above is the starting point for.
 
 ## Deploy to Cloudflare
 

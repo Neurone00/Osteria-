@@ -1,0 +1,12 @@
+{
+  "appId": "it.moskitodesign.osteria",
+  "appName": "Osteria",
+  "webDir": "standalone",
+  "server": {
+    "url": "https://osteria.neurone00.workers.dev",
+    "cleartext": false
+  },
+  "android": {
+    "backgroundColor": "#E7E5E0"
+  }
+}
