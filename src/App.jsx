@@ -5924,12 +5924,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         },
       };
       setLink("waiting");
-      let ok = false;
-      try { ok = host ? await N.host(nm, handlers) : await N.guest(nm, handlers); } catch { ok = false; }
+      let ok = false, err = null;
+      try { ok = host ? await N.host(nm, handlers) : await N.guest(nm, handlers); } catch (e) { err = e; ok = false; }
       if (!ok) {
-        setMsg(host
-          ? L("Impossibile avviare il tavolo Bluetooth.", "Couldn't start the Bluetooth table.")
-          : L("Nessun tavolo Bluetooth trovato lì vicino.", "No Bluetooth table found nearby."));
+        const detail = (err && (err.message || String(err))) || "";
+        const lead = host ? L("Bluetooth host", "Bluetooth host") : L("Bluetooth", "Bluetooth");
+        setMsg(detail ? `${lead}: ${detail}` : `${lead}: ${L("non riuscito", "failed")}`);
         return false;
       }
       setLink("live");
@@ -6556,7 +6556,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           >
             Osteria<span style={{ color: "#A5342F", display: "inline-block", transform: "rotate(7deg)" }}>!</span>
           </h1>
-          <Micro style={{ textAlign: "center", marginTop: 6 }}>{L("Due giocatori · due telefoni · un codice", "Two players · two phones · one code")}</Micro>
+          <Micro style={{ textAlign: "center", marginTop: 6 }}>{nativeSupported() ? L("Due giocatori · due telefoni · offline", "Two players · two phones · offline") : L("Due giocatori · due telefoni · un codice", "Two players · two phones · one code")}</Micro>
 
           <div style={{ marginTop: 18 }}>
             <input
@@ -6573,69 +6573,52 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 table are the quieter fallbacks. In the artifact (single device,
                 no server) there's no Bump, so opening a table leads. */}
             {!hasStore() ? (
-              <>
-                <div style={{ marginTop: 10 }}>
-                  <Button full onClick={() => bump()}>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-                      <Ico n="bump" s={20} /> {L("Bump — avvicina i telefoni", "Bump — tap phones together")}
-                    </span>
+              nativeSupported() ? (
+                <>
+                  {/* Installed app, offline: the only way in is the direct phone-to-phone
+                      Bluetooth link. Bump and codes need the network, so they're gone. */}
+                  <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                    <Button full onClick={openTableNative}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Ico n="bump" s={19} /> {L("Ospita", "Host")}</span>
+                    </Button>
+                    <Button kind="line" full onClick={joinTableNative}>
+                      {L("Entra", "Join")}
+                    </Button>
+                  </div>
+                  <Micro style={{ textAlign: "center", marginTop: 8 }}>{L("Vicini, offline — uno ospita, l'altro entra", "Nearby, offline — one hosts, the other joins")}</Micro>
+                </>
+              ) : (
+                <>
+                  {/* Online (web): Bump leads, code and a fresh table are the fallbacks.
+                      No Bluetooth here — offline play lives in the installed app. */}
+                  <div style={{ marginTop: 10 }}>
+                    <Button full onClick={() => bump()}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <Ico n="bump" s={20} /> {L("Bump — avvicina i telefoni", "Bump — tap phones together")}
+                      </span>
+                    </Button>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
+                    <div style={{ flex: 1, height: 1, background: T.line }} />
+                    <Micro>{L("oppure", "or")}</Micro>
+                    <div style={{ flex: 1, height: 1, background: T.line }} />
+                  </div>
+                  <Button kind="line" full onClick={() => openTable()}>
+                    {L("Apri un tavolo", "Open a table")}
                   </Button>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
-                  <div style={{ flex: 1, height: 1, background: T.line }} />
-                  <Micro>{L("oppure", "or")}</Micro>
-                  <div style={{ flex: 1, height: 1, background: T.line }} />
-                </div>
-                <Button kind="line" full onClick={() => openTable()}>
-                  {L("Apri un tavolo", "Open a table")}
-                </Button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <input
-                    value={codeIn}
-                    onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
-                    placeholder={L("CODICE", "CODE")}
-                    style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: MONO, fontSize: 18, minWidth: 0 }}
-                  />
-                  <Button kind="line" onClick={() => joinTable()}>
-                    {L("Entra", "Join")}
-                  </Button>
-                </div>
-                {nativeSupported() ? (
-                  <>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 2px 4px" }}>
-                      <div style={{ flex: 1, height: 1, background: T.line }} />
-                      <Micro>Bluetooth</Micro>
-                      <div style={{ flex: 1, height: 1, background: T.line }} />
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <Button kind="line" full onClick={openTableNative}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="bump" s={15} /> {L("Ospita", "Host")}</span>
-                      </Button>
-                      <Button kind="line" full onClick={joinTableNative}>
-                        {L("Entra", "Join")}
-                      </Button>
-                    </div>
-                    <Micro style={{ textAlign: "center", marginTop: 6 }}>{L("Vicini, offline — uno ospita, l'altro entra", "Nearby, offline — one hosts, the other joins")}</Micro>
-                  </>
-                ) : btSupported() ? (
-                  <>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 2px 4px" }}>
-                      <div style={{ flex: 1, height: 1, background: T.line }} />
-                      <Micro>Bluetooth</Micro>
-                      <div style={{ flex: 1, height: 1, background: T.line }} />
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <Button kind="line" full onClick={openTableBluetooth}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="bump" s={15} /> {L("Ospita", "Host")}</span>
-                      </Button>
-                      <Button kind="line" full onClick={joinTableBluetooth}>
-                        {L("Entra", "Join")}
-                      </Button>
-                    </div>
-                    <Micro style={{ textAlign: "center", marginTop: 6 }}>{L("Vicini, senza rete — scegli il tavolo Bluetooth", "Nearby, no network — pick the Bluetooth table")}</Micro>
-                  </>
-                ) : null}
-              </>
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <input
+                      value={codeIn}
+                      onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
+                      placeholder={L("CODICE", "CODE")}
+                      style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: MONO, fontSize: 18, minWidth: 0 }}
+                    />
+                    <Button kind="line" onClick={() => joinTable()}>
+                      {L("Entra", "Join")}
+                    </Button>
+                  </div>
+                </>
+              )
             ) : (
               <>
                 <div style={{ marginTop: 10 }}>
@@ -6672,7 +6655,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               <Ico n="turn" s={15} /> {L("Un solo telefono", "One phone")} <span style={{ color: T.ink30, fontWeight: 400 }}>{L("· a turno, senza rete", "· take turns, no network")}</span>
             </button>
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
-            {!hasStore() && <InstallPrompt />}
+            {!hasStore() && !nativeSupported() && <InstallPrompt />}
           </div>
         </div>
         <BumpVeil show={bumping} onCancel={cancelBump} />

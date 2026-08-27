@@ -36,6 +36,39 @@ const FRAME = 160;
 const PROP = { READ: 0x02, WRITE_NO_RESPONSE: 0x04, WRITE: 0x08, NOTIFY: 0x10 };
 const PERM = { READABLE: 0x01, WRITEABLE: 0x10 };
 
+// Android 12+ gates advertising/scanning behind runtime permissions the peripheral
+// plugin never asks for. Request them up front; on older Android the manifest entries
+// suffice and the plugin (cordova-plugin-android-permissions) may be absent, so a
+// missing plugin resolves quietly and we let the native call surface any real denial.
+const ANDROID_BT_PERMS = [
+  "android.permission.BLUETOOTH_ADVERTISE",
+  "android.permission.BLUETOOTH_CONNECT",
+  "android.permission.BLUETOOTH_SCAN",
+];
+function requestBtPermissions() {
+  return new Promise((resolve) => {
+    const perms = typeof window !== "undefined" && window.cordova && window.cordova.plugins && window.cordova.plugins.permissions;
+    if (!perms || !perms.requestPermissions) return resolve();
+    try { perms.requestPermissions(ANDROID_BT_PERMS, () => resolve(), () => resolve()); } catch { resolve(); }
+  });
+}
+
+// Pull a human-readable string out of whatever a plugin rejects with, so the UI can
+// show *why* it failed instead of a generic message — vital while this is unproven.
+function errText(e) {
+  if (!e) return "errore sconosciuto";
+  return e.message || e.errorMessage || (typeof e === "string" ? e : JSON.stringify(e));
+}
+
+// Make sure the radio is on, prompting the user if not. Best-effort — if it throws,
+// the advertise/scan call right after will fail with a clearer message.
+async function ensureBluetoothOn() {
+  try {
+    await BleClient.initialize();
+    if (!(await BleClient.isEnabled())) await BleClient.requestEnable();
+  } catch {}
+}
+
 const te = new TextEncoder();
 const td = new TextDecoder();
 
@@ -92,22 +125,30 @@ async function send(obj) {
 async function host(name, { onMessage, onStatus } = {}) {
   const bp = typeof window !== "undefined" ? window.blePeripheral : null;
   if (!bp) throw new Error("peripheral plugin missing");
+  await requestBtPermissions();
+  await ensureBluetoothOn();
   const inbox = makeInbox((o) => onMessage && onMessage(o));
 
-  // A central wrote to us: reassemble and deliver.
-  await bp.onWriteRequest((req) => {
-    const v = req && req.value;
-    if (v) inbox(v instanceof Uint8Array ? v : new Uint8Array(v));
-  });
-
-  await bp.createService(SERVICE);
-  await bp.addCharacteristic(
-    SERVICE, CHAR,
-    PROP.READ | PROP.WRITE | PROP.WRITE_NO_RESPONSE | PROP.NOTIFY,
-    PERM.READABLE | PERM.WRITEABLE
-  );
-  await bp.publishService(SERVICE);
-  await bp.startAdvertising(SERVICE, (name && name.trim()) || "Osteria");
+  // Build the service and start advertising. Each step is awaited so a rejection
+  // (usually a missing runtime permission or advertising unsupported) is caught and
+  // re-thrown with context the UI can show.
+  try {
+    // A central wrote to us: reassemble and deliver.
+    await bp.onWriteRequest((req) => {
+      const v = req && req.value;
+      if (v) inbox(v instanceof Uint8Array ? v : new Uint8Array(v));
+    });
+    await bp.createService(SERVICE);
+    await bp.addCharacteristic(
+      SERVICE, CHAR,
+      PROP.READ | PROP.WRITE | PROP.WRITE_NO_RESPONSE | PROP.NOTIFY,
+      PERM.READABLE | PERM.WRITEABLE
+    );
+    await bp.publishService(SERVICE);
+    await bp.startAdvertising(SERVICE, (name && name.trim()) || "Osteria");
+  } catch (e) {
+    throw new Error("advertising — " + errText(e));
+  }
 
   // Push to the guest by updating the characteristic — subscribed centrals get
   // a notification. setCharacteristicValue wants a plain ArrayBuffer.
@@ -119,9 +160,17 @@ async function host(name, { onMessage, onStatus } = {}) {
 
 // ── guest: BLE central ───────────────────────────────────────────────────────
 async function guest(name, { onMessage, onStatus } = {}) {
+  await requestBtPermissions();
   await BleClient.initialize({ androidNeverForLocation: true });
+  try { if (!(await BleClient.isEnabled())) await BleClient.requestEnable(); } catch {}
   // System chooser filtered to Osteria hosts — the guest taps the host's name.
-  const device = await BleClient.requestDevice({ services: [SERVICE], optionalServices: [SERVICE] });
+  let device;
+  try {
+    device = await BleClient.requestDevice({ services: [SERVICE], optionalServices: [SERVICE] });
+  } catch (e) {
+    if (/cancel/i.test(errText(e))) throw new Error("annullato");
+    throw new Error("ricerca — " + errText(e));
+  }
   const id = device.deviceId;
   await BleClient.connect(id, () => onStatus && onStatus("lost"));
   const inbox = makeInbox((o) => onMessage && onMessage(o));
