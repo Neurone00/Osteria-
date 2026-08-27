@@ -5096,15 +5096,15 @@ function Scoreboard({ board, names }) {
   );
 }
 
-// Solo-test control: one device plays both seats; tap to switch which side you
-// are, so you can drive the whole game yourself.
+// One-phone control: this device plays both seats; whoever takes the phone taps to
+// switch to their side, so two people share one screen across the table.
 function SoloBar({ seat, names, onFlip }) {
   return (
     <button
       onClick={onFlip}
       style={{ width: "100%", background: "rgba(18,18,18,0.05)", border: `1px dashed ${T.ink30}`, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontFamily: BRAND, fontWeight: 600, fontSize: 13, color: T.ink, cursor: "pointer", display: "flex", justifyContent: "center", gap: 8, alignItems: "center", WebkitTapHighlightColor: "transparent" }}
     >
-      <Ico n="flask" s={14} /> {L("Solo · sei", "Solo · you are")} {names[seat] || seat} — {L("tocca per passare all’altro", "tap to switch sides")}
+      <Ico n="turn" s={14} /> {L("Sei", "You're")} {names[seat] || seat} — {L("tocca per cambiare lato", "tap to switch sides")}
     </button>
   );
 }
@@ -6662,17 +6662,15 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               </>
             )}
 
-            {/* Testing only: hidden behind the ?solo (or ?test) link, so ordinary
-                visitors never see it. Opens a local two-seat table you drive from
-                one device, flipping sides with the toggle up top. */}
-            {soloRef.current && (
-              <button
-                onClick={openSolo}
-                style={{ ...plain, display: "flex", width: "fit-content", alignItems: "center", gap: 6, margin: "16px auto 0", color: T.ink, fontWeight: 600, fontSize: 13.5 }}
-              >
-                <Ico n="flask" s={15} /> {L("Prova da solo", "Play solo")} <span style={{ color: T.ink30, fontWeight: 400 }}>{L("· due lati, un telefono", "· both sides, one phone")}</span>
-              </button>
-            )}
+            {/* The no-hassle offline option: one phone, both hands, passed across the
+                table. No code, no pairing, no network — the tavern way. Drives a local
+                two-seat table you flip between with the toggle up top. */}
+            <button
+              onClick={openSolo}
+              style={{ ...plain, display: "flex", width: "fit-content", alignItems: "center", gap: 6, margin: "16px auto 0", color: T.ink, fontWeight: 600, fontSize: 13.5 }}
+            >
+              <Ico n="turn" s={15} /> {L("Un solo telefono", "One phone")} <span style={{ color: T.ink30, fontWeight: 400 }}>{L("· a turno, senza rete", "· take turns, no network")}</span>
+            </button>
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
             {!hasStore() && <InstallPrompt />}
           </div>
