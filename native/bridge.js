@@ -48,29 +48,31 @@ const ANDROID_BT_PERMS = [
 function permsPlugin() {
   return (typeof window !== "undefined" && window.cordova && window.cordova.plugins && window.cordova.plugins.permissions) || null;
 }
-// Is the Nearby-devices group already granted? CONNECT stands in for the group.
-function checkBtPermissions() {
+// Is one runtime permission held? (checkPermission takes a single permission.)
+function hasPerm(p) {
   return new Promise((resolve) => {
     const perms = permsPlugin();
     if (!perms || !perms.checkPermission) return resolve(true); // pre-Android-12: install-time
-    perms.checkPermission(ANDROID_BT_PERMS[1], (s) => resolve(!!(s && s.hasPermission)), () => resolve(false));
+    perms.checkPermission(p, (s) => resolve(!!(s && s.hasPermission)), () => resolve(false));
   });
 }
-// Prompt for the group; resolve to whether it ended up granted.
-function requestBtPermissions() {
-  return new Promise((resolve) => {
-    const perms = permsPlugin();
-    if (!perms || !perms.requestPermissions) return resolve(true);
-    try { perms.requestPermissions(ANDROID_BT_PERMS, (s) => resolve(!!(s && s.hasPermission)), () => resolve(false)); }
-    catch { resolve(false); }
-  });
+async function hasAllBt() {
+  for (const p of ANDROID_BT_PERMS) if (!(await hasPerm(p))) return false;
+  return true;
 }
-// Ensure the runtime permission, prompting once. Returns true only when granted —
-// the peripheral plugin opens its GATT server lazily and returns null (→ a later
-// NullPointerException) if CONNECT isn't held, so we must not touch it before this.
+// Ensure the whole Nearby-devices group — SCAN, CONNECT and *ADVERTISE*. Checking
+// only CONNECT was the bug: the BLE plugin grants CONNECT on its own, so a
+// CONNECT-only check passed and ADVERTISE was never requested, and advertising then
+// failed with "Need BLUETOOTH_ADVERTISE". So verify every one, request the group if
+// any is missing, and re-verify. Returns true only when all are actually granted.
 async function ensureBtPermissions() {
-  if (await checkBtPermissions()) return true;
-  return await requestBtPermissions();
+  const perms = permsPlugin();
+  if (!perms || !perms.requestPermissions) return true; // pre-Android-12
+  if (await hasAllBt()) return true;
+  await new Promise((resolve) => {
+    try { perms.requestPermissions(ANDROID_BT_PERMS, () => resolve(), () => resolve()); } catch { resolve(); }
+  });
+  return await hasAllBt();
 }
 
 // Pull a human-readable string out of whatever a plugin rejects with, so the UI can
