@@ -173,9 +173,13 @@ async function host(name, { onMessage, onStatus } = {}) {
     await bp.publishService(SERVICE);
     await bp.startAdvertising(SERVICE, (name && name.trim()) || "Osteria");
   } catch (e) {
-    // If the plugin already opened a null GATT server on an earlier tap it stays stuck
-    // until the process restarts, so tell the user that's the escape hatch.
-    throw new Error("advertising — " + errText(e) + " · chiudi e riapri l'app, poi riprova");
+    // Android's AdvertiseCallback rejects with a bare error code; translate the ones
+    // we might hit. If the plugin already opened a null GATT server on an earlier tap
+    // it stays stuck until the process restarts, so name that escape hatch too.
+    const ADV_ERR = { 1: "dati troppo grandi", 2: "troppi advertiser", 3: "già avviato", 4: "errore interno", 5: "non supportato" };
+    const t = errText(e);
+    const named = ADV_ERR[t] ? ` (${ADV_ERR[t]})` : "";
+    throw new Error("advertising — " + t + named + " · chiudi e riapri l'app, poi riprova");
   }
 
   // Push to the guest by updating the characteristic — subscribed centrals get

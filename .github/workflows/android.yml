@@ -48,6 +48,19 @@ jobs:
       - name: Prepare offline web root + native bridge
         run: npm run cap:prepare
 
+      - name: Patch BLE advertising to fit the 31-byte packet limit
+        run: |
+          # The peripheral plugin hard-codes setIncludeDeviceName(true); together with
+          # our 128-bit service UUID that overflows the 31-byte advert (startAdvertising
+          # error 1 = DATA_TOO_LARGE). Drop the name — the guest finds the host by
+          # service UUID. Patch node_modules (cap sync regenerates the copy from it).
+          for f in \
+            node_modules/cordova-plugin-ble-peripheral/src/android/BLEPeripheralPlugin.java \
+            android/capacitor-cordova-android-plugins/src/main/java/com/megster/cordova/ble/peripheral/BLEPeripheralPlugin.java; do
+            [ -f "$f" ] && sed -i 's/setIncludeDeviceName(true)/setIncludeDeviceName(false)/' "$f"
+          done
+          grep -rn setIncludeDeviceName node_modules/cordova-plugin-ble-peripheral/src/android/ || true
+
       - name: Sync Capacitor android project
         run: npx cap sync android
 
