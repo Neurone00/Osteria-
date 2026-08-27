@@ -8070,6 +8070,22 @@ function Tactics({ room, gs, seat, commit }) {
   const nextType = myPlace ? draft[layout.length] : null; // next piece to place, null once all placed
   const deploySet = myPlace && nextType ? new Set(board.cells.map((c) => hkey(c.q, c.r)).filter((k) => tacticsDeployable(gs, seat, k) && !layoutKeys.has(k))) : new Set();
 
+  // once the battle opens, the ring of hexes around each castle is a bombardment
+  // zone — a unit that ends its turn next to the ENEMY castle is shelled for
+  // CASTLE_DMG. Mark them red so the hazard reads at a glance, and make them
+  // tappable for a tooltip. Keyed to the castle they belong to (its own side).
+  const castleRing = new Map();
+  if (gs.phase === "battle" && !gs.done) {
+    for (const s of ["A", "B"]) {
+      const cc = unhkey(board.castle[s]);
+      for (const [dq, dr] of HEX_DIRS) {
+        const rk = hkey(cc.q + dq, cc.r + dr);
+        if (!cellKeys.has(rk) || board.blocked[rk] || rk === board.castle.A || rk === board.castle.B) continue;
+        if (!castleRing.has(rk)) castleRing.set(rk, s);
+      }
+    }
+  }
+
   const tapHex = (k) => {
     if (moved.current) return;
     const sp = specialMark(k);
@@ -8105,8 +8121,8 @@ function Tactics({ room, gs, seat, commit }) {
         return;
       }
     }
-    // otherwise show info for a special hex, or dismiss it
-    setInfo(sp || null);
+    // otherwise show info for a special hex, or a castle-ring hazard, or dismiss it
+    setInfo(sp || (castleRing.has(k) ? { kind: "castlering", side: castleRing.get(k) } : null));
   };
   const tapUnit = (id) => {
     if (moved.current) return;
@@ -8380,7 +8396,9 @@ function Tactics({ room, gs, seat, commit }) {
               const isAimA = blast && blast.a === k; // Mago's first target hex
               const isAimB = blast && blast.b === k; // its bordering second hex
               const isMate = isMage && blast && blast.a && !blast.b && mateSet.has(k); // candidate second hexes
+              const ringSide = castleRing.get(k); // this hex borders a castle → bombardment zone
               let fill = blocked ? "rgba(18,18,18,0.28)" : "rgba(255,255,255,0.9)";
+              if (ringSide && !sp) fill = ringSide === seat ? "rgba(165,52,47,0.10)" : "rgba(165,52,47,0.17)"; // your keep's ring vs the enemy's (the one that shells you)
               if (sp && sp.kind === "fount") fill = "rgba(44,120,160,0.22)";
               if (sp && sp.kind === "banner") fill = sp.side ? rgbaOf(TSIDE[sp.side], 0.2) : "rgba(184,134,43,0.16)"; // contested field objective
               if (isInsReach) fill = rgbaOf(insCol, 0.16); // where the selected enemy could step
@@ -8411,6 +8429,8 @@ function Tactics({ room, gs, seat, commit }) {
                 ? sp.side
                   ? TSIDE[sp.side]
                   : "#B8862B"
+                : ringSide && !sp
+                ? "rgba(165,52,47,0.5)"
                 : T.line;
               return (
                 <g key={k}>
@@ -8421,7 +8441,7 @@ function Tactics({ room, gs, seat, commit }) {
                     strokeWidth={isAimA || isAimB ? 2.6 : isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat || isMate || (sp && sp.kind === "banner") ? 1.5 : 1}
                     className={isTarget || isDeploy || isMate ? "hexpulse" : ""}
                     onClick={() => tapHex(k)}
-                    style={{ cursor: isDeploy || (canPlay && (isReach || isTarget || isDest || isSelHex || isAimA || isAimB || isMate)) ? "pointer" : "default" }}
+                    style={{ cursor: isDeploy || (ringSide && !sp) || (canPlay && (isReach || isTarget || isDest || isSelHex || isAimA || isAimB || isMate)) ? "pointer" : "default" }}
                   />
                   {sp && (
                     <g transform={`translate(${p.x - 7} ${p.y - 7})`} style={{ pointerEvents: "none" }}>
@@ -8507,6 +8527,14 @@ function Tactics({ room, gs, seat, commit }) {
           tint = "#2C7AA0";
           title = L("Fontana", "Fountain");
           desc = L("Cura +3 a chi ci sosta. È sul fianco, lontana dai castelli.", "Heals +3 to whoever rests on it. Out on the flank, away from the castles.");
+        } else if (it.kind === "castlering") {
+          icon = "castle";
+          tint = "#A5342F";
+          const own = it.side === seat;
+          title = own ? L("Tiro del tuo castello", "Your castle's fire") : L("Tiro del castello nemico", "Enemy castle's fire");
+          desc = own
+            ? L(`Un'unità nemica che finisce il turno qui viene cannoneggiata per ${TACT.CASTLE_DMG}.`, `An enemy unit that ends its turn here is shelled for ${TACT.CASTLE_DMG}.`)
+            : L(`Una tua unità che finisce il turno qui viene cannoneggiata per ${TACT.CASTLE_DMG}. Non fermarti accanto.`, `A unit of yours that ends its turn here is shelled for ${TACT.CASTLE_DMG}. Don't end beside it.`);
         } else {
           icon = "flag";
           tint = it.side ? TSIDE[it.side] : "#9A7B2E";
