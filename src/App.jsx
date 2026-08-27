@@ -5479,6 +5479,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       boardRef.current = b || {};
       setBoard(b || {});
     });
+    // Native app: settle the Bluetooth permission at launch so the first "Ospita"
+    // tap isn't the moment Android is still granting it (which jams the peripheral
+    // plugin until a restart). No-op on the web — the global isn't there.
+    try { if (nativeSupported()) globalThis.OsteriaNative.prewarm?.(); } catch {}
   }, []);
 
   const roomRef = useRef(null);

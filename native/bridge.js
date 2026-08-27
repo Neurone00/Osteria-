@@ -221,6 +221,14 @@ function close() {
   if (t) t();
 }
 
+// Called once when the app opens: settle the Nearby-devices permission early so
+// the first Ospita tap doesn't open the GATT server a beat before the grant lands
+// (which jams the peripheral plugin until an app restart). Silent and best-effort —
+// it only prompts for the permission, never for enabling Bluetooth.
+async function prewarm() {
+  try { await ensureBtPermissions(); } catch {}
+}
+
 if (typeof window !== "undefined") {
-  window.OsteriaNative = { available: true, host, guest, send, close };
+  window.OsteriaNative = { available: true, host, guest, send, close, prewarm };
 }
