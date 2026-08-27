@@ -45,12 +45,32 @@ const ANDROID_BT_PERMS = [
   "android.permission.BLUETOOTH_CONNECT",
   "android.permission.BLUETOOTH_SCAN",
 ];
+function permsPlugin() {
+  return (typeof window !== "undefined" && window.cordova && window.cordova.plugins && window.cordova.plugins.permissions) || null;
+}
+// Is the Nearby-devices group already granted? CONNECT stands in for the group.
+function checkBtPermissions() {
+  return new Promise((resolve) => {
+    const perms = permsPlugin();
+    if (!perms || !perms.checkPermission) return resolve(true); // pre-Android-12: install-time
+    perms.checkPermission(ANDROID_BT_PERMS[1], (s) => resolve(!!(s && s.hasPermission)), () => resolve(false));
+  });
+}
+// Prompt for the group; resolve to whether it ended up granted.
 function requestBtPermissions() {
   return new Promise((resolve) => {
-    const perms = typeof window !== "undefined" && window.cordova && window.cordova.plugins && window.cordova.plugins.permissions;
-    if (!perms || !perms.requestPermissions) return resolve();
-    try { perms.requestPermissions(ANDROID_BT_PERMS, () => resolve(), () => resolve()); } catch { resolve(); }
+    const perms = permsPlugin();
+    if (!perms || !perms.requestPermissions) return resolve(true);
+    try { perms.requestPermissions(ANDROID_BT_PERMS, (s) => resolve(!!(s && s.hasPermission)), () => resolve(false)); }
+    catch { resolve(false); }
   });
+}
+// Ensure the runtime permission, prompting once. Returns true only when granted —
+// the peripheral plugin opens its GATT server lazily and returns null (→ a later
+// NullPointerException) if CONNECT isn't held, so we must not touch it before this.
+async function ensureBtPermissions() {
+  if (await checkBtPermissions()) return true;
+  return await requestBtPermissions();
 }
 
 // Pull a human-readable string out of whatever a plugin rejects with, so the UI can
@@ -60,13 +80,15 @@ function errText(e) {
   return e.message || e.errorMessage || (typeof e === "string" ? e : JSON.stringify(e));
 }
 
-// Make sure the radio is on, prompting the user if not. Best-effort — if it throws,
-// the advertise/scan call right after will fail with a clearer message.
-async function ensureBluetoothOn() {
+// Ensure the radio is on, prompting once. Returns true only when it's actually on —
+// openGattServer also returns null when Bluetooth is off, so this gates the host too.
+async function bluetoothOn() {
   try {
     await BleClient.initialize();
-    if (!(await BleClient.isEnabled())) await BleClient.requestEnable();
-  } catch {}
+    if (await BleClient.isEnabled()) return true;
+    await BleClient.requestEnable();
+    return await BleClient.isEnabled();
+  } catch { return false; }
 }
 
 const te = new TextEncoder();
@@ -125,13 +147,15 @@ async function send(obj) {
 async function host(name, { onMessage, onStatus } = {}) {
   const bp = typeof window !== "undefined" ? window.blePeripheral : null;
   if (!bp) throw new Error("peripheral plugin missing");
-  await requestBtPermissions();
-  await ensureBluetoothOn();
+  // Gate the peripheral plugin: it opens its GATT server on the FIRST call and never
+  // retries, returning null (→ NullPointerException on addService) if Bluetooth is off
+  // or CONNECT isn't granted. So confirm both BEFORE we touch it, with clear errors.
+  if (!(await bluetoothOn())) throw new Error("attiva il Bluetooth e riprova");
+  if (!(await ensureBtPermissions())) throw new Error("concedi il permesso «Dispositivi nelle vicinanze» (Impostazioni ▸ App ▸ Osteria ▸ Autorizzazioni)");
   const inbox = makeInbox((o) => onMessage && onMessage(o));
 
   // Build the service and start advertising. Each step is awaited so a rejection
-  // (usually a missing runtime permission or advertising unsupported) is caught and
-  // re-thrown with context the UI can show.
+  // is caught and re-thrown with context the UI can show.
   try {
     // A central wrote to us: reassemble and deliver.
     await bp.onWriteRequest((req) => {
@@ -147,7 +171,9 @@ async function host(name, { onMessage, onStatus } = {}) {
     await bp.publishService(SERVICE);
     await bp.startAdvertising(SERVICE, (name && name.trim()) || "Osteria");
   } catch (e) {
-    throw new Error("advertising — " + errText(e));
+    // If the plugin already opened a null GATT server on an earlier tap it stays stuck
+    // until the process restarts, so tell the user that's the escape hatch.
+    throw new Error("advertising — " + errText(e) + " · chiudi e riapri l'app, poi riprova");
   }
 
   // Push to the guest by updating the characteristic — subscribed centrals get
@@ -160,9 +186,9 @@ async function host(name, { onMessage, onStatus } = {}) {
 
 // ── guest: BLE central ───────────────────────────────────────────────────────
 async function guest(name, { onMessage, onStatus } = {}) {
-  await requestBtPermissions();
+  if (!(await bluetoothOn())) throw new Error("attiva il Bluetooth e riprova");
+  if (!(await ensureBtPermissions())) throw new Error("concedi il permesso «Dispositivi nelle vicinanze» (Impostazioni ▸ App ▸ Osteria ▸ Autorizzazioni)");
   await BleClient.initialize({ androidNeverForLocation: true });
-  try { if (!(await BleClient.isEnabled())) await BleClient.requestEnable(); } catch {}
   // System chooser filtered to Osteria hosts — the guest taps the host's name.
   let device;
   try {
