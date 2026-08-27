@@ -21,6 +21,12 @@ on:
 permissions:
   contents: write
 
+# Only one build at a time — a push to both main and the feature branch would
+# otherwise race on the release and the apk branch.
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -62,6 +68,17 @@ jobs:
         with:
           name: Osteria-apk
           path: out/Osteria.apk
+
+      - name: Publish a shareable Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A stable tag so the download URL never changes:
+          #   https://github.com/${{ github.repository }}/releases/download/apk/Osteria.apk
+          gh release delete apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create apk out/Osteria.apk \
+            --title "Osteria — offline APK" \
+            --notes "Install on both Android phones, then play offline over Bluetooth (one taps **Ospita/Host**, the other **Join**). Auto-built by CI from \`${GITHUB_SHA}\`."
 
       - name: Publish APK to the apk branch
         run: |
