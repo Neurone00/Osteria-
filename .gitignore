@@ -8,3 +8,6 @@ dist
 android-www
 android/app/src/main/assets/public
 .gradle
+
+# Built APKs live on the `apk` branch and the GitHub Release, never in source
+*.apk
