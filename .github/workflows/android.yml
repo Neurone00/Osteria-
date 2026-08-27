@@ -91,4 +91,6 @@ jobs:
           printf '%s\n' "# Osteria APK" "Auto-built by CI from \`${GITHUB_SHA}\`." "Download **Osteria.apk**, install on both Android phones, play offline." > README.md
           git add -f Osteria.apk README.md
           git commit -m "APK build from ${GITHUB_SHA}"
-          git push -f origin apk-publish:apk
+          # Fully-qualify the destination: the Release creates a *tag* named apk,
+          # so a bare `:apk` is ambiguous (matches both the tag and this branch).
+          git push -f origin apk-publish:refs/heads/apk
