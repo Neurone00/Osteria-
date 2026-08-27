@@ -1,0 +1,77 @@
+name: Build Android APK
+
+# Builds the offline Osteria APK on GitHub's runners — they have the Android SDK
+# and can reach Google's Maven, which the dev sandbox can't. The finished APK is
+# uploaded as a workflow artifact and force-pushed (alone) to the `apk` branch, so
+# it can be handed straight to a phone with no local Android toolchain anywhere.
+
+on:
+  push:
+    branches: [claude/chat-loop-issue-kcnx28, main]
+    paths:
+      - "src/**"
+      - "native/**"
+      - "android/**"
+      - "scripts/**"
+      - "capacitor.config.json"
+      - "package.json"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Prepare offline web root + native bridge
+        run: npm run cap:prepare
+
+      - name: Sync Capacitor android project
+        run: npx cap sync android
+
+      - name: Build debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Stage the APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk out/Osteria.apk
+          ls -l out
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Osteria-apk
+          path: out/Osteria.apk
+
+      - name: Publish APK to the apk branch
+        run: |
+          cp out/Osteria.apk /tmp/Osteria.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan apk-publish
+          git rm -r --cached . >/dev/null 2>&1 || true
+          cp /tmp/Osteria.apk Osteria.apk
+          printf '%s\n' "# Osteria APK" "Auto-built by CI from \`${GITHUB_SHA}\`." "Download **Osteria.apk**, install on both Android phones, play offline." > README.md
+          git add -f Osteria.apk README.md
+          git commit -m "APK build from ${GITHUB_SHA}"
+          git push -f origin apk-publish:apk
