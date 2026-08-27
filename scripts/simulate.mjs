@@ -316,6 +316,44 @@ function tacticsFlyTests() {
   g = { board: { blocked: {} }, order: ["f", "t"], units: { f: mk("f", "A", "fante", 0, 0), t: mk("t", "B", "aquila", 1, 0) } };
   if (!R.tacticsTargets(g, g.units.f).includes("t")) fail("tactics fly", "a flyer on open ground is a normal melee target");
 }
+function tacticsDigTests() {
+  const hk = R.hkey;
+  const mk = (id, owner, type, q, r) => ({ id, owner, type, q, r, hp: R.TACT.units[type].max, max: R.TACT.units[type].max });
+  const mkG = (cells, blocked, units) => ({
+    done: false, phase: "battle", turn: "A", moves: 0,
+    board: { cells: cells.map(([q, r]) => ({ q, r })), blocked, castle: { A: hk(8, 0), B: hk(9, 0) }, fount: { A: hk(10, 0), B: hk(11, 0) }, banners: [], deployR: 3 },
+    units: Object.fromEntries(units.map((u) => [u.id, u])), order: units.map((u) => u.id),
+    spent: {}, rest: {}, turns: { A: 0, B: 0 }, siege: null,
+    rules: { flagAtk: false, flagWin: false, flagHeal: false, random: false, passAllies: false },
+    tally: { A: 0, B: 0 }, how: null, win: null, matchDone: false, last: null,
+  });
+  const dig = R.TACT.units.minatore;
+  if (!dig || !dig.dig) fail("tactics dig", "the Minatore should exist and dig");
+  if (dig.move !== 3) fail("tactics dig", "the Minatore should move 3");
+  if (dig.max !== 1) fail("tactics dig", "the Minatore should have 1 life");
+  // raise an obstacle on an empty bordering hex
+  let g = mkG([[0, 0], [1, 0], [5, 0]], {}, [mk("m", "A", "minatore", 0, 0), mk("e", "B", "fante", 5, 0)]);
+  let r = R.tacticsActivate(g, "A", "m", null, { kind: "dig", cell: hk(1, 0) });
+  if (!r) return fail("tactics dig", "raising an obstacle on empty ground was refused");
+  if (!r.g.board.blocked[hk(1, 0)]) fail("tactics dig", "the obstacle wasn't raised");
+  if (r.g.turn !== "B") fail("tactics dig", "digging should pass the turn");
+  // level an existing obstacle
+  g = mkG([[0, 0], [0, 1], [5, 0]], { [hk(0, 1)]: true }, [mk("m", "A", "minatore", 0, 0), mk("e", "B", "fante", 5, 0)]);
+  r = R.tacticsActivate(g, "A", "m", null, { kind: "dig", cell: hk(0, 1) });
+  if (!r || r.g.board.blocked[hk(0, 1)]) fail("tactics dig", "levelling an obstacle didn't clear it");
+  // levelling the obstacle under a perched Aquila kills it
+  g = mkG([[0, 0], [1, -1], [5, 0]], { [hk(1, -1)]: true }, [mk("m", "A", "minatore", 0, 0), mk("a", "B", "aquila", 1, -1), mk("e", "B", "fante", 5, 0)]);
+  r = R.tacticsActivate(g, "A", "m", null, { kind: "dig", cell: hk(1, -1) });
+  if (!r || r.g.units.a) fail("tactics dig", "levelling under a perched Aquila should kill it");
+  // illegal: non-adjacent, a special hex, or walling over a standing unit
+  g = mkG([[0, 0], [2, 0], [5, 0]], {}, [mk("m", "A", "minatore", 0, 0), mk("e", "B", "fante", 5, 0)]);
+  if (R.tacticsActivate(g, "A", "m", null, { kind: "dig", cell: hk(2, 0) }) != null) fail("tactics dig", "can't dig a non-adjacent hex");
+  g = mkG([[0, 0], [1, 0], [5, 0]], {}, [mk("m", "A", "minatore", 0, 0), mk("e", "B", "fante", 1, 0)]);
+  if (R.tacticsActivate(g, "A", "m", null, { kind: "dig", cell: hk(1, 0) }) != null) fail("tactics dig", "can't wall over a standing unit");
+  // only the Minatore can dig
+  g = mkG([[0, 0], [1, 0], [5, 0]], {}, [mk("m", "A", "fante", 0, 0), mk("e", "B", "fante", 5, 0)]);
+  if (R.tacticsActivate(g, "A", "m", null, { kind: "dig", cell: hk(1, 0) }) != null) fail("tactics dig", "only the Minatore can dig");
+}
 function tacticsConnectedKeys(openKeys) {
   const set = new Set(openKeys);
   const seen = new Set([openKeys[0]]);
@@ -1837,6 +1875,11 @@ for (const [label, run] of runs) {
   const before = failures;
   tacticsFlyTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"condottieri flyers".padEnd(44)} Aquila & Mago hit a perched Aquila, ground melee can't`);
+}
+{
+  const before = failures;
+  tacticsDigTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"condottieri miner".padEnd(44)} raise/level obstacles, level under a flyer kills it`);
 }
 {
   const before = failures;

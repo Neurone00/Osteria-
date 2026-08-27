@@ -3074,9 +3074,10 @@ const TACT = {
     balestriere: { name: "Balestriere", max: 8, move: 1, min: 2, rng: 4, cost: 5, icon: "crossbow" }, // d8 slow sniper, 2–4
     fromboliere: { name: "Fromboliere", max: 4, move: 3, min: 1, rng: 2, cost: 2, icon: "sling" }, // d4 cheap skirmisher
     mago: { name: "Mago", max: 4, move: 2, min: 2, rng: 3, cost: 5, icon: "spark", aoe: true }, // d4 area caster: aims two adjacent hexes, hits friend and foe in both
+    minatore: { name: "Minatore", max: 1, move: 3, min: 1, rng: 1, cost: 3, icon: "pick", dig: true }, // d1 sapper: raises or levels an obstacle on an adjacent hex; levelling one kills a flyer perched on it
   },
 };
-const TYPE_ORDER = ["fante", "arciere", "esploratore", "aquila", "balestriere", "fromboliere", "mago"];
+const TYPE_ORDER = ["fante", "arciere", "esploratore", "aquila", "balestriere", "fromboliere", "mago", "minatore"];
 // A drafted company is legal when it has 3..6 units and fits the budget.
 function tacticsCompanyCost(company) {
   return company.reduce((t, type) => t + (TACT.units[type]?.cost || 0), 0);
@@ -3646,6 +3647,31 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     roll = { attacker: unitId, atkType: unit.type, tgtType, dmg, crit: res.crit, killed: killed > 0, rolls: res.rolls, bonus, die: unit.hp, blast: true };
     ev = { t: "attack", unit: unit.type, target: tgtType, dmg, crit: res.crit, killed: killed > 0, splash: Math.max(0, hits.length - 1) };
     kind = res.crit ? "scopa" : "take";
+  } else if (action && action.kind === "dig") {
+    // the Minatore reshapes the ground on an adjacent hex: raise a fresh obstacle on
+    // empty ground, or level an existing one. Levelling an obstacle a flyer is perched
+    // on drops it to its death — the one way ground troops touch a perched Aquila.
+    const u = TACT.units[unit.type];
+    if (!u.dig) return null;
+    const ck = action.cell;
+    if (!ck) return null;
+    if (hdist(unit, unhkey(ck)) !== 1) return null; // only a bordering hex
+    if (!g.board.cells.some((c) => hkey(c.q, c.r) === ck)) return null; // on the map
+    const special = ck === g.board.castle.A || ck === g.board.castle.B || ck === g.board.fount.A || ck === g.board.fount.B || (g.board.banners || []).includes(ck);
+    if (special) return null; // keeps, fountains and banners can't be dug
+    let killed = false, add;
+    if (g.board.blocked[ck]) {
+      delete g.board.blocked[ck]; // level it
+      add = false;
+      const perched = g.order.find((id) => hkey(g.units[id].q, g.units[id].r) === ck);
+      if (perched) { delete g.units[perched]; g.order = g.order.filter((id) => id !== perched); killed = true; }
+    } else {
+      if (tacticsOccupied(g, ck)) return null; // can't wall over a standing unit
+      g.board.blocked[ck] = true; // raise one
+      add = true;
+    }
+    ev = { t: "dig", unit: unit.type, add, killed };
+    kind = killed ? "scopa" : "take";
   }
   // castle bombardment: a unit that ends its turn adjacent to the ENEMY castle
   // (but not standing in it — that's a siege, resolved below) is shelled for 2.
@@ -4472,6 +4498,12 @@ function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
         <path {...P} d="M4 4c2.8 6 5.3 8.8 8 9" />
         <path {...P} d="M20 4c-2 4.3-3.4 6.6-5.4 8" />
         <circle {...P} cx="12.4" cy="16.4" r="3" />
+      </>
+    ),
+    pick: (
+      <>
+        <path {...P} d="M6 18.5 15 9" />
+        <path {...P} d="M8.5 5.5C12 7 14 8 15 9c1.5 1.5 3 3.4 5 3.9" />
       </>
     ),
     flag: (
@@ -7850,6 +7882,7 @@ const TACT_SLIDES = [
   { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male.", te: "Wounded hits softer", be: "You attack by rolling 1 to your life: the more hurt you are, the less you deal." },
   { icon: "burst", title: "Il colpo pieno esplode", body: "Se tiri la faccia più alta è un Critico: rilanci il dado e sommi. Può incatenarsi — un colpo può valere doppio o più.", te: "A full hit explodes", be: "Roll your top face and it's a Crit: roll again and add. It can chain — one hit can be worth double or more." },
   { icon: "spark", title: "Il Mago colpisce due caselle", body: "Miri una casella a tiro (2–3) e una vicina: lo stesso danno investe chiunque stia lì — anche le tue pedine. Può colpire un’Aquila appollaiata su un ostacolo, ma non una casella-ostacolo vuota. Attento al fuoco amico.", te: "The Mago hits two hexes", be: "Aim one hex in range (2–3) and one next to it: the same damage hits anyone there — your own pieces too. It can catch an Aquila perched on an obstacle, but not an empty obstacle hex. Mind the friendly fire." },
+  { icon: "pick", title: "Il Minatore scava", body: "Fragile (1 vita) ma prezioso: invece di attaccare, alza un ostacolo su una casella vuota vicina o ne abbatte uno. Abbattere l’ostacolo sotto un’Aquila la fa precipitare. Tocca Scava, poi la casella.", te: "The Miner digs", be: "Fragile (1 life) but handy: instead of attacking, it raises an obstacle on an empty adjacent hex or levels one. Levelling the obstacle under an Aquila drops it to its death. Tap Dig, then the hex." },
   { icon: "bow", title: "Uno per uno", body: "A turno, una mossa a testa: attivi una pedina (la sposti e attacchi), fino a due volte prima che riposi.", te: "One at a time", be: "Take turns, one move each: activate a piece (move it and attack), up to twice before it rests." },
   { icon: "flag", title: "Come si vince", body: "Stermina l’altro, espugna il suo castello (tienilo un turno sotto tiro), o conquista tutti gli stendardi. Uno stendardo dà +1 danno a chi ci combatte.", te: "How to win", be: "Wipe out the other, take their castle (hold it a turn under fire), or seize every banner. A banner gives +1 damage to whoever fights on it." },
 ];
@@ -7947,6 +7980,7 @@ function Tactics({ room, gs, seat, commit }) {
   const [sel, setSel] = useState(null); // selected own unit id (battle)
   const [dest, setDest] = useState(null); // staged move hex key
   const [blast, setBlast] = useState(null); // area caster's aim: { a: hexKey, b: hexKey|null }
+  const [digMode, setDigMode] = useState(false); // Minatore: tapping a bordering hex raises/levels an obstacle
   const [inspect, setInspect] = useState(null); // enemy unit id being previewed (move + range)
   const [info, setInfo] = useState(null); // tapped element info: { k:"unit", id } | { k, side } for terrain
   // setup (roster + deployment) is done locally and privately, then locked in
@@ -7982,7 +8016,12 @@ function Tactics({ room, gs, seat, commit }) {
     setSel(null);
     setDest(null);
     setInspect(null);
+    setDigMode(false);
   }, [gs.turn, gs.phase]);
+  // leaving a unit, or switching to one that can't dig, drops dig mode
+  useEffect(() => {
+    if (!sel || !gs.units[sel] || !TACT.units[gs.units[sel].type].dig) setDigMode(false);
+  }, [sel]); // eslint-disable-line
 
   // setup is arranged locally and privately. Reset the whole setup when the
   // phase changes, when this seat has locked in, or when the viewpoint flips
@@ -8098,6 +8137,25 @@ function Tactics({ room, gs, seat, commit }) {
     setInspect(null);
     setInfo(null);
   };
+  // Minatore: from where it will stand, each bordering hex it can reshape — level an
+  // obstacle ("remove", which drops a flyer perched on it), or raise one on empty
+  // open ground ("add"). Keeps, fountains and banners are off-limits.
+  const isMiner = active && !!TACT.units[unit.type].dig;
+  const digSet = new Map();
+  if (isMiner && digMode) {
+    for (const [dq, dr] of HEX_DIRS) {
+      const nk = hkey(stagePos.q + dq, stagePos.r + dr);
+      if (!cellKeys.has(nk)) continue;
+      const special = nk === board.castle.A || nk === board.castle.B || nk === board.fount.A || nk === board.fount.B || (board.banners || []).includes(nk);
+      if (special) continue;
+      if (board.blocked[nk]) digSet.set(nk, "remove");
+      else if (!tacticsOccupied(gs, nk)) digSet.set(nk, "add");
+    }
+  }
+  const doDig = (k) => {
+    commit(tacticsActivate(gs, seat, sel, dest, { kind: "dig", cell: k }));
+    setSel(null); setDest(null); setDigMode(false); setInspect(null); setInfo(null);
+  };
   // the whole area this unit threatens from where it will stand — open hexes in
   // attack range with line of sight, so you can see its reach before committing
   const threatSet = new Set();
@@ -8176,6 +8234,14 @@ function Tactics({ room, gs, seat, commit }) {
         return;
       }
     }
+    // Minatore in dig mode: a bordering hex it can reshape commits the dig; a reach
+    // hex repositions it (then dig from there); anything else waits for a valid tap.
+    if (canPlay && unit && isMiner && digMode) {
+      if (digSet.has(k)) { doDig(k); return; }
+      if (k === hkey(unit.q, unit.r)) { setDest(null); return; }
+      if (reach[k] !== undefined) { setDest(k); return; }
+      return;
+    }
     // battle: moving has priority when a unit of yours is selected on your turn
     if (canPlay && unit) {
       const uk = hkey(unit.q, unit.r);
@@ -8197,6 +8263,9 @@ function Tactics({ room, gs, seat, commit }) {
     const u = gs.units[id];
     if (!u) return;
     const hk = hkey(u.q, u.r);
+    // a digging Minatore claims taps first: a perched unit sits on an obstacle, so
+    // tapping it levels the obstacle out from under it (killing a flyer up there).
+    if (canPlay && sel && isMiner && digMode && digSet.has(hk)) { doDig(hk); return; }
     // an aiming Mago claims taps first: a valid enemy fixes the first hex, then any
     // unit on a bordering hex (even one of yours) fixes the second — before the
     // usual select / attack / inspect.
@@ -8351,11 +8420,13 @@ function Tactics({ room, gs, seat, commit }) {
         : blast && blast.a
         ? L("Scegli la 2ª casella, accanto alla prima", "Pick the 2nd hex, next to the first")
         : L("Tocca un nemico per mirare — colpisce due caselle, anche i tuoi", "Tap an enemy to aim — hits two hexes, your own too")
+      : isMiner && digMode
+      ? L("Tocca un ostacolo da abbattere (uccide chi ci sta sopra) o una casella vuota da murare", "Tap an obstacle to level (kills anyone perched) or an empty hex to wall off")
       : healing
       ? L("In cura qui — niente attacco", "Healing here — no attack")
       : dest
-      ? L("Tocca un nemico in rosso, o Fermati qui", "Tap an enemy in red, or Stop here")
-      : L("Muovi, o colpisci un nemico in rosso", "Move, or hit an enemy in red")
+      ? isMiner ? L("Tocca un nemico, Scava, o Fermati qui", "Tap an enemy, Dig, or Stop here") : L("Tocca un nemico in rosso, o Fermati qui", "Tap an enemy in red, or Stop here")
+      : isMiner ? L("Muovi, colpisci, o Scava un ostacolo", "Move, hit, or Dig an obstacle") : L("Muovi, o colpisci un nemico in rosso", "Move, or hit an enemy in red")
     : canPlay
     ? L("Tocca a te — muovi una pedina", "Your turn — move a piece")
     : `${L("Turno di", "Turn:")} ${who(room, gs.turn)}`;
@@ -8465,6 +8536,7 @@ function Tactics({ room, gs, seat, commit }) {
               const isAimB = blast && blast.b === k; // its bordering second hex
               const isMate = isMage && blast && blast.a && !blast.b && mateSet.has(k); // candidate second hexes
               const ringSide = castleRing.get(k); // this hex borders a castle → bombardment zone
+              const digKind = digSet.get(k); // "add" (raise) | "remove" (level) for a digging Minatore
               let fill = blocked ? "rgba(18,18,18,0.28)" : "rgba(255,255,255,0.9)";
               if (ringSide && !sp) fill = ringSide === seat ? "rgba(165,52,47,0.10)" : "rgba(165,52,47,0.17)"; // your keep's ring vs the enemy's (the one that shells you)
               if (sp && sp.kind === "fount") fill = "rgba(44,120,160,0.22)";
@@ -8477,7 +8549,13 @@ function Tactics({ room, gs, seat, commit }) {
               if (isTarget) fill = "rgba(165,52,47,0.34)"; // an enemy you can hit
               if (isMate) fill = "rgba(233,181,75,0.26)"; // where the blast can spill
               if (isAimA || isAimB) fill = "rgba(233,181,75,0.5)"; // the two hexes it will hit
-              const stroke = isAimA || isAimB
+              if (digKind === "add") fill = "rgba(139,100,20,0.28)"; // raise an obstacle here
+              if (digKind === "remove") fill = "rgba(200,80,36,0.36)"; // level this obstacle
+              const stroke = digKind === "remove"
+                ? "#B4531F"
+                : digKind === "add"
+                ? "#8a6414"
+                : isAimA || isAimB
                 ? "#C98A1A"
                 : isMate
                 ? "#E9B54B"
@@ -8506,10 +8584,10 @@ function Tactics({ room, gs, seat, commit }) {
                     points={tCorners(p.x, p.y)}
                     fill={fill}
                     stroke={stroke}
-                    strokeWidth={isAimA || isAimB ? 2.6 : isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat || isMate || (sp && sp.kind === "banner") ? 1.5 : 1}
-                    className={isTarget || isDeploy || isMate ? "hexpulse" : ""}
+                    strokeWidth={isAimA || isAimB || digKind ? 2.6 : isSelHex || isTarget || isInsHex || (sp && sp.kind === "castle") ? 2.2 : isThreat || isInsThreat || isMate || (sp && sp.kind === "banner") ? 1.5 : 1}
+                    className={isTarget || isDeploy || isMate || digKind ? "hexpulse" : ""}
                     onClick={() => tapHex(k)}
-                    style={{ cursor: isDeploy || (ringSide && !sp) || (canPlay && (isReach || isTarget || isDest || isSelHex || isAimA || isAimB || isMate)) ? "pointer" : "default" }}
+                    style={{ cursor: isDeploy || digKind || (ringSide && !sp) || (canPlay && (isReach || isTarget || isDest || isSelHex || isAimA || isAimB || isMate)) ? "pointer" : "default" }}
                   />
                   {sp && (
                     <g transform={`translate(${p.x - 7} ${p.y - 7})`} style={{ pointerEvents: "none" }}>
@@ -8584,7 +8662,7 @@ function Tactics({ room, gs, seat, commit }) {
           icon = d.icon;
           tint = TSIDE[iu.owner];
           title = `${d.name}${iu.owner !== seat ? L(" · nemico", " · enemy") : ""}`;
-          desc = `d${d.max} · ${L("vita","life")} ${iu.hp}/${iu.max} · ${L("muove","moves")} ${d.move} · ${L("tiro","range")} ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.fly ? L(" · vola sopra gli ostacoli; su un ostacolo è al sicuro dai corpo a corpo a terra (ma un'altra Aquila la raggiunge)", " · flies over obstacles; on one it's safe from ground melee (but another Aquila can reach it)") : ""}${d.aoe ? L(" · colpisce due caselle vicine (anche i tuoi)", " · hits two adjacent hexes (your own too)") : ""}`;
+          desc = `d${d.max} · ${L("vita","life")} ${iu.hp}/${iu.max} · ${L("muove","moves")} ${d.move} · ${L("tiro","range")} ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.fly ? L(" · vola sopra gli ostacoli; su un ostacolo è al sicuro dai corpo a corpo a terra (ma un'altra Aquila la raggiunge)", " · flies over obstacles; on one it's safe from ground melee (but another Aquila can reach it)") : ""}${d.aoe ? L(" · colpisce due caselle vicine (anche i tuoi)", " · hits two adjacent hexes (your own too)") : ""}${d.dig ? L(" · alza o abbatte un ostacolo vicino; abbatterne uno uccide chi ci sta appollaiato", " · raises or levels an adjacent obstacle; levelling one kills anyone perched on it") : ""}`;
         } else if (it.kind === "castle") {
           icon = "castle";
           tint = TSIDE[it.side];
@@ -8691,6 +8769,12 @@ function Tactics({ room, gs, seat, commit }) {
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="spark" s={15} /> {blast.b ? L("Lancia", "Cast") : L("Scegli la 2ª casella", "Pick the 2nd hex")}</span>
             </Button>
           </div>
+        ) : isMiner && digMode ? (
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <Button kind="outline" full onClick={() => setDigMode(false)}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="rotateL" s={15} /> {L("Annulla scavo", "Cancel dig")}</span>
+            </Button>
+          </div>
         ) : (
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             {dest ? (
@@ -8700,6 +8784,11 @@ function Tactics({ room, gs, seat, commit }) {
             ) : (
               <Button kind="outline" full onClick={() => { setSel(null); setDest(null); setBlast(null); }}>
                 {L("Deseleziona", "Deselect")}
+              </Button>
+            )}
+            {isMiner && !healing && (
+              <Button kind="outline" full tone={me} onClick={() => setDigMode(true)}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="pick" s={15} /> {L("Scava", "Dig")}</span>
               </Button>
             )}
             <Button kind="solid" full tone={me} onClick={endUnit}>
