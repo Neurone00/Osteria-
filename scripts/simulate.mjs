@@ -308,6 +308,10 @@ function tacticsFlyTests() {
   // but another Aquila can strike it
   g = { board: { blocked: { [B]: true } }, order: ["a", "t"], units: { a: mk("a", "A", "aquila", 0, 0), t: perched } };
   if (!R.tacticsTargets(g, g.units.a).includes("t")) fail("tactics fly", "an Aquila should reach an Aquila perched on an obstacle");
+  // the Mago's blast can now catch an Aquila perched on an obstacle (nothing between)
+  const B2 = R.hkey(2, 0);
+  g = { board: { blocked: { [B2]: true } }, order: ["m", "t"], units: { m: mk("m", "A", "mago", 0, 0), t: mk("t", "B", "aquila", 2, 0) } };
+  if (!R.tacticsTargets(g, g.units.m).includes("t")) fail("tactics fly", "the Mago should be able to aim at a perched Aquila");
   // a flyer on open ground is a normal melee target for the Fante
   g = { board: { blocked: {} }, order: ["f", "t"], units: { f: mk("f", "A", "fante", 0, 0), t: mk("t", "B", "aquila", 1, 0) } };
   if (!R.tacticsTargets(g, g.units.f).includes("t")) fail("tactics fly", "a flyer on open ground is a normal melee target");
@@ -1832,7 +1836,7 @@ for (const [label, run] of runs) {
 {
   const before = failures;
   tacticsFlyTests();
-  console.log(`${failures === before ? "✓" : "✗"} ${"condottieri flyers".padEnd(44)} Aquila strikes a perched Aquila, ground melee can't`);
+  console.log(`${failures === before ? "✓" : "✗"} ${"condottieri flyers".padEnd(44)} Aquila & Mago hit a perched Aquila, ground melee can't`);
 }
 {
   const before = failures;

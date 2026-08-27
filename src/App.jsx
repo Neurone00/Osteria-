@@ -3457,11 +3457,10 @@ function tacticsTargets(g, unit) {
     const d = hdist(unit, t);
     if (d < u.min || d > u.rng) return false;
     if (u.rng > 1 && !tacticsLoS(g, unit, t)) return false;
-    // a flyer perched on an obstacle is out of melee reach for the ground-bound — and
-    // out of the Mago's blast, which can't target an obstacle hex. But another flyer
-    // can reach it, so an Aquila may strike an Aquila perched on an obstacle.
-    // Archers/crossbows still hit it at range.
-    if (g.board.blocked[hkey(t.q, t.r)] && ((u.rng === 1 && !u.fly) || u.aoe)) return false;
+    // a flyer perched on an obstacle is out of reach for the ground-bound only: an
+    // Aquila can strike a perched Aquila, archers/crossbows hit it at range, and the
+    // Mago's blast can catch it too. Just plain ground melee is denied.
+    if (g.board.blocked[hkey(t.q, t.r)] && u.rng === 1 && !u.fly) return false;
     return true;
   });
 }
@@ -3609,16 +3608,17 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     ev = { t: "attack", unit: unit.type, target: target.type, dmg, crit: res.crit, killed, splash: 0 };
     kind = res.crit ? "scopa" : "take"; // a crit gets the big slam + shake
   } else if (action && action.kind === "blast") {
-    // area caster: it aims a first hex (in range, in sight, not an obstacle) plus
-    // one adjacent second hex, and the same roll lands on every unit standing in
-    // those two hexes — friend or foe. The caster is out at range, so it's never
-    // caught in its own blast.
+    // area caster: it aims a first hex (in range, in sight) plus one adjacent second
+    // hex, and the same roll lands on every unit standing in those two hexes — friend
+    // or foe. The caster is out at range, so it's never caught in its own blast. An
+    // obstacle hex counts only when a unit is perched on it (e.g. an Aquila) — an
+    // empty obstacle can't be aimed at.
     if (tacticsHeals(g, seat, uk)) return null;
     const u = TACT.units[unit.type];
     if (!u.aoe) return null;
     const [k1, k2] = action.cells || [];
     if (!k1 || !k2 || k1 === k2) return null;
-    if (g.board.blocked[k1] || g.board.blocked[k2]) return null; // neither hex can be an obstacle
+    if ((g.board.blocked[k1] && !tacticsOccupied(g, k1)) || (g.board.blocked[k2] && !tacticsOccupied(g, k2))) return null; // an aimed obstacle hex must hold a perched unit
     const c1 = unhkey(k1),
       c2 = unhkey(k2);
     const d1 = hdist(unit, c1);
@@ -5541,6 +5541,23 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     return () => clearTimeout(id);
   }, [decided, outcome]);
 
+  // Condottieri can end on a killing blow — hold the finale for a beat so the
+  // deciding die roll plays out (its reveal sits under the finale scrim) before the
+  // verdict drops. No roll on a timeout/flag/castle win, so nothing to wait on there.
+  const [finaleHold, setFinaleHold] = useState(false);
+  const holdRef = useRef(null);
+  useEffect(() => {
+    if (!decided || !fgs || room?.game !== "condottieri") { setFinaleHold(false); return; }
+    const a = room.anim;
+    const hasRoll = room.ev && room.ev.t === "attack" && fgs.last && fgs.last.dmg != null;
+    if (!hasRoll || !a) { setFinaleHold(false); return; }
+    if (holdRef.current === a.id) return; // this reveal already held
+    holdRef.current = a.id;
+    setFinaleHold(true);
+    const t = setTimeout(() => setFinaleHold(false), (fgs.last.crit ? 1700 : 1150) + 450); // the RollReveal run, plus a beat
+    return () => clearTimeout(t);
+  }, [decided, room?.anim?.id]); // eslint-disable-line
+
   /* ── transports ── */
   const openStorage = useCallback(
     (code) => {
@@ -6567,7 +6584,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       {room.game !== "flotta2" && <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />}
       {solo && room.game !== "flotta2" && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
       <EndGameOverlay room={room} seat={seat} onAgree={agreeEnd} onDecline={declineEnd} onCancel={declineEnd} />
-      <FinaleModal show={gs.done && room.game !== "flotta2"} decided={decided} outcome={outcome} room={room} gs={gs} seat={seat} onAgain={again} onExit={toGames} />
+      <FinaleModal show={gs.done && room.game !== "flotta2" && !finaleHold} decided={decided} outcome={outcome} room={room} gs={gs} seat={seat} onAgain={again} onExit={toGames} />
 
       {room.game === "camicia" ? (
         <Camicia room={room} gs={gs} seat={seat} mine={mine} slamId={slamId} commit={commit} showScores={!!room.scores} />
@@ -7832,7 +7849,7 @@ const TACT_SLIDES = [
   { icon: "dice", title: "Ogni pedina è un dado", body: "La faccia mostra la vita. Fante d8, Arciere d6, Esploratore d2.", te: "Every piece is a die", be: "The face shows its life. Fante d8, Arciere d6, Esploratore d2." },
   { icon: "sword", title: "Ferito colpisce meno", body: "Attacchi tirando da 1 alla tua vita: più sei ferito, meno fai male.", te: "Wounded hits softer", be: "You attack by rolling 1 to your life: the more hurt you are, the less you deal." },
   { icon: "burst", title: "Il colpo pieno esplode", body: "Se tiri la faccia più alta è un Critico: rilanci il dado e sommi. Può incatenarsi — un colpo può valere doppio o più.", te: "A full hit explodes", be: "Roll your top face and it's a Crit: roll again and add. It can chain — one hit can be worth double or more." },
-  { icon: "spark", title: "Il Mago colpisce due caselle", body: "Miri una casella a tiro (2–3, non un ostacolo) e una vicina: lo stesso danno investe chiunque stia lì — anche le tue pedine. Attento al fuoco amico.", te: "The Mago hits two hexes", be: "Aim one hex in range (2–3, not an obstacle) and one next to it: the same damage hits anyone there — your own pieces too. Mind the friendly fire." },
+  { icon: "spark", title: "Il Mago colpisce due caselle", body: "Miri una casella a tiro (2–3) e una vicina: lo stesso danno investe chiunque stia lì — anche le tue pedine. Può colpire un’Aquila appollaiata su un ostacolo, ma non una casella-ostacolo vuota. Attento al fuoco amico.", te: "The Mago hits two hexes", be: "Aim one hex in range (2–3) and one next to it: the same damage hits anyone there — your own pieces too. It can catch an Aquila perched on an obstacle, but not an empty obstacle hex. Mind the friendly fire." },
   { icon: "bow", title: "Uno per uno", body: "A turno, una mossa a testa: attivi una pedina (la sposti e attacchi), fino a due volte prima che riposi.", te: "One at a time", be: "Take turns, one move each: activate a piece (move it and attack), up to twice before it rests." },
   { icon: "flag", title: "Come si vince", body: "Stermina l’altro, espugna il suo castello (tienilo un turno sotto tiro), o conquista tutti gli stendardi. Uno stendardo dà +1 danno a chi ci combatte.", te: "How to win", be: "Wipe out the other, take their castle (hold it a turn under fire), or seize every banner. A banner gives +1 damage to whoever fights on it." },
 ];
@@ -8069,7 +8086,7 @@ function Tactics({ room, gs, seat, commit }) {
     const a = unhkey(blast.a);
     for (const [dq, dr] of HEX_DIRS) {
       const nk = hkey(a.q + dq, a.r + dr);
-      if (cellKeys.has(nk) && !board.blocked[nk]) mateSet.add(nk);
+      if (cellKeys.has(nk) && (!board.blocked[nk] || tacticsOccupied(gs, nk))) mateSet.add(nk); // an obstacle can spill only if a unit is perched on it
     }
   }
   const fireBlast = () => {
