@@ -43,7 +43,7 @@ const EXPORTS = [
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
-  "dealAzzardo", "azThrow", "azPick", "azBot", "azCombo", "AZ_THROWS", "AZ_COMBO",
+  "dealAzzardo", "azChoose", "azThrow", "azClaim", "azBot", "azCombo", "azFrontier", "azGoalMet", "AZ_THROWS", "AZ_COMBO", "AZ_TREE",
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
@@ -689,26 +689,33 @@ function farkleScoreTests() {
   for (const d of scoring) if (!H(d)) fail("diecimila scoring", `${d.join("")} wrongly reads as a farkle`);
 }
 
-/* ── azzardo (dice roguelike) ───────────────────────────────── */
+/* ── azzardo (dice deck-builder) ────────────────────────────── */
 function playAzzardo() {
   let g = R.dealAzzardo("A", { A: 0, B: 0 });
   let steps = 0;
-  const MAX = 200;
+  const MAX = 300;
   while (!g.done) {
     if (++steps > MAX) return fail("azzardo", `no end after ${MAX} steps`);
     const seat = g.turn;
-    if (g.phase === "throw") {
+    const move = R.azBot(g, seat);
+    if (move.kind === "choose") {
+      const r = R.azChoose(g, seat, move.face);
+      if (!r) return fail("azzardo", "choosing a starting face was refused");
+      g = r.g;
+    } else if (move.kind === "throw") {
       const before = g.tracks[seat].score;
       const r = R.azThrow(g, seat); // unseeded → Math.random
       if (!r) return fail("azzardo", "throw refused on the throw phase");
       g = r.g;
-      if (g.phase !== "draft") return fail("azzardo", "a throw should open the draft");
+      if (g.phase !== "claim") return fail("azzardo", "a throw should open the claim");
       if (g.tracks[seat].score < before) return fail("azzardo", "a throw lowered the score");
     } else {
-      const i = R.azBot(g, seat);
-      const r = R.azPick(g, seat, i);
-      if (!r) return fail("azzardo", "the bot's pick was refused");
+      // claim: the node the bot picked must actually be claimable (goal met + reachable)
+      const r = R.azClaim(g, seat, move.node);
+      if (!r) return fail("azzardo", `claim refused: ${move.node}`);
+      const held = new Set(g.tracks[seat].path);
       g = r.g;
+      if (move.node && g.tracks[seat].path.length !== held.size + 1) fail("azzardo", "a claimed node wasn't added to the path");
     }
   }
   if (g.throws.A !== R.AZ_THROWS || g.throws.B !== R.AZ_THROWS) fail("azzardo", "both players should take exactly 20 throws");
@@ -729,21 +736,43 @@ function azzardoTests() {
   if (R.azCombo([1, 2, 3]) < 3) fail("azzardo combo", "a 3-straight should be tier 3+");
   if (R.azCombo([5, 5, 5, 2, 2]) !== 4) fail("azzardo combo", "a full house should be tier 4");
   if (R.azCombo([4, 4, 4, 4, 4]) !== 4) fail("azzardo combo", "five of a kind should be tier 4");
-  // a better combo drafts more upgrades
-  for (let t = 0; t < R.AZ_COMBO.length - 1; t++) if (!(R.AZ_COMBO[t].draft <= R.AZ_COMBO[t + 1].draft)) fail("azzardo combo", "draft size should not shrink with a better combo");
-  // a seeded throw is a pure function of its seed (both devices reach the same roll)
+  // combo bonus climbs with the tier (harder combos are worth more)
+  for (let t = 0; t < R.AZ_COMBO.length - 1; t++) if (!(R.AZ_COMBO[t].bonus <= R.AZ_COMBO[t + 1].bonus)) fail("azzardo combo", "the combo bonus should not shrink with a better combo");
+  // the path: two roots, whose branches cross so both can still reach the apex — even
+  // though each root's own early children are exclusive to it.
+  const roots = R.AZ_TREE.filter((n) => n.root).map((n) => n.id);
+  if (roots.length !== 2) fail("azzardo path", "there should be exactly two roots");
+  const reach = (start) => {
+    const have = new Set([start]);
+    for (let i = 0; i < R.AZ_TREE.length; i++) for (const n of R.AZ_TREE) if (!have.has(n.id) && !n.root && n.req.some((r) => have.has(r))) have.add(n.id);
+    return have;
+  };
+  const apex = R.AZ_TREE.find((n) => !n.root && R.AZ_TREE.every((m) => m.id === n.id || !m.req.includes(n.id))); // the leaf nobody depends on
+  for (const start of roots) if (!reach(start).has(apex.id)) fail("azzardo path", `root ${start} can't reach the apex ${apex.id}`);
+  // and each root's very first children are exclusive to it (different classes)
+  const kids = (start) => R.AZ_TREE.filter((n) => n.req.includes(start)).map((n) => n.id);
+  if (kids(roots[0]).some((k) => kids(roots[1]).includes(k))) fail("azzardo path", "the two roots should open different first nodes");
+  // you must pick a root before you can throw; a seeded throw is deterministic
   let g = R.dealAzzardo("A", { A: 0, B: 0 });
+  if (R.azThrow(g, "A", 1) != null) fail("azzardo", "can't throw before choosing a root");
+  if (R.azChoose(g, "B", 1) != null) fail("azzardo", "the off-turn seat can't choose");
+  g = R.azChoose(g, "A", 1).g;
+  if (g.tracks.A.root !== "R1" || g.tracks.A.path.length !== 1) fail("azzardo", "choosing 1 should root at R1");
   const a = R.azThrow(g, "A", 12345).g, b = R.azThrow(g, "A", 12345).g;
   if (JSON.stringify(a.roll) !== JSON.stringify(b.roll)) fail("azzardo", "a seeded throw should be deterministic");
-  if (JSON.stringify(a.draft) !== JSON.stringify(b.draft)) fail("azzardo", "the seeded draft should be deterministic");
-  // wrong-seat and wrong-phase guards
-  if (R.azThrow(g, "B", 1) != null) fail("azzardo", "the off-turn seat can't throw");
-  if (R.azPick(g, "A", 0) != null) fail("azzardo", "can't draft before a throw");
-  const t1 = R.azThrow(g, "A", 7).g;
-  if (R.azThrow(t1, "A", 7) != null) fail("azzardo", "can't throw again mid-draft");
-  const picked = R.azPick(t1, "A", 0).g;
-  if (picked.turn !== "B") fail("azzardo", "the turn should pass after a draft");
-  if (picked.tracks.A.dice.length + (picked.tracks.A.flat > 0 ? 1 : 0) < 1) fail("azzardo", "an upgrade should have been applied");
+  if (a.phase !== "claim") fail("azzardo", "a throw should open the claim phase");
+  if (R.azThrow(a, "A", 7) != null) fail("azzardo", "can't throw again mid-claim");
+  // claiming a node whose goal the throw didn't meet is refused; passing always works
+  const fr = R.azFrontier(a.tracks.A);
+  const unmet = fr.find((n) => !R.azGoalMet(n.goal, a.roll));
+  if (unmet && R.azClaim(a, "A", unmet.id) != null) fail("azzardo", "can't claim a node whose goal wasn't met");
+  const passed = R.azClaim(a, "A", null);
+  if (!passed || passed.g.turn !== "B") fail("azzardo", "passing should spend the throw and pass the turn");
+  // goal evaluation
+  const roll = { faces: [{ v: 3, kind: "mult", sides: 4 }], pips: [4, 4], sum: 8, tier: 1, mult: 3, gained: 24 };
+  if (!R.azGoalMet({ kind: "sum", n: 8 }, roll) || R.azGoalMet({ kind: "sum", n: 9 }, roll)) fail("azzardo goal", "sum goal off by one");
+  if (!R.azGoalMet({ kind: "combo", tier: 1 }, roll) || R.azGoalMet({ kind: "combo", tier: 2 }, roll)) fail("azzardo goal", "combo goal tier wrong");
+  if (!R.azGoalMet({ kind: "mult", n: 3 }, roll) || R.azGoalMet({ kind: "mult", n: 4 }, roll)) fail("azzardo goal", "mult goal threshold wrong");
 }
 
 /* ── bestiario (onitama) ────────────────────────────────────── */
@@ -1824,7 +1853,7 @@ const runs = [
   ["yahtzee", () => playYahtzee()],
   ["diecimila (farkle)", () => playFarkle({ target: 2000 })],
   ["diecimila, no last round + entry 500", () => playFarkle({ target: 2000, entry: true, lastRound: false })],
-  ["azzardo (dice roguelike)", () => playAzzardo()],
+  ["azzardo (dice deck-builder)", () => playAzzardo()],
   ["bestiario (onitama)", () => playBestiario()],
   ["flotta (battaglia navale)", () => playFlotta()],
   ["flotta 2 (fleet duel)", () => playFlotta2()],
@@ -1889,7 +1918,7 @@ for (const [label, run] of runs) {
 {
   const before = failures;
   azzardoTests();
-  console.log(`${failures === before ? "✓" : "✗"} ${"azzardo rules".padEnd(44)} combos, seeded throw, draft, turn pass`);
+  console.log(`${failures === before ? "✓" : "✗"} ${"azzardo rules".padEnd(44)} combos, the path (roots cross), goals, claim/pass`);
 }
 {
   const before = failures;
