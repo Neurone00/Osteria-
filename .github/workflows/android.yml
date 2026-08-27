@@ -51,6 +51,18 @@ jobs:
       - name: Sync Capacitor android project
         run: npx cap sync android
 
+      - name: Stamp version
+        run: |
+          # Monotonic build number + short SHA, so every build is a distinct,
+          # identifiable file — and the same version shows in the phone's App info.
+          VER="1.0.${{ github.run_number }}"
+          SHORT="${GITHUB_SHA:0:7}"
+          echo "APP_VER=$VER" >> "$GITHUB_ENV"
+          echo "APK_NAME=Osteria-v${VER}-${SHORT}.apk" >> "$GITHUB_ENV"
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          sed -i "s/versionName \"1.0\"/versionName \"${VER} (${SHORT})\"/" android/app/build.gradle
+          grep -E 'versionCode|versionName' android/app/build.gradle
+
       - name: Build debug APK
         run: |
           cd android
@@ -60,37 +72,41 @@ jobs:
       - name: Stage the APK
         run: |
           mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk "out/${APK_NAME}"
           cp android/app/build/outputs/apk/debug/app-debug.apk out/Osteria.apk
           ls -l out
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Osteria-apk
-          path: out/Osteria.apk
+          name: Osteria-apk-${{ env.APP_VER }}
+          path: out/
 
       - name: Publish a shareable Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A stable tag so the download URL never changes:
+          # Stable tag "apk" (latest), carrying both the versioned file and a
+          # constant Osteria.apk so the direct link never changes:
           #   https://github.com/${{ github.repository }}/releases/download/apk/Osteria.apk
           gh release delete apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create apk out/Osteria.apk \
-            --title "Osteria — offline APK" \
-            --notes "Install on both Android phones, then play offline over Bluetooth (one taps **Ospita/Host**, the other **Join**). Auto-built by CI from \`${GITHUB_SHA}\`."
+          gh release create apk "out/${APK_NAME}" out/Osteria.apk \
+            --title "Osteria ${APP_VER}" \
+            --notes "Version **${APP_VER}** (\`${GITHUB_SHA}\`). Uninstall any previous Osteria first, then install **${APK_NAME}** on both Android phones and play offline over Bluetooth — one taps **Ospita**, the other **Entra**. Stable link: \`Osteria.apk\` (always the latest)."
 
       - name: Publish APK to the apk branch
         run: |
+          cp "out/${APK_NAME}" "/tmp/${APK_NAME}"
           cp out/Osteria.apk /tmp/Osteria.apk
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout --orphan apk-publish
           git rm -r --cached . >/dev/null 2>&1 || true
+          cp "/tmp/${APK_NAME}" "${APK_NAME}"
           cp /tmp/Osteria.apk Osteria.apk
-          printf '%s\n' "# Osteria APK" "Auto-built by CI from \`${GITHUB_SHA}\`." "Download **Osteria.apk**, install on both Android phones, play offline." > README.md
-          git add -f Osteria.apk README.md
-          git commit -m "APK build from ${GITHUB_SHA}"
+          printf '%s\n' "# Osteria APK — ${APP_VER}" "Built from \`${GITHUB_SHA}\`." "Uninstall the old app, then install **${APK_NAME}** (or Osteria.apk) on both phones and play offline." > README.md
+          git add -f "${APK_NAME}" Osteria.apk README.md
+          git commit -m "APK ${APP_VER} from ${GITHUB_SHA}"
           # Fully-qualify the destination: the Release creates a *tag* named apk,
           # so a bare `:apk` is ambiguous (matches both the tag and this branch).
           git push -f origin apk-publish:refs/heads/apk
