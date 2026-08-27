@@ -15,7 +15,10 @@
     "simulate": "node scripts/simulate.mjs",
     "smoke": "node scripts/smoke.mjs",
     "test": "npm run smoke && npm run simulate",
-    "bt-relay": "node scripts/bt-relay.mjs"
+    "bt-relay": "node scripts/bt-relay.mjs",
+    "cap:prepare": "npm run bundle && node native/prepare-android.mjs",
+    "cap:sync": "npm run cap:prepare && cap sync android",
+    "cap:open": "cap open android"
   },
   "dependencies": {
     "jsdom": "^30.0.1",

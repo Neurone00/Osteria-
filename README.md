@@ -40,29 +40,57 @@ to be on the same network). The turn passes back and forth and each phone only s
 it), and — because it always loads the live site — **updates itself whenever you `npm run deploy`**. No app store,
 no rebuild.
 
-**Making a shareable APK:** two routes, both auto-update from Cloudflare because they wrap the live URL:
+**Making a shareable APK.** Pick by what you need — the difference is whether the app loads over the network or
+carries itself:
 
-- *No code* — open [PWABuilder](https://www.pwabuilder.com), paste `https://osteria.neurone00.workers.dev`, and
-  download an Android package (a TWA). Same for [Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap).
-- *With the bundled config* — `capacitor.config.json` already points at the live URL. Build it yourself:
+- *Auto-updating, needs internet to open* — the store-free route. Open [PWABuilder](https://www.pwabuilder.com),
+  paste `https://osteria.neurone00.workers.dev`, and download an Android package (a TWA); same for
+  [Bubblewrap](https://github.com/GoogleChromeLabs/bubblewrap). It always shows the live site, so it updates itself
+  every time you `npm run deploy` — but it's a thin wrapper around the URL and won't open with no connection.
+
+- *Offline-first, plays two phones over Bluetooth* — the Capacitor build in this repo. The APK **bundles the whole
+  game** (`android-www/`, no `server.url`), so it opens with zero internet, and it ships a **native Bluetooth
+  transport**: one phone hosts as a real BLE peripheral, the other joins as a central, and they sync the room
+  directly — no relay, no network. When there *is* internet, table codes and Bump still work, because those
+  transports dial Cloudflare from inside the app at runtime. The trade-off is the shell: since it no longer loads
+  the live URL, updating the app means rebuilding the APK (or hand people the PWA route above for the auto-updating
+  shell).
 
   ```bash
-  npm install @capacitor/core @capacitor/cli @capacitor/android
-  npm run bundle              # standalone/ is the offline fallback baked into the apk
+  npm install @capacitor/core @capacitor/cli @capacitor/android \
+              @capacitor-community/bluetooth-le cordova-plugin-ble-peripheral
+  npm run cap:prepare         # bundles the app + native BLE bridge into android-www/
   npx cap add android         # once
-  npx cap sync android
+  npm run cap:sync            # cap:prepare + cap sync android
+  ```
+
+  Then add the Bluetooth permissions to `android/app/src/main/AndroidManifest.xml` (the peripheral/advertise ones
+  aren't added automatically):
+
+  ```xml
+  <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+  <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+                   android:usesPermissionFlags="neverForLocation" />
+  ```
+
+  Build it:
+
+  ```bash
   cd android && ./gradlew assembleDebug
   # → android/app/build/outputs/apk/debug/app-debug.apk
   ```
 
-  Because `server.url` is the Cloudflare URL, the installed APK shows the live site and auto-updates; the
-  `standalone/` bundle rides along as the offline fallback.
+  Install that APK on both phones. To play with no internet: one taps **Ospita/Host** under Bluetooth, the other
+  taps **Join** and picks the host from the system chooser. This path is a **scaffold that needs on-device
+  testing** — the two plugins are real and the bridge (`native/bridge.js`) is wired to the same Osteria GATT
+  service the web transport uses, but no simulator can exercise two radios. If long messages arrive truncated,
+  lower `FRAME` in `native/bridge.js` (a device that won't raise its BLE MTU caps a frame near 20 bytes).
 
-**The one hard case — two phones with *no* internet at all.** A web page can't open a raw radio link (Bluetooth or
-Wi-Fi Direct) between two browsers, so truly offline two-phone play isn't possible from the website itself. The
-options are: a laptop running the bundled Bluetooth relay (`npm run bt-relay`, see below); putting both phones on
-one phone's hotspot (no internet needed, the relay/PeerJS still connect over the local link); or a native build with
-a Bluetooth plugin, which the Capacitor config above is the starting point for.
+**Why not just Bluetooth from the website?** A web *page* can only be a BLE central, never a peripheral, so two
+browsers can't pair page-to-page — that's the whole reason the offline route needs the native app (or, on the web,
+a laptop running `npm run bt-relay` as the shared peripheral, see below). Wrapped in the APK the host *can* be a
+peripheral, which is what makes true no-internet two-phone play work.
 
 ## Deploy to Cloudflare
 
@@ -171,7 +199,8 @@ shows *disconnected*, the **Reconnect** control in the header re-runs the handsh
 | Inside a Claude artifact | `window.storage` shared keys, polled every 1.2 s |
 | On the Cloudflare Worker | WebSocket to `/room/CODE`, relayed and persisted by a Durable Object |
 | Any other static host | WebRTC data channel via [PeerJS](https://peerjs.com), loaded from a CDN at runtime |
-| No network at all | **Web Bluetooth** — both phones connect to a shared Osteria BLE service and sync over it |
+| No network, on the web | **Web Bluetooth** — both phones connect to a shared Osteria BLE service (a relay) and sync over it |
+| No network, in the APK | **Native Bluetooth** — host advertises as a BLE peripheral, guest joins as a central, no relay |
 
 ### Bluetooth (offline, no network)
 
@@ -189,6 +218,15 @@ npm run bt-relay        # advertises as "Osteria"; connect both phones to it
 
 — or point the phones at any peripheral exposing the same service UUID (`scripts/bt-relay.mjs` has it). No Wi-Fi, no
 internet, no server. It's the same one-writer-per-move state as every other transport.
+
+### Native Bluetooth (the APK, no relay)
+
+Inside the Capacitor APK the browser-page limit is gone, so no relay is needed: the **host phone advertises the
+Osteria GATT service as a real BLE peripheral** and the **guest joins as a central**. `native/bridge.js` (bundled
+only into the APK, never the web build) attaches a `window.OsteriaNative` global that `App.jsx` feature-detects and
+uses as a fifth transport — same `{send, hello, close}` contract, same fragmented frames. Because the detection is
+purely runtime and the bridge is a separate file, `src/App.jsx` still imports nothing but React and the web artifact
+is byte-for-byte unaffected. Build steps and permissions are under *Making a shareable APK* above.
 
 For the self-hosted path the host's browser registers the peer id `osteria-tavolo-CODE` on PeerJS's free public
 broker, and the guest dials that id. After the handshake the two phones talk directly — the broker only introduces

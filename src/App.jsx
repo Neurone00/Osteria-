@@ -62,6 +62,12 @@ const BT_SERVICE = "6f737465-7269-6161-0000-000000000001"; // "oster…" — a f
 const BT_CHAR = "6f737465-7269-6161-0000-000000000002";
 const BT_FRAME = 180; // payload bytes per frame, comfortably under a long-write
 const btSupported = () => typeof navigator !== "undefined" && !!navigator.bluetooth;
+// The native wrapper (Capacitor APK) injects a global OsteriaNative — a fifth transport
+// where the *host* is a real BLE peripheral (a browser page can't be), so two phones
+// pair directly with no relay and no network. Same {send,hello,close} shape as the rest;
+// the bridge owns the radio and the framing, App.jsx just hands it JSON. Absent on the
+// web, so this whole path is dead code in the artifact — it never imports anything.
+const nativeSupported = () => typeof globalThis !== "undefined" && !!(globalThis.OsteriaNative && globalThis.OsteriaNative.available);
 function btConcat(parts) {
   let len = 0;
   for (const p of parts) len += p.length;
@@ -5893,6 +5899,51 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     [receive, publish]
   );
 
+  // Native Bluetooth (Capacitor APK): the host is a real BLE peripheral and the guest
+  // a central, so two phones pair directly with no relay and no network. The bridge
+  // (window.OsteriaNative, injected only in the APK) owns the radio and the framing; we
+  // hand it JSON and adopt whatever comes back, exactly like the other transports. This
+  // never runs on the web — window.OsteriaNative is absent — so the artifact is untouched.
+  const openNative = useCallback(
+    async (host, nm) => {
+      const N = typeof window !== "undefined" ? window.OsteriaNative : null;
+      if (!N || !N.available) {
+        setMsg(L("Bluetooth nativo non disponibile (serve l'app installata).", "Native Bluetooth unavailable (needs the installed app)."));
+        return false;
+      }
+      const handlers = {
+        onStatus: (s) => { if (s === "waiting" || s === "live" || s === "lost") setLink(s); },
+        onMessage: (d) => {
+          if (d && d.hello !== undefined) {
+            const cur = roomRef.current;
+            if (cur) publish({ ...cur, names: { ...cur.names, B: d.hello } });
+          } else if (d && d.type === "state" && d.room) {
+            setLink("live");
+            receive(d.room);
+          }
+        },
+      };
+      setLink("waiting");
+      let ok = false;
+      try { ok = host ? await N.host(nm, handlers) : await N.guest(nm, handlers); } catch { ok = false; }
+      if (!ok) {
+        setMsg(host
+          ? L("Impossibile avviare il tavolo Bluetooth.", "Couldn't start the Bluetooth table.")
+          : L("Nessun tavolo Bluetooth trovato lì vicino.", "No Bluetooth table found nearby."));
+        return false;
+      }
+      setLink("live");
+      if (!host) { try { await N.send({ hello: nm || "Ospite" }); } catch {} }
+      netRef.current = {
+        send: (r) => { try { N.send({ type: "state", room: r }); } catch {} },
+        hello: async (n) => { try { await N.send({ hello: n || "Ospite" }); } catch {} return true; },
+        close: () => { try { N.close(); } catch {} },
+      };
+      return true;
+    },
+    [receive, publish]
+  );
+
   /* ── lifecycle ── */
   const openTable = async (preCode) => {
     // preCode is only a real 4-letter code from the bump flow; when this is a
@@ -5955,6 +6006,38 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     setSeat("B"); seatRef.current = "B"; claimRef.current = false;
     setLink("waiting");
     const ok = await openBluetooth(false, nm);
+    if (!ok) return;
+    await netRef.current.hello(nm);
+    saveSession({ code: "BT", seat: "B", name: nm });
+    setScreen("table");
+  };
+
+  // Host a table over native Bluetooth (installed app): same fresh room as openTable,
+  // synced over the direct phone-to-phone BLE link. Host is seat A, the peripheral.
+  const openTableNative = async () => {
+    const code = Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
+    const g0 = mostPlayedGame(boardRef.current);
+    const fresh = {
+      code, v: 0, ts: Date.now(),
+      names: { A: name.trim() || "Oste", B: null },
+      status: "lobby", game: g0,
+      opts: { ...GAMES[g0].def, ...(savedRules[g0] || {}) },
+      scores: showScores, gs: null, log: [], ev: null, anim: null,
+    };
+    setSeat("A"); seatRef.current = "A"; claimRef.current = false;
+    roomRef.current = fresh; setRoom(fresh); setLink("waiting");
+    const ok = await openNative(true, name);
+    if (!ok) return;
+    netRef.current.send(fresh);
+    saveSession({ code, seat: "A", name: name.trim() || "Oste", room: fresh });
+    setScreen("table");
+  };
+  // Join a native Bluetooth table: guest is seat B, the central; greets and adopts state.
+  const joinTableNative = async () => {
+    const nm = name.trim() || "Ospite";
+    setSeat("B"); seatRef.current = "B"; claimRef.current = false;
+    setLink("waiting");
+    const ok = await openNative(false, nm);
     if (!ok) return;
     await netRef.current.hello(nm);
     saveSession({ code: "BT", seat: "B", name: nm });
@@ -6517,7 +6600,24 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                     {L("Entra", "Join")}
                   </Button>
                 </div>
-                {btSupported() && (
+                {nativeSupported() ? (
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 2px 4px" }}>
+                      <div style={{ flex: 1, height: 1, background: T.line }} />
+                      <Micro>Bluetooth</Micro>
+                      <div style={{ flex: 1, height: 1, background: T.line }} />
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <Button kind="line" full onClick={openTableNative}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Ico n="bump" s={15} /> {L("Ospita", "Host")}</span>
+                      </Button>
+                      <Button kind="line" full onClick={joinTableNative}>
+                        {L("Entra", "Join")}
+                      </Button>
+                    </div>
+                    <Micro style={{ textAlign: "center", marginTop: 6 }}>{L("Vicini, offline — uno ospita, l'altro entra", "Nearby, offline — one hosts, the other joins")}</Micro>
+                  </>
+                ) : btSupported() ? (
                   <>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 2px 4px" }}>
                       <div style={{ flex: 1, height: 1, background: T.line }} />
@@ -6534,7 +6634,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                     </div>
                     <Micro style={{ textAlign: "center", marginTop: 6 }}>{L("Vicini, senza rete — scegli il tavolo Bluetooth", "Nearby, no network — pick the Bluetooth table")}</Micro>
                   </>
-                )}
+                ) : null}
               </>
             ) : (
               <>
