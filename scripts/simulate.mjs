@@ -298,6 +298,20 @@ function tacticsFieldTests() {
   for (let i = 0; i < R.TACT_REFUSALS; i++) { const x = R.tacticsFieldRefuse(cap, "A"); if (!x) fail("tactics field", "refusal within cap rejected"); cap = x.g; }
   if (R.tacticsFieldRefuse(cap, "A") != null) fail("tactics field", "a seat can't refuse more than the cap");
 }
+function tacticsFlyTests() {
+  const B = R.hkey(1, 0);
+  const mk = (id, owner, type, q, r) => ({ id, owner, type, q, r, hp: 3, max: 3 });
+  const perched = mk("t", "B", "aquila", 1, 0); // an Aquila sitting on an obstacle
+  // a ground meleer (Fante) can't reach a flyer perched on an obstacle
+  let g = { board: { blocked: { [B]: true } }, order: ["f", "t"], units: { f: mk("f", "A", "fante", 0, 0), t: perched } };
+  if (R.tacticsTargets(g, g.units.f).includes("t")) fail("tactics fly", "a ground meleer shouldn't reach a perched flyer");
+  // but another Aquila can strike it
+  g = { board: { blocked: { [B]: true } }, order: ["a", "t"], units: { a: mk("a", "A", "aquila", 0, 0), t: perched } };
+  if (!R.tacticsTargets(g, g.units.a).includes("t")) fail("tactics fly", "an Aquila should reach an Aquila perched on an obstacle");
+  // a flyer on open ground is a normal melee target for the Fante
+  g = { board: { blocked: {} }, order: ["f", "t"], units: { f: mk("f", "A", "fante", 0, 0), t: mk("t", "B", "aquila", 1, 0) } };
+  if (!R.tacticsTargets(g, g.units.f).includes("t")) fail("tactics fly", "a flyer on open ground is a normal melee target");
+}
 function tacticsConnectedKeys(openKeys) {
   const set = new Set(openKeys);
   const seen = new Set([openKeys[0]]);
@@ -1814,6 +1828,11 @@ for (const [label, run] of runs) {
   const before = failures;
   tacticsFieldTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"condottieri field handshake".padEnd(44)} accept, refuse (max 2), reroll, classic skips`);
+}
+{
+  const before = failures;
+  tacticsFlyTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"condottieri flyers".padEnd(44)} Aquila strikes a perched Aquila, ground melee can't`);
 }
 {
   const before = failures;

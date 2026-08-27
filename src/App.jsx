@@ -3070,7 +3070,7 @@ const TACT = {
     fante: { name: "Fante", max: 8, move: 2, min: 1, rng: 1, cost: 3, icon: "sword" }, // d8 melee bruiser
     arciere: { name: "Arciere", max: 6, move: 2, min: 2, rng: 3, cost: 3, icon: "bow" }, // d6 kite, 2–3 away
     esploratore: { name: "Esploratore", max: 2, move: 4, min: 1, rng: 1, cost: 3, icon: "compass" }, // d2 scout: races across the map, but soft (two hits and it's gone)
-    aquila: { name: "Aquila", max: 3, move: 3, min: 1, rng: 1, cost: 4, icon: "eagle", fly: true }, // d3 flyer: crosses obstacles, and perched on one it's safe from melee
+    aquila: { name: "Aquila", max: 3, move: 3, min: 1, rng: 1, cost: 4, icon: "eagle", fly: true }, // d3 flyer: crosses obstacles, and perched on one it's safe from ground melee — but another Aquila reaches it
     balestriere: { name: "Balestriere", max: 8, move: 1, min: 2, rng: 4, cost: 5, icon: "crossbow" }, // d8 slow sniper, 2–4
     fromboliere: { name: "Fromboliere", max: 4, move: 3, min: 1, rng: 2, cost: 2, icon: "sling" }, // d4 cheap skirmisher
     mago: { name: "Mago", max: 4, move: 2, min: 2, rng: 3, cost: 5, icon: "spark", aoe: true }, // d4 area caster: aims two adjacent hexes, hits friend and foe in both
@@ -3457,9 +3457,11 @@ function tacticsTargets(g, unit) {
     const d = hdist(unit, t);
     if (d < u.min || d > u.rng) return false;
     if (u.rng > 1 && !tacticsLoS(g, unit, t)) return false;
-    // a flyer perched on an obstacle is out of melee reach — and out of the Mago's
-    // blast too, since that can't target an obstacle hex. Archers/crossbows still hit it.
-    if (g.board.blocked[hkey(t.q, t.r)] && (u.rng === 1 || u.aoe)) return false;
+    // a flyer perched on an obstacle is out of melee reach for the ground-bound — and
+    // out of the Mago's blast, which can't target an obstacle hex. But another flyer
+    // can reach it, so an Aquila may strike an Aquila perched on an obstacle.
+    // Archers/crossbows still hit it at range.
+    if (g.board.blocked[hkey(t.q, t.r)] && ((u.rng === 1 && !u.fly) || u.aoe)) return false;
     return true;
   });
 }
@@ -3593,7 +3595,7 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
     if (!target || target.owner === seat) return null;
     const d = hdist(unit, target);
     if (d < u.min || d > u.rng || (u.rng > 1 && !tacticsLoS(g, unit, target))) return null;
-    if (u.rng === 1 && g.board.blocked[hkey(target.q, target.r)]) return null; // can't reach a flyer perched on an obstacle
+    if (u.rng === 1 && !u.fly && g.board.blocked[hkey(target.q, target.r)]) return null; // ground melee can't reach a flyer perched on an obstacle — but another flyer can
     const res = tacticsRoll(unit.hp);
     const bonus = g.rules.flagAtk && g.board.banners.includes(uk) ? TACT.FLAG_DMG : 0; // +1 attacking from a flag
     const dmg = res.total + bonus;
@@ -8565,7 +8567,7 @@ function Tactics({ room, gs, seat, commit }) {
           icon = d.icon;
           tint = TSIDE[iu.owner];
           title = `${d.name}${iu.owner !== seat ? L(" · nemico", " · enemy") : ""}`;
-          desc = `d${d.max} · ${L("vita","life")} ${iu.hp}/${iu.max} · ${L("muove","moves")} ${d.move} · ${L("tiro","range")} ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.fly ? L(" · vola sopra gli ostacoli; su un ostacolo è al sicuro dai corpo a corpo", " · flies over obstacles; on one it's safe from melee") : ""}${d.aoe ? L(" · colpisce due caselle vicine (anche i tuoi)", " · hits two adjacent hexes (your own too)") : ""}`;
+          desc = `d${d.max} · ${L("vita","life")} ${iu.hp}/${iu.max} · ${L("muove","moves")} ${d.move} · ${L("tiro","range")} ${d.min === d.rng ? d.rng : `${d.min}–${d.rng}`}${d.fly ? L(" · vola sopra gli ostacoli; su un ostacolo è al sicuro dai corpo a corpo a terra (ma un'altra Aquila la raggiunge)", " · flies over obstacles; on one it's safe from ground melee (but another Aquila can reach it)") : ""}${d.aoe ? L(" · colpisce due caselle vicine (anche i tuoi)", " · hits two adjacent hexes (your own too)") : ""}`;
         } else if (it.kind === "castle") {
           icon = "castle";
           tint = TSIDE[it.side];
