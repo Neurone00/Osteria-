@@ -205,6 +205,15 @@ const GAMES = {
     ],
     def: { target: 5000, entry: false, lastRound: true },
   },
+  azzardo: {
+    name: "Azzardo",
+    tag: "un dado, e la fortuna",
+    line: "Parti da una moneta — un d2 — e cresci. Ogni tiro segna; la combo che esce decide quanti potenziamenti peschi. Evolvi i dadi (d2→d20), aggiungi dadi ×, accumula bonus. Venti tiri a testa: vince il totale più alto.",
+    en: { tag: "one die, and fortune", line: "Start from a coin — a d2 — and grow. Every throw scores; the combo you roll sets how many upgrades you draft. Evolve dice (d2→d20), add ×dice, stack bonuses. Twenty throws each: highest total wins." },
+    dice: true,
+    opts: [],
+    def: {},
+  },
   scala: {
     name: "Scala 40",
     tag: "aprire a quaranta",
@@ -1288,6 +1297,155 @@ function farkleSelect(gs, seat, sel) {
   const g = clone(gs);
   g.pick = pick;
   return { g, quiet: true, nojolt: true, ev: { t: "pick" } };
+}
+
+/* ── azzardo (dice roguelike) ──────────────────────────────────
+   Start with a coin — a d2 — and work it up. Every throw scores; the combo you roll
+   sets how many upgrades you may draft after it, so a good throw literally builds you
+   faster. Evolve dice up the ladder (d2→d4→d6→d8→d12→d20), bolt on multiplier dice
+   (a ×die, which can whiff to ×1), stack flat charms and combo amps. Twenty throws
+   each, highest total takes the table. Turn-based (strict alternation) so it rides
+   the one-writer rule with no simultaneous-write merge, and every throw is seeded, so
+   a longer hold on the charge button stirs it like the shuffle. More dice is just
+   another way to build — both players draw from the same pool toward the same finish
+   line, so no score normalisation is needed. */
+const AZ_SIDES = [2, 4, 6, 8, 12, 20]; // the evolution ladder
+const azNext = (s) => AZ_SIDES[Math.min(AZ_SIDES.length - 1, AZ_SIDES.indexOf(s) + 1)];
+const AZ_THROWS = 20; // throws per player
+const AZ_COMBO = [
+  { it: "—", en: "—", bonus: 0, draft: 1 },
+  { it: "Coppia", en: "Pair", bonus: 3, draft: 2 },
+  { it: "Tris o due coppie", en: "Triple / two pair", bonus: 8, draft: 3 },
+  { it: "Scala o poker", en: "Straight / four", bonus: 16, draft: 4 },
+  { it: "Full o cinquina", en: "Full house / five", bonus: 30, draft: 5 },
+];
+const azDie = (id, sides, kind) => ({ id, sides, kind }); // kind: "pip" | "mult"
+const azStartTrack = () => ({ dice: [azDie("d0", 2, "pip")], flat: 0, amp: 1, score: 0 });
+function dealAzzardo(dealer, tally) {
+  return {
+    turn: dealer,
+    starter: dealer,
+    throws: { A: 0, B: 0 },
+    tracks: { A: azStartTrack(), B: azStartTrack() },
+    phase: "throw", // throw → draft → throw … → done
+    roll: null, // { seat, faces:[{v,kind,sides}], tier, base, mult, gained }
+    draft: null, // { seat, tier, opts:[{k,it,en,desc}] }
+    nextId: 1,
+    tally: tally || { A: 0, B: 0 },
+    summary: null,
+    done: false,
+    win: null,
+    matchDone: false,
+    last: null,
+  };
+}
+// The combo tier a set of pip values makes (0–4). Only pip dice count, so a lone coin
+// can never combo — you have to add dice to unlock the bigger drafts.
+function azCombo(pips) {
+  if (pips.length < 2) return 0;
+  const c = {};
+  for (const v of pips) c[v] = (c[v] || 0) + 1;
+  const counts = Object.values(c).sort((a, b) => b - a);
+  const uniq = Object.keys(c).map(Number).sort((a, b) => a - b);
+  let run = 1, best = 1;
+  for (let i = 1; i < uniq.length; i++) { run = uniq[i] === uniq[i - 1] + 1 ? run + 1 : 1; best = Math.max(best, run); }
+  const allSame = counts[0] === pips.length && pips.length >= 3;
+  const full = counts[0] >= 3 && counts[1] >= 2;
+  if (allSame || full || best >= 5) return 4;
+  if (best >= 3 || counts[0] >= 4) return 3;
+  if (counts[0] >= 3 || counts.filter((n) => n >= 2).length >= 2) return 2;
+  if (counts[0] >= 2) return 1;
+  return 0;
+}
+const azRollDie = (die, rng) => 1 + Math.floor(rng() * die.sides);
+// The upgrade pool. Each option is pure data applied by azApply. A better combo draws
+// more of them (AZ_COMBO[tier].draft), which is how combos hand you power-ups.
+const AZ_UP = [
+  { k: "evolve", it: "Evolvi un dado", en: "Evolve a die" },
+  { k: "addpip", it: "Nuovo dado", en: "Add a die" },
+  { k: "addmult", it: "Dado ×", en: "Multiplier die" },
+  { k: "flat", it: "Portafortuna", en: "Lucky charm" },
+  { k: "amp", it: "Maestro di combo", en: "Combo master" },
+];
+const azLowPip = (dice) => { const p = dice.filter((d) => d.kind === "pip"); return p.length ? p.reduce((m, d) => (d.sides < m ? d.sides : m), 20) : 4; };
+function azOptDesc(k, track) {
+  if (k === "evolve") { const lo = azLowPip(track.dice); return `d${lo} → d${azNext(lo)}`; }
+  if (k === "addpip") return "+ d4";
+  if (k === "addmult") return "+ ×d4";
+  if (k === "flat") return "+3 base";
+  return `×${track.amp} → ×${track.amp + 1} combo`;
+}
+function azDraftOpts(tier, track, rng) {
+  const size = AZ_COMBO[tier].draft;
+  const pool = AZ_UP.slice();
+  const out = [];
+  while (out.length < size && pool.length) {
+    const u = pool.splice(Math.floor(rng() * pool.length), 1)[0];
+    out.push({ k: u.k, it: u.it, en: u.en, desc: azOptDesc(u.k, track) });
+  }
+  return out;
+}
+function azApply(track, opt) {
+  const t = { ...track, dice: track.dice.map((d) => ({ ...d })) };
+  if (opt.k === "evolve") {
+    const pips = t.dice.filter((d) => d.kind === "pip");
+    if (pips.length) { const lo = pips.reduce((m, d) => (d.sides < m.sides ? d : m), pips[0]); lo.sides = azNext(lo.sides); }
+  } else if (opt.k === "addpip") t.dice.push(azDie(`n${opt._id}`, 4, "pip"));
+  else if (opt.k === "addmult") t.dice.push(azDie(`m${opt._id}`, 4, "mult"));
+  else if (opt.k === "flat") t.flat += 3;
+  else if (opt.k === "amp") t.amp += 1;
+  return t;
+}
+function azThrow(gs, seat, seed) {
+  if (gs.turn !== seat || gs.phase !== "throw" || gs.done) return null;
+  const g = clone(gs);
+  const rng = seed == null ? Math.random : mulberry32(seed >>> 0);
+  const tr = g.tracks[seat];
+  const faces = tr.dice.map((d) => ({ v: azRollDie(d, rng), kind: d.kind, sides: d.sides }));
+  const pips = faces.filter((f) => f.kind === "pip").map((f) => f.v);
+  const tier = azCombo(pips);
+  const base = pips.reduce((s, v) => s + v, 0) + tr.flat + AZ_COMBO[tier].bonus * tr.amp;
+  const mult = faces.filter((f) => f.kind === "mult").reduce((m, f) => m * Math.max(1, f.v), 1);
+  const gained = Math.round(base * mult);
+  tr.score += gained;
+  // a second seeded stream fixes the draft, so the option set belongs to this throw
+  const drng = seed == null ? Math.random : mulberry32(((seed >>> 0) ^ 0x9e3779b9) >>> 0);
+  g.roll = { seat, faces, tier, base, mult, gained };
+  g.draft = { seat, tier, opts: azDraftOpts(tier, tr, drng) };
+  g.phase = "draft";
+  g.last = { seat, gained, tier };
+  return { g, kind: "take", nojolt: true, ev: { t: "throw", seat, gained, tier } };
+}
+function azPick(gs, seat, i) {
+  if (gs.turn !== seat || gs.phase !== "draft" || gs.done) return null;
+  const opts = gs.draft && gs.draft.opts;
+  if (!opts || i < 0 || i >= opts.length) return null;
+  const g = clone(gs);
+  const opt = { ...opts[i], _id: g.nextId++ };
+  g.tracks[seat] = azApply(g.tracks[seat], opt);
+  g.throws[seat] += 1;
+  g.roll = null;
+  g.draft = null;
+  if (g.throws.A >= AZ_THROWS && g.throws.B >= AZ_THROWS) {
+    const sa = g.tracks.A.score, sb = g.tracks.B.score;
+    g.done = true;
+    g.win = sa === sb ? null : sa > sb ? "A" : "B";
+    g.summary = { a: sa, b: sb, win: g.win };
+    if (g.win) g.tally[g.win] += 1;
+  } else {
+    g.phase = "throw";
+    g.turn = other(seat);
+  }
+  return { g, kind: "take", nojolt: true, ev: { t: "pick", seat, k: opt.k } };
+}
+// Solo CPU / fuzzer: value each option crudely and take the best. Deterministic.
+function azBot(gs, seat) {
+  const opts = gs.draft && gs.draft.opts;
+  if (!opts) return 0;
+  const val = (o) => (o.k === "addmult" ? 5 : o.k === "evolve" ? 4 : o.k === "addpip" ? 3 : o.k === "amp" ? 2 : 1);
+  let bi = 0, bv = -1;
+  opts.forEach((o, i) => { const v = val(o); if (v > bv) (bv = v), (bi = i); });
+  return bi;
 }
 
 /* ── bestiario (onitama) ───────────────────────────────────────
@@ -5959,6 +6117,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealYahtzee(dealer, cont?.tally || null)
       : game === "diecimila"
       ? dealFarkle(dealer, cont?.tally || null, o)
+      : game === "azzardo"
+      ? dealAzzardo(dealer, cont?.tally || null)
       : game === "scala"
       ? dealScala(dealer, cont?.tally || null, deck)
       : game === "peppa"
@@ -6383,6 +6543,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Yahtzee room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "diecimila" ? (
         <Farkle room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+      ) : room.game === "azzardo" ? (
+        <Azzardo room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "scala" ? (
         <Scala room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "peppa" ? (
@@ -9254,6 +9416,125 @@ function Farkle({ room, gs, seat, mine, commit }) {
   );
 }
 
+/* ── azzardo (dice roguelike) ── */
+// A die chip: a rounded tile. Idle it shows what the die IS (d8, or ×d4 for a
+// multiplier die, tinted gold); mid-throw it shows the face it landed on.
+function AzChip({ die, face, big }) {
+  const mult = die ? die.kind === "mult" : face && face.kind === "mult";
+  const sides = die ? die.sides : face && face.sides;
+  const label = face != null ? (mult ? `×${face.v}` : `${face.v}`) : mult ? `×d${sides}` : `d${sides}`;
+  const whiff = face != null && mult && face.v <= 1; // a multiplier die that rolled a dud
+  const h = big ? 46 : 30;
+  return (
+    <div style={{ minWidth: h, height: h, padding: "0 7px", borderRadius: 9, border: `1.5px solid ${mult ? "rgba(184,134,43,0.55)" : T.line}`,
+      background: face != null ? (mult ? "rgba(184,134,43,0.14)" : T.ink) : "transparent",
+      color: face != null ? (mult ? "#8a6414" : T.bg) : mult ? "#8a6414" : T.ink,
+      opacity: whiff ? 0.5 : 1, display: "grid", placeItems: "center", fontFamily: BRAND, fontWeight: 700, fontSize: big ? 18 : 12 }}>
+      {label}
+    </div>
+  );
+}
+function Azzardo({ room, gs, seat, mine, commit }) {
+  const opp = other(seat);
+  const [showHelp, setShowHelp] = useState(false);
+  const tr = gs.tracks[seat], otr = gs.tracks[opp];
+  const throwPhase = gs.phase === "throw", draftPhase = gs.phase === "draft";
+  const roll = gs.roll, draft = gs.draft;
+
+  // combo flash — a big label pop when a scoring combo lands, on both screens
+  const [flash, setFlash] = useState(null);
+  const seen = useRef(null);
+  useEffect(() => {
+    if (roll && roll.tier > 0) {
+      const key = `${roll.seat}-${gs.throws.A}-${gs.throws.B}-${roll.gained}`;
+      if (seen.current !== key) { seen.current = key; setFlash(roll.tier); const t = setTimeout(() => setFlash(null), 1400); return () => clearTimeout(t); }
+    }
+  }, [roll && roll.gained, roll && roll.seat]); // eslint-disable-line
+
+  const dieRow = (track, big) => (
+    <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: big ? "center" : "flex-end" }}>
+      {track.dice.map((d) => <AzChip key={d.id} die={d} />)}
+    </div>
+  );
+  const sideHead = (who_, track, throws, right) => (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+      <div>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who_}{right && <span style={{ color: T.ink30, fontWeight: 400 }}> · {L("tu", "you")}</span>}</div>
+        <Micro>{throws}/{AZ_THROWS} {L("tiri", "throws")}{track.flat ? ` · +${track.flat}` : ""}{track.amp > 1 ? ` · ×${track.amp}` : ""}</Micro>
+      </div>
+      <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 26, minWidth: 54, textAlign: "right" }}>{track.score}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
+            <p style={{ margin: "0 0 10px" }}>{L("Parti da una moneta (un d2). A turno tira i tuoi dadi: i dadi numero danno punti, i dadi × moltiplicano (ma un × che esce 1 è sprecato).", "Start from a coin (a d2). On your turn, throw your dice: number dice give points, ×dice multiply (but a × that rolls 1 is wasted).")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("La combo che esce (coppia, tris, scala, full…) aggiunge punti e decide quanti potenziamenti peschi dopo il tiro. Più dadi = più combo.", "The combo you roll (pair, triple, straight, full…) adds points and sets how many upgrades you draft after the throw. More dice = more combos.")}</p>
+            <p style={{ margin: 0 }}>{L("Evolvi i dadi fino al d20, aggiungi dadi numero o ×, accumula bonus. Venti tiri a testa: vince il totale più alto. Tieni premuto Tira per caricare il tiro.", "Evolve dice up to a d20, add number or ×dice, stack bonuses. Twenty throws each: highest total wins. Hold Roll to charge the throw.")}</p>
+          </div>
+        </Sheet>
+      )}
+
+      {/* opponent */}
+      {sideHead(who(room, opp), otr, gs.throws[opp], false)}
+      <div style={{ marginTop: 6 }}>{dieRow(otr, false)}</div>
+
+      {/* the roll result / combo — grows to fill the middle */}
+      <div style={{ flex: 1, minHeight: 150, margin: "14px 0", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10 }}>
+        {roll ? (
+          <>
+            {flash && <div key={flash + "" + (roll && roll.gained)} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(26px, 8vw, 46px)", color: "#B8862B", letterSpacing: "-0.02em", lineHeight: 1 }}>{L(AZ_COMBO[roll.tier].it, AZ_COMBO[roll.tier].en)}</div>}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", maxWidth: 320 }}>
+              {roll.faces.map((f, i) => <AzChip key={i} face={f} big />)}
+            </div>
+            <div key={"g" + roll.gained} className="pop" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 30 }}>
+              +{roll.gained}
+            </div>
+            <Micro>{roll.base}{roll.mult > 1 ? ` × ${roll.mult}` : ""} · {who(room, roll.seat)}</Micro>
+          </>
+        ) : (
+          <Micro>{throwPhase ? (mine ? L("tira i dadi", "throw the dice") : `${who(room, gs.turn)} ${L("tira", "throws")}`) : ""}</Micro>
+        )}
+      </div>
+
+      {/* your side */}
+      {sideHead(who(room, seat), tr, gs.throws[seat], true)}
+      <div style={{ marginTop: 6, marginBottom: 12 }}>{dieRow(tr, false)}</div>
+
+      {/* actions */}
+      <div style={{ minHeight: 96, display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 8 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button onClick={() => setShowHelp(true)} aria-label={L("Come si gioca", "How to play")} style={{ background: "transparent", border: "none", color: T.ink30, cursor: "pointer", fontFamily: MONO, fontSize: 11, letterSpacing: "0.08em" }}>{L("REGOLE", "RULES")}</button>
+        </div>
+        {gs.done ? null : !mine ? (
+          <Micro style={{ textAlign: "center" }}>{draftPhase ? `${who(room, gs.turn)} ${L("sceglie…", "is drafting…")}` : `${L("tocca a", "over to")} ${who(room, opp)}`}</Micro>
+        ) : throwPhase ? (
+          <>
+            <ChargeButton onThrow={(seed) => commit(azThrow(gs, seat, seed))}>{L("Tieni premuto e tira", "Hold and roll")}</ChargeButton>
+            <Micro style={{ textAlign: "center" }}>{L("più a lungo tieni, più mescoli il tiro", "the longer you hold, the more you stir the throw")}</Micro>
+          </>
+        ) : draft ? (
+          <>
+            <Micro style={{ textAlign: "center" }}>{draft.tier > 0 ? L(`Combo · scegli 1 di ${draft.opts.length}`, `Combo · pick 1 of ${draft.opts.length}`) : L("Scegli un potenziamento", "Pick an upgrade")}</Micro>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {draft.opts.map((o, i) => (
+                <button key={i} onClick={() => commit(azPick(gs, seat, i))}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, width: "100%", padding: "12px 14px", background: "transparent", border: `1.5px solid ${o.k === "addmult" ? "rgba(184,134,43,0.5)" : T.line}`, borderRadius: 12, cursor: "pointer", WebkitTapHighlightColor: "transparent", fontFamily: BRAND }}>
+                  <span style={{ fontWeight: 700, fontSize: 15, color: T.ink }}>{L(o.it, o.en)}</span>
+                  <span style={{ fontWeight: 700, fontSize: 14, color: o.k === "addmult" ? "#8a6414" : T.ink60 }}>{o.desc}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 /* ── bestiario (onitama) ── */
 // A move card as a little 5×5 diagram: the centre is the piece, the tinted cells
 // are where it may step. Enemy cards are drawn rotated 180° so their reach points
@@ -11982,7 +12263,7 @@ function Summary({ room, gs }) {
         </div>
       </div>
     );
-  if ((room.game === "ruba" || room.game === "briscola" || room.game === "yahtzee" || room.game === "diecimila") && gs.summary)
+  if ((room.game === "ruba" || room.game === "briscola" || room.game === "yahtzee" || room.game === "diecimila" || room.game === "azzardo") && gs.summary)
     return (
       <div style={{ textAlign: "center" }}>
         <div style={{ fontSize: 22, fontWeight: 700, fontFamily: BRAND }}>
@@ -11990,7 +12271,7 @@ function Summary({ room, gs }) {
         </div>
         <Micro style={{ marginTop: 4 }}>
           {who(room, "A")} · {who(room, "B")}
-          {room.game === "briscola" ? L(" · punti su 120", " · points out of 120") : room.game === "yahtzee" || room.game === "diecimila" ? L(" · punti totali", " · total points") : ""} · {L("mani", "hands")} {gs.tally.A}–{gs.tally.B}
+          {room.game === "briscola" ? L(" · punti su 120", " · points out of 120") : room.game === "yahtzee" || room.game === "diecimila" || room.game === "azzardo" ? L(" · punti totali", " · total points") : ""} · {L("mani", "hands")} {gs.tally.A}–{gs.tally.B}
         </Micro>
       </div>
     );

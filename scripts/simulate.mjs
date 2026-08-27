@@ -42,6 +42,7 @@ const EXPORTS = [
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
+  "dealAzzardo", "azThrow", "azPick", "azBot", "azCombo", "AZ_THROWS", "AZ_COMBO",
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
@@ -586,6 +587,63 @@ function farkleScoreTests() {
   for (const d of busts) if (H(d)) fail("diecimila scoring", `${d.join("")} wrongly reads as scoring`);
   const scoring = [[1], [5], [2, 2, 3, 3, 4, 4], [6, 6, 6, 2], [1, 2, 3, 4, 5, 6]];
   for (const d of scoring) if (!H(d)) fail("diecimila scoring", `${d.join("")} wrongly reads as a farkle`);
+}
+
+/* ── azzardo (dice roguelike) ───────────────────────────────── */
+function playAzzardo() {
+  let g = R.dealAzzardo("A", { A: 0, B: 0 });
+  let steps = 0;
+  const MAX = 200;
+  while (!g.done) {
+    if (++steps > MAX) return fail("azzardo", `no end after ${MAX} steps`);
+    const seat = g.turn;
+    if (g.phase === "throw") {
+      const before = g.tracks[seat].score;
+      const r = R.azThrow(g, seat); // unseeded → Math.random
+      if (!r) return fail("azzardo", "throw refused on the throw phase");
+      g = r.g;
+      if (g.phase !== "draft") return fail("azzardo", "a throw should open the draft");
+      if (g.tracks[seat].score < before) return fail("azzardo", "a throw lowered the score");
+    } else {
+      const i = R.azBot(g, seat);
+      const r = R.azPick(g, seat, i);
+      if (!r) return fail("azzardo", "the bot's pick was refused");
+      g = r.g;
+    }
+  }
+  if (g.throws.A !== R.AZ_THROWS || g.throws.B !== R.AZ_THROWS) fail("azzardo", "both players should take exactly 20 throws");
+  const sa = g.tracks.A.score, sb = g.tracks.B.score;
+  if (g.win === "A" && !(sa > sb)) fail("azzardo", "winner A doesn't hold the higher total");
+  if (g.win === "B" && !(sb > sa)) fail("azzardo", "winner B doesn't hold the higher total");
+  if (g.win == null && sa !== sb) fail("azzardo", "a draw was called on unequal totals");
+  if (g.win && g.tally[g.win] !== 1) fail("azzardo", "the winner's tally wasn't bumped");
+  return steps;
+}
+function azzardoTests() {
+  // combos: a lone die can never combo; pairs/triples/straights/full climb the tiers
+  if (R.azCombo([4]) !== 0) fail("azzardo combo", "a single die can't combo");
+  if (R.azCombo([3, 5]) !== 0) fail("azzardo combo", "two different values aren't a combo");
+  if (R.azCombo([4, 4]) !== 1) fail("azzardo combo", "a pair should be tier 1");
+  if (R.azCombo([2, 2, 5, 5]) < 2) fail("azzardo combo", "two pair should be tier 2+");
+  if (R.azCombo([6, 6, 6]) < 2) fail("azzardo combo", "a triple should be tier 2+");
+  if (R.azCombo([1, 2, 3]) < 3) fail("azzardo combo", "a 3-straight should be tier 3+");
+  if (R.azCombo([5, 5, 5, 2, 2]) !== 4) fail("azzardo combo", "a full house should be tier 4");
+  if (R.azCombo([4, 4, 4, 4, 4]) !== 4) fail("azzardo combo", "five of a kind should be tier 4");
+  // a better combo drafts more upgrades
+  for (let t = 0; t < R.AZ_COMBO.length - 1; t++) if (!(R.AZ_COMBO[t].draft <= R.AZ_COMBO[t + 1].draft)) fail("azzardo combo", "draft size should not shrink with a better combo");
+  // a seeded throw is a pure function of its seed (both devices reach the same roll)
+  let g = R.dealAzzardo("A", { A: 0, B: 0 });
+  const a = R.azThrow(g, "A", 12345).g, b = R.azThrow(g, "A", 12345).g;
+  if (JSON.stringify(a.roll) !== JSON.stringify(b.roll)) fail("azzardo", "a seeded throw should be deterministic");
+  if (JSON.stringify(a.draft) !== JSON.stringify(b.draft)) fail("azzardo", "the seeded draft should be deterministic");
+  // wrong-seat and wrong-phase guards
+  if (R.azThrow(g, "B", 1) != null) fail("azzardo", "the off-turn seat can't throw");
+  if (R.azPick(g, "A", 0) != null) fail("azzardo", "can't draft before a throw");
+  const t1 = R.azThrow(g, "A", 7).g;
+  if (R.azThrow(t1, "A", 7) != null) fail("azzardo", "can't throw again mid-draft");
+  const picked = R.azPick(t1, "A", 0).g;
+  if (picked.turn !== "B") fail("azzardo", "the turn should pass after a draft");
+  if (picked.tracks.A.dice.length + (picked.tracks.A.flat > 0 ? 1 : 0) < 1) fail("azzardo", "an upgrade should have been applied");
 }
 
 /* ── bestiario (onitama) ────────────────────────────────────── */
@@ -1666,6 +1724,7 @@ const runs = [
   ["yahtzee", () => playYahtzee()],
   ["diecimila (farkle)", () => playFarkle({ target: 2000 })],
   ["diecimila, no last round + entry 500", () => playFarkle({ target: 2000, entry: true, lastRound: false })],
+  ["azzardo (dice roguelike)", () => playAzzardo()],
   ["bestiario (onitama)", () => playBestiario()],
   ["flotta (battaglia navale)", () => playFlotta()],
   ["flotta 2 (fleet duel)", () => playFlotta2()],
@@ -1711,6 +1770,11 @@ for (const [label, run] of runs) {
   const before = failures;
   farkleScoreTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"diecimila scoring table".padEnd(44)} singles, triples, doubling, straight, pairs`);
+}
+{
+  const before = failures;
+  azzardoTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"azzardo rules".padEnd(44)} combos, seeded throw, draft, turn pass`);
 }
 {
   const before = failures;

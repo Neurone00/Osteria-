@@ -10,12 +10,14 @@ opening a shared link. One player opens a table, the other joins. No accounts, n
 - **Perudo** (dice) — five hidden dice each, bid on a face across all dice or call Dudo; shake to roll
 - **Yahtzee** (dice) — three rolls a turn, thirteen scoring boxes, the +35 upper bonus; shake to roll
 - **Diecimila** (dice) — six-dice press-your-luck; roll on to pile up points, but a scoreless roll (a *Farkle*) burns the turn
+- **Azzardo** (dice) — a two-player dice roguelike: start from a coin, evolve your dice and draft power-ups from your combos, highest total after twenty throws wins
 - **Bestiario** (board) — a 5×5 duel of two Masters and eight Students, moved by animal cards that rotate between the players
 - **Flotta** (board) — battaglia navale on an 8×8 grid, but ships can maneuver and each side has three one-shot powers
 - **Il Paroliere** (dice) — the Italian Boggle: a 4×4 tray of letter dice, three minutes, find more words than your opponent
 
 Card games begin with a shuffle-and-cut ritual: one player taps the deck to shuffle (the randomness is seeded by
-the rhythm of their taps), the other drags to cut. Dice games throw on a phone shake (or a tap).
+the rhythm of their taps), the other drags to cut. Dice games throw on a press-and-hold: the longer you hold, the
+more the throw's seed is stirred — the dice cousin of the tap-timed shuffle.
 
 Cards land with a slam: overshoot animation, screen jolt, a synthesised thwack, and a haptic tap on phones.
 Sound and haptics can be turned off in the header; the whole motion set respects `prefers-reduced-motion`.
@@ -221,6 +223,19 @@ your first bank) and turning the last round off (first past the target wins outr
 
 Only 1s and 5s score on their own; a lone 2, 3, 4 or 6 is dead, so the app won't let you set one aside — you keep
 only dice that actually earn.
+
+### Azzardo
+
+A two-player **dice roguelike** — a small "dice Balatro." You each start with a single **coin** (a d2) and take
+**twenty throws**. Every throw scores, and the **combo** your number dice roll (pair, triple, straight, full, five)
+does two things: it adds a flat bonus, and it sets how many **upgrades** you may draft afterwards — a better combo
+hands you a wider choice. The draft pool: **evolve** a die up the ladder (d2 → d4 → d6 → d8 → d12 → d20), add a
+new **number die**, add a **× die** (a multiplier — but one that rolls a 1 whiffs to ×1), a **flat charm** (+3 to
+every base), or a **combo master** (amplifies the combo bonus). A throw's score is `(sum of number dice + charms +
+combo bonus) × the product of the × dice`. After twenty throws each, the **higher total wins** — adding dice is just
+another way to build, so both players draw from the same pool toward the same finish line and no normalisation is
+needed. Play is strictly turn-based (one throw + draft, then the other player), which keeps it on the one-writer
+sync rule with no simultaneous-write merge; the throw itself is seeded by the press-and-hold, like every dice game.
 
 ### Bestiario
 
