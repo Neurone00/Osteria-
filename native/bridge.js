@@ -100,6 +100,7 @@ async function bluetoothOn() {
 
 const te = new TextEncoder();
 const td = new TextDecoder();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Reassemble incoming [id,total,index]+payload frames per message id, then hand
 // the decoded object up. One partial message per id at a time is all we need —
@@ -161,30 +162,52 @@ async function host(name, { onMessage, onStatus } = {}) {
   if (!(await ensureBtPermissions())) throw new Error("concedi il permesso «Dispositivi nelle vicinanze» (Impostazioni ▸ App ▸ Osteria ▸ Autorizzazioni)");
   const inbox = makeInbox((o) => onMessage && onMessage(o));
 
-  // Build the service and start advertising. Each step is awaited so a rejection
-  // is caught and re-thrown with context the UI can show.
+  // A central wrote to us: reassemble and deliver. This first call is also what makes
+  // the plugin lazily open its GATT server.
   try {
-    // A central wrote to us: reassemble and deliver.
     await bp.onWriteRequest((req) => {
       const v = req && req.value;
       if (v) inbox(v instanceof Uint8Array ? v : new Uint8Array(v));
     });
-    await bp.createService(SERVICE);
-    await bp.addCharacteristic(
-      SERVICE, CHAR,
-      PROP.READ | PROP.WRITE | PROP.WRITE_NO_RESPONSE | PROP.NOTIFY,
-      PERM.READABLE | PERM.WRITEABLE
-    );
-    await bp.publishService(SERVICE);
+  } catch {}
+
+  // Build + publish the service, with retries. The peripheral plugin opens its GATT
+  // server on the first action; on Android 12 that openGattServer can transiently
+  // return null (permission/adapter timing), and the stock plugin never re-opens it —
+  // it wedges until the app restarts (the "addService on null" crash). We patch the
+  // plugin to re-open whenever the server is null, so simply retrying the next action a
+  // beat later recovers it. removeAllServices + a short wait between tries gives the
+  // adapter time to settle.
+  let built = false, lastErr = null;
+  for (let attempt = 0; attempt < 5 && !built; attempt++) {
+    if (attempt > 0) { try { await bp.removeAllServices(); } catch {} await sleep(400); }
+    try {
+      await bp.createService(SERVICE);
+      await bp.addCharacteristic(
+        SERVICE, CHAR,
+        PROP.READ | PROP.WRITE | PROP.WRITE_NO_RESPONSE | PROP.NOTIFY,
+        PERM.READABLE | PERM.WRITEABLE
+      );
+      await bp.publishService(SERVICE);
+      built = true;
+    } catch (e) { lastErr = e; }
+  }
+  if (!built) {
+    try { await bp.stopAdvertising(); } catch {}
+    try { await bp.removeAllServices(); } catch {}
+    const err = new Error("bluetooth non pronto"); err.retry = true; throw err;
+  }
+
+  // Advertise. Clear any stale advertiser first (a prior failed attempt), then start.
+  // AdvertiseCallback rejects with a bare error code; keep those flagged retryable too.
+  try {
+    try { await bp.stopAdvertising(); } catch {}
     await bp.startAdvertising(SERVICE, (name && name.trim()) || "Osteria");
   } catch (e) {
-    // Android's AdvertiseCallback rejects with a bare error code; translate the ones
-    // we might hit. If the plugin already opened a null GATT server on an earlier tap
-    // it stays stuck until the process restarts, so name that escape hatch too.
+    try { await bp.removeAllServices(); } catch {}
     const ADV_ERR = { 1: "dati troppo grandi", 2: "troppi advertiser", 3: "già avviato", 4: "errore interno", 5: "non supportato" };
     const t = errText(e);
-    const named = ADV_ERR[t] ? ` (${ADV_ERR[t]})` : "";
-    throw new Error("advertising — " + t + named + " · chiudi e riapri l'app, poi riprova");
+    const err = new Error("advertising " + (ADV_ERR[t] || t)); err.retry = true; throw err;
   }
 
   // Push to the guest by updating the characteristic — subscribed centrals get

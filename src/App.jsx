@@ -6001,6 +6001,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       let ok = false, err = null;
       try { ok = host ? await N.host(nm, handlers) : await N.guest(nm, handlers); } catch (e) { err = e; ok = false; }
       if (!ok) {
+        // Retryable "not ready" races are hidden behind a soft, non-technical hint;
+        // actionable errors (Bluetooth off, permission) still show their guidance.
+        try { N.close(); } catch {}
+        if (err && err.retry) { setMsg(L("Bluetooth non pronto — riprova.", "Bluetooth not ready — try again.")); return false; }
         const detail = (err && (err.message || String(err))) || "";
         const lead = host ? L("Bluetooth host", "Bluetooth host") : L("Bluetooth", "Bluetooth");
         setMsg(detail ? `${lead}: ${detail}` : `${lead}: ${L("non riuscito", "failed")}`);
@@ -6100,8 +6104,16 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     try { res = await N.bump(nm, handlers); } catch (e) { err = e; }
     setBumping(false);
     if (!res) {
-      const detail = (err && (err.message || String(err))) || L("non riuscito", "failed");
-      setMsg(`Bump: ${detail}`);
+      // Clean up any half-open BLE state so the very next Bump tap starts fresh — Bump
+      // is meant to be retried freely until it catches. Keep the message soft: the
+      // "not ready" races are transient and flagged err.retry, so hide the technical
+      // text and just invite another tap. Genuine, actionable errors (Bluetooth off,
+      // permission needed) aren't flagged, so those still show.
+      try { N.close(); } catch {}
+      handoffRef.current = "idle"; nativeRoleRef.current = null;
+      const soft = !!(err && err.retry);
+      if (err && !soft && (err.message || "").trim()) setMsg(err.message);
+      else setMsg(L("Bluetooth non pronto — tocca di nuovo Bump.", "Bluetooth not ready — tap Bump again."));
       return;
     }
     // Now that the bridge has decided who hosts, record the role so the handoff

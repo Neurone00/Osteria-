@@ -48,18 +48,28 @@ jobs:
       - name: Prepare offline web root + native bridge
         run: npm run cap:prepare
 
-      - name: Patch BLE advertising to fit the 31-byte packet limit
+      - name: Patch the BLE peripheral plugin (advert size + re-open null GATT server)
         run: |
-          # The peripheral plugin hard-codes setIncludeDeviceName(true); together with
-          # our 128-bit service UUID that overflows the 31-byte advert (startAdvertising
-          # error 1 = DATA_TOO_LARGE). Drop the name — the guest finds the host by
-          # service UUID. Patch node_modules (cap sync regenerates the copy from it).
+          # Two patches to node_modules before cap sync (which regenerates the app copy):
+          #
+          # 1. setIncludeDeviceName(false): the plugin hard-codes true, and together with
+          #    our 128-bit service UUID that overflows the 31-byte advert (startAdvertising
+          #    error 1 = DATA_TOO_LARGE). The guest finds the host by service UUID anyway.
+          #
+          # 2. Re-open the GATT server when it's null. The plugin opens it only on the very
+          #    first action (guarded by `bluetoothAdapter == null`); if that first
+          #    openGattServer returns null (an Android 12 permission/timing race) the block
+          #    never runs again and every publishService crashes with "addService on null"
+          #    until the app is killed. Widening the guard to also re-open when gattServer
+          #    is null lets a retry recover it in place.
           for f in \
             node_modules/cordova-plugin-ble-peripheral/src/android/BLEPeripheralPlugin.java \
             android/capacitor-cordova-android-plugins/src/main/java/com/megster/cordova/ble/peripheral/BLEPeripheralPlugin.java; do
-            [ -f "$f" ] && sed -i 's/setIncludeDeviceName(true)/setIncludeDeviceName(false)/' "$f"
+            [ -f "$f" ] || continue
+            sed -i 's/setIncludeDeviceName(true)/setIncludeDeviceName(false)/' "$f"
+            sed -i 's/if (bluetoothAdapter == null) {/if (bluetoothAdapter == null || gattServer == null) {/' "$f"
           done
-          grep -rn setIncludeDeviceName node_modules/cordova-plugin-ble-peripheral/src/android/ || true
+          grep -rn "setIncludeDeviceName\|gattServer == null" node_modules/cordova-plugin-ble-peripheral/src/android/ || true
 
       - name: Sync Capacitor android project
         run: npx cap sync android
