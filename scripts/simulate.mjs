@@ -699,8 +699,8 @@ function playAzzardo() {
     const seat = g.turn;
     const move = R.azBot(g, seat);
     if (move.kind === "choose") {
-      const r = R.azChoose(g, seat, move.face);
-      if (!r) return fail("azzardo", "choosing a starting face was refused");
+      const r = R.azChoose(g, seat, move.root);
+      if (!r) return fail("azzardo", "choosing a starting branch was refused");
       g = r.g;
     } else if (move.kind === "throw") {
       const before = g.tracks[seat].score;
@@ -738,10 +738,10 @@ function azzardoTests() {
   if (R.azCombo([4, 4, 4, 4, 4]) !== 4) fail("azzardo combo", "five of a kind should be tier 4");
   // combo bonus climbs with the tier (harder combos are worth more)
   for (let t = 0; t < R.AZ_COMBO.length - 1; t++) if (!(R.AZ_COMBO[t].bonus <= R.AZ_COMBO[t + 1].bonus)) fail("azzardo combo", "the combo bonus should not shrink with a better combo");
-  // the path: two roots, whose branches cross so both can still reach the apex — even
-  // though each root's own early children are exclusive to it.
+  // the path: six roots (classes), whose branches cross so any can still reach the apex,
+  // even though each root's own first child is exclusive to it.
   const roots = R.AZ_TREE.filter((n) => n.root).map((n) => n.id);
-  if (roots.length !== 2) fail("azzardo path", "there should be exactly two roots");
+  if (roots.length !== 6) fail("azzardo path", "there should be exactly six roots");
   const reach = (start) => {
     const have = new Set([start]);
     for (let i = 0; i < R.AZ_TREE.length; i++) for (const n of R.AZ_TREE) if (!have.has(n.id) && !n.root && n.req.some((r) => have.has(r))) have.add(n.id);
@@ -755,9 +755,10 @@ function azzardoTests() {
   // you must pick a root before you can throw; a seeded throw is deterministic
   let g = R.dealAzzardo("A", { A: 0, B: 0 });
   if (R.azThrow(g, "A", 1) != null) fail("azzardo", "can't throw before choosing a root");
-  if (R.azChoose(g, "B", 1) != null) fail("azzardo", "the off-turn seat can't choose");
-  g = R.azChoose(g, "A", 1).g;
-  if (g.tracks.A.root !== "R1" || g.tracks.A.path.length !== 1) fail("azzardo", "choosing 1 should root at R1");
+  if (R.azChoose(g, "B", roots[0]) != null) fail("azzardo", "the off-turn seat can't choose");
+  if (R.azChoose(g, "A", "nope") != null) fail("azzardo", "a non-root id can't be chosen");
+  g = R.azChoose(g, "A", roots[0]).g;
+  if (g.tracks.A.root !== roots[0] || g.tracks.A.path.length !== 1) fail("azzardo", `choosing ${roots[0]} should root there`);
   const a = R.azThrow(g, "A", 12345).g, b = R.azThrow(g, "A", 12345).g;
   if (JSON.stringify(a.roll) !== JSON.stringify(b.roll)) fail("azzardo", "a seeded throw should be deterministic");
   if (a.phase !== "claim") fail("azzardo", "a throw should open the claim phase");
