@@ -80,7 +80,21 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          # Maven Central occasionally answers dependency fetches with 429 (Too Many
+          # Requests) — a transient infra flake, not a build error. Retry with backoff
+          # so a rate-limited download doesn't fail the whole APK build.
+          n=0
+          until [ "$n" -ge 4 ]; do
+            ./gradlew assembleDebug --no-daemon --stacktrace && break
+            n=$((n+1))
+            if [ "$n" -ge 4 ]; then
+              echo "gradle assembleDebug failed after $n attempts" >&2
+              exit 1
+            fi
+            wait=$((5 * 2 ** (n - 1)))
+            echo "gradle attempt $n failed — retrying in ${wait}s" >&2
+            sleep "$wait"
+          done
 
       - name: Stage the APK
         run: |

@@ -213,12 +213,14 @@ const GAMES = {
   },
   azzardo: {
     name: "Azzardo",
-    tag: "dadi, classi, sentiero",
-    line: "Parti con tre dadi e scegli una di sei classi: apre il tuo Sentiero, un grande albero di potenziamenti. Ogni tiro segna e, come nello Yahtzee, decide quali nodi puoi rivendicare: ogni nodo chiede un traguardo, più difficile = premio più forte. Venti tiri: vince il totale più alto.",
-    en: { tag: "dice, classes, a path", line: "Start with three dice and pick one of six classes: it roots your Path, a big tree of upgrades. Every throw scores and, Yahtzee-style, decides which nodes you can claim: each names a goal, harder = a stronger reward. Twenty throws: highest total wins." },
+    tag: "moneta, sfere, dadi",
+    line: "Lancia una moneta per partire, poi risali le Sfere d'Influenza: ogni sfera ha 3 sotto-nodi — prendine almeno uno per avanzare, tutti e tre per un bonus. Ogni tiro segna e sblocca i nodi. Venti tiri: vince il totale più alto.",
+    en: { tag: "coin, spheres, dice", line: "Flip a coin to start, then climb the Spheres of Influence: each sphere has 3 sub-nodes — take one to advance, all three for a bonus. Every throw scores and unlocks nodes. Twenty throws: highest total wins." },
     dice: true,
-    opts: [],
-    def: {},
+    opts: [
+      { k: "mode", label: "Giocatori", le: "Players", cycle: ["2p", "1p"], fmt: { "2p": "2P", "1p": "1P · CPU" }, hint: "Due giocatori su due telefoni, o uno contro la CPU (per provare)", he: "Two players on two phones, or one vs the CPU (for testing)" },
+    ],
+    def: { mode: "2p" },
   },
   scala: {
     name: "Scala 40",
@@ -5427,7 +5429,13 @@ input{font-family:inherit}
 @keyframes bristuck{from{transform:translate(-50%,-50%) scale(1) rotate(0);opacity:1}to{transform:translate(-190%,-28%) scale(.34) rotate(90deg);opacity:0}}
 .bristuck{animation:bristuck 640ms cubic-bezier(.4,0,.2,1) forwards}
 .deckback{transform:rotateY(180deg)}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL,.tumble,.settle,.critshake,.hexpulse,.bristuck{animation:none!important}.deckcard{transition:none}}
+@keyframes azpop{0%{transform:scale(1)}32%{transform:scale(1.13)}62%{transform:scale(.97)}100%{transform:scale(1)}}
+.azpop{animation:azpop 520ms cubic-bezier(.2,1.4,.4,1)}
+@keyframes azglow{0%{box-shadow:0 0 0 0 rgba(184,134,43,0)}40%{box-shadow:0 0 15px 3px rgba(184,134,43,.55)}100%{box-shadow:0 0 0 0 rgba(184,134,43,0)}}
+.azglow{animation:azglow 900ms ease-out}
+@keyframes azrise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+.azrise{animation:azrise 260ms ease-out both}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL,.tumble,.settle,.critshake,.hexpulse,.bristuck,.azpop,.azglow,.azrise{animation:none!important}.deckcard{transition:none}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -6671,7 +6679,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           <div style={{ marginTop: 14 }}>
             {host ? (
               (() => {
-                const solo1p = key === "flotta2" && room.opts.mode === "1p"; // vs CPU — no 2nd player needed
+                const solo1p = room.opts.mode === "1p"; // vs CPU — no 2nd player needed (flotta2, azzardo)
                 return (
                   <Button full disabled={!seated && !solo1p} onClick={solo1p ? startCpu : start}>
                     {seated || solo1p ? dealCta(gm) : L("Aspetta il 2º giocatore…", "Waiting for player 2…")}
@@ -6791,7 +6799,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
       {/* Flotta 2 is a full-screen sonar console with its own chrome — skip the standard header/solo bar */}
       {room.game !== "flotta2" && <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />}
-      {solo && room.game !== "flotta2" && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
+      {solo && room.game !== "flotta2" && room.opts.mode !== "1p" && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
       <EndGameOverlay room={room} seat={seat} onAgree={agreeEnd} onDecline={declineEnd} onCancel={declineEnd} />
       <FinaleModal show={gs.done && room.game !== "flotta2" && !finaleHold} decided={decided} outcome={outcome} room={room} gs={gs} seat={seat} onAgain={again} onExit={toGames} />
 
@@ -9941,12 +9949,26 @@ function azRenderDice(el, faces, seatColor) {
     mesh.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
     scene.add(mesh);
     const sp = azNumberSprite(THREE, mult ? `×${f.v}` : `${f.v}`, seatColor);
-    sp.position.set(mesh.position.x, 0.02, 0.8); scene.add(sp);
-    dice.push({ mesh, vx: (Math.random() < 0.5 ? -1 : 1) * (0.006 + Math.random() * 0.01), vy: 0.008 + Math.random() * 0.012 });
+    sp.position.set(mesh.position.x, 0.02, 0.8); sp.material.opacity = 0; scene.add(sp);
+    // a random tumble axis, a decaying burst of spin (the "throw"), and a faint idle spin
+    // it settles into; plus a little drop so the dice land onto the shadow.
+    const ax = Math.random() * 2 - 1, ay = Math.random() * 2 - 1, an = Math.hypot(ax, ay) || 1;
+    dice.push({ mesh, sprite: sp, ax: ax / an, ay: ay / an, spin: 0.55 + Math.random() * 0.35, drop: 1.4 });
   });
 
   let raf, alive = true;
-  const tick = () => { if (!alive) return; for (const d of dice) { d.mesh.rotation.x += d.vy; d.mesh.rotation.y += d.vx; } renderer.render(scene, camera); raf = requestAnimationFrame(tick); };
+  const tick = () => {
+    if (!alive) return;
+    for (const d of dice) {
+      d.spin *= 0.945;                                   // the throw decays…
+      const s = 0.006 + d.spin;                          // …into a gentle idle spin
+      d.mesh.rotation.x += s * d.ay; d.mesh.rotation.y += s * d.ax;
+      if (d.drop > 0) { d.drop *= 0.86; d.mesh.position.y = d.drop; }  // land onto the shadow
+      if (d.spin < 0.16 && d.sprite.material.opacity < 1) d.sprite.material.opacity = Math.min(1, d.sprite.material.opacity + 0.08); // reveal the number as it settles
+    }
+    renderer.render(scene, camera);
+    raf = requestAnimationFrame(tick);
+  };
   raf = requestAnimationFrame(tick);
   const onResize = () => { const w = el.clientWidth || W, h = el.clientHeight || H; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); };
   window.addEventListener("resize", onResize);
@@ -9994,6 +10016,21 @@ function Azzardo({ room, gs, seat, mine, commit }) {
     }
   }, [roll && roll.gained, roll && roll.seat]); // eslint-disable-line
 
+  // 1-player (for testing): the CPU plays seat B. One bot action per state change, on a
+  // short delay so you can follow it — `gs` changes identity every commit, so this steps
+  // flip → throw → claim until the turn returns to you.
+  const cpu = room.opts && room.opts.mode === "1p";
+  useEffect(() => {
+    if (!cpu || gs.done || gs.turn !== "B") return;
+    const seed = () => Math.floor(Math.random() * 2 ** 31);
+    const t = setTimeout(() => {
+      const mv = azBot(gs, "B");
+      const r = mv.kind === "flip" ? azFlip(gs, "B", seed()) : mv.kind === "throw" ? azThrow(gs, "B", seed()) : azClaim(gs, "B", mv.node);
+      if (r) commit(r);
+    }, 680);
+    return () => clearTimeout(t);
+  }, [gs, cpu]); // eslint-disable-line
+
   const held = new Set(tr.path);
   const unlocked = tr.start ? azUnlocked(tr) : new Set();
   const frontier = tr.start ? azFrontier(tr) : [];
@@ -10034,9 +10071,10 @@ function Azzardo({ room, gs, seat, mine, commit }) {
           const p = mpos(m), open = unlocked.has(m.id), subs = azSubsOf(m.id), done = subsClaimed(m.id) === 3;
           const isStart = !!m.face;
           return (
-            <div key={m.id} style={{ position: "absolute", left: p.x - MW / 2, top: p.y - MH / 2, width: MW, height: MH, borderRadius: 13,
+            <div key={`${m.id}-${done}`} className={done ? "azpop azglow" : ""} style={{ position: "absolute", left: p.x - MW / 2, top: p.y - MH / 2, width: MW, height: MH, borderRadius: 13,
               border: `1.5px solid ${done ? "#B8862B" : open ? T.ink : T.line}`, background: done ? "rgba(184,134,43,0.12)" : "transparent",
-              opacity: open ? 1 : 0.5, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
+              opacity: open ? 1 : 0.5, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2,
+              transition: "border-color 300ms ease, background 300ms ease, opacity 300ms ease" }}>
               <div style={{ display: "flex", gap: 6 }}>
                 {subs.map((s) => {
                   const isHeld = held.has(s.id), can = claimIds.has(s.id), active = mine && can;
@@ -10045,6 +10083,7 @@ function Azzardo({ room, gs, seat, mine, commit }) {
                       style={{ width: 15, height: 15, borderRadius: 999, padding: 0, cursor: "pointer", WebkitTapHighlightColor: "transparent",
                         background: isHeld ? "#B8862B" : can ? "rgba(184,134,43,0.25)" : "transparent",
                         border: `1.5px solid ${isHeld || can ? "#B8862B" : open ? T.ink60 : T.line}`,
+                        transform: isHeld ? "scale(1.05)" : "scale(1)", transition: "background 200ms ease, border-color 200ms ease, transform 200ms cubic-bezier(.2,1.4,.4,1)",
                         outline: tapNode === s.id ? `2px solid ${T.ink}` : "none", outlineOffset: 1 }} />
                   );
                 })}
@@ -10107,7 +10146,7 @@ function Azzardo({ room, gs, seat, mine, commit }) {
       {/* tapped-node reader, or the your-dice strip (your pool, as shapes) */}
       <div style={{ minHeight: 40, marginTop: 6 }}>
         {info ? (
-          <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: "7px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div className="azrise" style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: "7px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 13 }}>{L("Sfera", "Sphere")} {info.col} · {L("nodo", "node")} {info.si + 1}</span>
             <span style={{ fontSize: 12, color: T.ink60, textAlign: "right" }}>{azGoalText(info.goal)} → <b style={{ color: T.ink }}>{azRewardText(info.reward)}</b></span>
           </div>
@@ -10143,7 +10182,7 @@ function Azzardo({ room, gs, seat, mine, commit }) {
           <>
             <Micro style={{ textAlign: "center" }}>{claimable.length ? L("Traguardi centrati — rivendica un sotto-nodo", "Goals met — claim a sub-node") : L("Nessun traguardo stavolta — passa", "No goal met this time — pass")}</Micro>
             {claimable.map((n) => (
-              <button key={n.id} onClick={() => doClaim(n.id)}
+              <button key={n.id} className="azrise" onClick={() => doClaim(n.id)}
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, width: "100%", padding: "10px 14px", background: "rgba(184,134,43,0.10)", border: `1.5px solid #B8862B`, borderRadius: 12, cursor: "pointer", WebkitTapHighlightColor: "transparent", fontFamily: BRAND }}>
                 <span style={{ fontWeight: 700, fontSize: 14, color: T.ink }}>{azRewardText(n.reward)}</span>
                 <span style={{ fontWeight: 700, fontSize: 12, color: "#8a6414", textAlign: "right" }}>{L("Sfera", "Sphere")} {n.col}{wouldComplete(n) ? ` · ${L("completa ★", "completes ★")}` : ""}</span>
