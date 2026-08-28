@@ -43,7 +43,7 @@ const EXPORTS = [
   "dealPerudo", "perudoRoll", "perudoBid", "perudoDoubt", "perudoNext",
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
-  "dealAzzardo", "azChoose", "azThrow", "azClaim", "azBot", "azCombo", "azFrontier", "azGoalMet", "AZ_THROWS", "AZ_COMBO", "AZ_TREE",
+  "dealAzzardo", "azFlip", "azThrow", "azClaim", "azBot", "azCombo", "azFrontier", "azGoalMet", "azUnlocked", "azSubsOf", "azMain", "AZ_THROWS", "AZ_COMBO", "AZ_TREE", "AZ_MAINS", "AZ_MAX_NODES",
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
@@ -698,10 +698,11 @@ function playAzzardo() {
     if (++steps > MAX) return fail("azzardo", `no end after ${MAX} steps`);
     const seat = g.turn;
     const move = R.azBot(g, seat);
-    if (move.kind === "choose") {
-      const r = R.azChoose(g, seat, move.root);
-      if (!r) return fail("azzardo", "choosing a starting branch was refused");
+    if (move.kind === "flip") {
+      const r = R.azFlip(g, seat); // unseeded → random 1 or 2
+      if (!r) return fail("azzardo", "the coin flip was refused");
       g = r.g;
+      if (!g.tracks[seat].start) return fail("azzardo", "flip left no starting sphere");
     } else if (move.kind === "throw") {
       const before = g.tracks[seat].score;
       const r = R.azThrow(g, seat); // unseeded → Math.random
@@ -738,37 +739,56 @@ function azzardoTests() {
   if (R.azCombo([4, 4, 4, 4, 4]) !== 4) fail("azzardo combo", "five of a kind should be tier 4");
   // combo bonus climbs with the tier (harder combos are worth more)
   for (let t = 0; t < R.AZ_COMBO.length - 1; t++) if (!(R.AZ_COMBO[t].bonus <= R.AZ_COMBO[t + 1].bonus)) fail("azzardo combo", "the combo bonus should not shrink with a better combo");
-  // the path: six roots (classes), whose branches cross so any can still reach the apex,
-  // even though each root's own first child is exclusive to it.
-  const roots = R.AZ_TREE.filter((n) => n.root).map((n) => n.id);
-  if (roots.length !== 6) fail("azzardo path", "there should be exactly six roots");
-  const reach = (start) => {
-    const have = new Set([start]);
-    for (let i = 0; i < R.AZ_TREE.length; i++) for (const n of R.AZ_TREE) if (!have.has(n.id) && !n.root && n.req.some((r) => have.has(r))) have.add(n.id);
-    return have;
+  // the path: spheres of influence — 15 mains × 3 sub-nodes = 45 claimable nodes; two
+  // flip-in starts; every main reachable from either flip; each main has exactly 3 subs.
+  if (R.AZ_MAINS.length !== 15) fail("azzardo path", "there should be 15 spheres");
+  if (R.AZ_TREE.length !== 45 || R.AZ_MAX_NODES !== 45) fail("azzardo path", "there should be 45 sub-nodes");
+  for (const m of R.AZ_MAINS) if (R.azSubsOf(m.id).length !== 3) fail("azzardo path", `sphere ${m.id} should have 3 sub-nodes`);
+  const starts = R.AZ_MAINS.filter((m) => m.face).map((m) => m.id);
+  if (starts.length !== 2) fail("azzardo path", "there should be two flip-in starts");
+  // from either start, unlocking spreads to every main (claim one sub, the next tier opens)
+  const reachMains = (start) => {
+    const claimed = new Set(), open = new Set([start]);
+    for (let pass = 0; pass < R.AZ_MAINS.length; pass++) {
+      for (const mid of [...open]) R.azSubsOf(mid).forEach((s) => claimed.add(s.id)); // pretend we complete every open sphere
+      for (const m of R.AZ_MAINS) if (m.req.length && m.req.some((r) => R.azSubsOf(r).some((s) => claimed.has(s.id)))) open.add(m.id);
+    }
+    return open;
   };
-  const apex = R.AZ_TREE.find((n) => !n.root && R.AZ_TREE.every((m) => m.id === n.id || !m.req.includes(n.id))); // the leaf nobody depends on
-  for (const start of roots) if (!reach(start).has(apex.id)) fail("azzardo path", `root ${start} can't reach the apex ${apex.id}`);
-  // and each root's very first children are exclusive to it (different classes)
-  const kids = (start) => R.AZ_TREE.filter((n) => n.req.includes(start)).map((n) => n.id);
-  if (kids(roots[0]).some((k) => kids(roots[1]).includes(k))) fail("azzardo path", "the two roots should open different first nodes");
-  // you must pick a root before you can throw; a seeded throw is deterministic
+  // from a flip you reach every sphere except the OTHER coin face (that root is never yours)
+  for (const start of starts) {
+    const got = reachMains(start), otherRoot = starts.find((s) => s !== start);
+    if (got.has(otherRoot)) fail("azzardo path", `flip ${start} shouldn't reach the other root`);
+    if (got.size !== R.AZ_MAINS.length - 1 || !got.has("Z")) fail("azzardo path", `flip ${start} can't reach every non-root sphere (incl. apex)`);
+  }
+  // gating: before any sub is claimed only the start sphere is unlocked; the next tier
+  // opens only once a start sub is claimed
   let g = R.dealAzzardo("A", { A: 0, B: 0 });
-  if (R.azThrow(g, "A", 1) != null) fail("azzardo", "can't throw before choosing a root");
-  if (R.azChoose(g, "B", roots[0]) != null) fail("azzardo", "the off-turn seat can't choose");
-  if (R.azChoose(g, "A", "nope") != null) fail("azzardo", "a non-root id can't be chosen");
-  g = R.azChoose(g, "A", roots[0]).g;
-  if (g.tracks.A.root !== roots[0] || g.tracks.A.path.length !== 1) fail("azzardo", `choosing ${roots[0]} should root there`);
-  const a = R.azThrow(g, "A", 12345).g, b = R.azThrow(g, "A", 12345).g;
+  if (R.azThrow(g, "A", 1) != null) fail("azzardo", "can't throw before flipping");
+  if (R.azFlip(g, "B", 1) != null) fail("azzardo", "the off-turn seat can't flip");
+  g = R.azFlip(g, "A", 12345).g;
+  const start = g.tracks.A.start;
+  if (!start || g.tracks.A.path.length !== 0) fail("azzardo", "flip should set a start sphere and no claimed subs");
+  if ([...R.azUnlocked(g.tracks.A)].join() !== start) fail("azzardo", "only the start sphere unlocks before any claim");
+  const a = R.azThrow(g, "A", 777).g, b = R.azThrow(g, "A", 777).g;
   if (JSON.stringify(a.roll) !== JSON.stringify(b.roll)) fail("azzardo", "a seeded throw should be deterministic");
   if (a.phase !== "claim") fail("azzardo", "a throw should open the claim phase");
   if (R.azThrow(a, "A", 7) != null) fail("azzardo", "can't throw again mid-claim");
-  // claiming a node whose goal the throw didn't meet is refused; passing always works
-  const fr = R.azFrontier(a.tracks.A);
-  const unmet = fr.find((n) => !R.azGoalMet(n.goal, a.roll));
-  if (unmet && R.azClaim(a, "A", unmet.id) != null) fail("azzardo", "can't claim a node whose goal wasn't met");
+  // the frontier only offers the start sphere's subs; a next-tier sub can't be claimed yet
+  if (R.azFrontier(a.tracks.A).some((s) => s.main !== start)) fail("azzardo path", "a locked sphere's sub is on the frontier");
+  // claiming a sub whose goal the throw didn't meet is refused; passing always works
+  const unmet = R.azFrontier(a.tracks.A).find((n) => !R.azGoalMet(n.goal, a.roll));
+  if (unmet && R.azClaim(a, "A", unmet.id) != null) fail("azzardo", "can't claim a sub whose goal wasn't met");
   const passed = R.azClaim(a, "A", null);
   if (!passed || passed.g.turn !== "B") fail("azzardo", "passing should spend the throw and pass the turn");
+  // completing a sphere pays its bonus: claim all three start subs (forcing goals met) and
+  // check the completion applied an extra reward beyond the three subs
+  let cg = R.azFlip(R.dealAzzardo("A", { A: 0, B: 0 }), "A", 1).g;
+  const st = cg.tracks.A.start, subs = R.azSubsOf(st);
+  const easyRoll = { seat: "A", faces: [], pips: [9, 9], sum: 99, tier: 4, mult: 1, gained: 0 }; // meets every start goal
+  let completed = false;
+  for (const s of subs) { cg = { ...cg, phase: "claim", roll: easyRoll, turn: "A" }; const rc = R.azClaim(cg, "A", s.id); if (!rc) fail("azzardo", `claiming start sub ${s.id} was refused`); cg = rc.g; if (rc.g.last && rc.g.last.complete === st) completed = true; }
+  if (!completed) fail("azzardo path", "completing a sphere should flag the bonus");
   // goal evaluation
   const roll = { faces: [{ v: 3, kind: "mult", sides: 4 }], pips: [4, 4], sum: 8, tier: 1, mult: 3, gained: 24 };
   if (!R.azGoalMet({ kind: "sum", n: 8 }, roll) || R.azGoalMet({ kind: "sum", n: 9 }, roll)) fail("azzardo goal", "sum goal off by one");

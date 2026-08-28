@@ -1331,45 +1331,54 @@ const AZ_COMBO = [
 const azDie = (id, sides, kind) => ({ id, sides, kind }); // kind: "pip" | "mult"
 // Start richer than a lone coin: a d2 and two d4, so combos are on the table from the
 // very first throw — the old single-die start was the "too few dice" complaint.
-const azStartTrack = () => ({ dice: [azDie("c0", 2, "pip"), azDie("c1", 4, "pip"), azDie("c2", 4, "pip")], flat: 0, amp: 1, score: 0, root: null, path: [] });
+const azStartTrack = () => ({ dice: [azDie("c0", 2, "pip"), azDie("c1", 4, "pip"), azDie("c2", 4, "pip")], flat: 0, amp: 1, score: 0, start: null, flip: null, path: [] });
 
-// Six branches. Each has a `sig` — the reward it hands out at tiers 2/4/6 — which gives
-// it a feel: Iron→big number dice, Gold→× dice, Wind→evolve, Fire→combo amp, Shadow &
-// Water→mixes. You root one branch; cross-links let you drift into neighbours later.
-const AZ_BRANCHES = [
-  { key: "F", it: "Ferro", en: "Iron", sig: ["bigpip", "bigpip", "bigpip"] },
-  { key: "O", it: "Oro", en: "Gold", sig: ["addmult", "addmult", "addmult"] },
-  { key: "V", it: "Vento", en: "Wind", sig: ["evolve", "evolve", "evolve"] },
-  { key: "B", it: "Brace", en: "Fire", sig: ["amp", "amp", "amp"] },
-  { key: "M", it: "Ombra", en: "Shadow", sig: ["addpip", "addmult", "flat"] },
-  { key: "A", it: "Acqua", en: "Water", sig: ["flat", "bigpip", "addmult"] },
+// The PATH is SPHERES OF INFLUENCE. Each MAIN node holds THREE sub-nodes; you must claim
+// at least one sub before the next spheres unlock, and claiming all three COMPLETES the
+// sphere for a bonus. You don't choose your start — you FLIP the coin (1 or 2) into one of
+// the two starting spheres. Mains sit in tiers; a main unlocks once any main in the tier
+// before it has a sub claimed, so from either flip the whole tree opens up.
+const AZ_TIER_IDS = [["F1", "F2"], ["A", "B", "C"], ["D", "E", "F", "G"], ["H", "I", "J"], ["K", "L"], ["Z"]];
+const AZ_MAIN_FACE = { F1: 1, F2: 2 };
+// Three sub-goals per tier (easy → hard) and their three rewards; plus each sphere's
+// completion bonus. Goals and rewards ramp with depth.
+const AZ_SUB_GOALS = [
+  [{ kind: "any" }, { kind: "any" }, { kind: "sum", n: 4 }],
+  [{ kind: "any" }, { kind: "sum", n: 6 }, { kind: "combo", tier: 1 }],
+  [{ kind: "sum", n: 6 }, { kind: "combo", tier: 1 }, { kind: "sum", n: 14 }],
+  [{ kind: "combo", tier: 1 }, { kind: "sum", n: 14 }, { kind: "combo", tier: 2 }],
+  [{ kind: "sum", n: 14 }, { kind: "combo", tier: 2 }, { kind: "combo", tier: 3 }],
+  [{ kind: "combo", tier: 2 }, { kind: "combo", tier: 3 }, { kind: "combo", tier: 4 }],
 ];
-const AZ_TIERS = 6; // tiers past the root
-// Goal per tier: it ramps from "any throw" up to a full house, so deeper nodes are both
-// harder to claim and worth more.
-const azTierGoal = (t) => [null, { kind: "any" }, { kind: "sum", n: 6 }, { kind: "combo", tier: 1 }, { kind: "sum", n: 14 }, { kind: "combo", tier: 2 }, { kind: "combo", tier: 3 }][t];
-// Reward per tier: everyone gets a die at t1, an evolve at t3, a combo amp at t5; the
-// branch's own signature fills t2/t4/t6.
-const azTierReward = (b, t) => (t === 1 ? "addpip" : t === 3 ? "evolve" : t === 5 ? "amp" : b.sig[[2, 4, 6].indexOf(t)]);
-// Build the tree once: six roots, then six rows × six tiers, each node requiring its own
-// branch one tier back plus (on even tiers) a neighbour, so from any root you can climb
-// straight or drift sideways. A single apex needs one node from the deepest tier.
-function buildAzTree() {
-  const T = [];
-  const rows = AZ_BRANCHES.length;
-  AZ_BRANCHES.forEach((b, i) => T.push({ id: b.key + "0", it: b.it, en: b.en, col: 0, row: i, root: true, branch: b.key, req: [] }));
-  for (let t = 1; t <= AZ_TIERS; t++) {
-    AZ_BRANCHES.forEach((b, i) => {
-      const req = [b.key + (t - 1)];
-      if (t % 2 === 0) { if (i > 0) req.push(AZ_BRANCHES[i - 1].key + (t - 1)); if (i < rows - 1) req.push(AZ_BRANCHES[i + 1].key + (t - 1)); }
-      T.push({ id: b.key + t, col: t, row: i, branch: b.key, req, goal: azTierGoal(t), reward: { kind: azTierReward(b, t) } });
-    });
-  }
-  T.push({ id: "APEX", it: "Leggenda", en: "Legend", col: AZ_TIERS + 1, row: (rows - 1) / 2, req: AZ_BRANCHES.map((b) => b.key + AZ_TIERS), goal: { kind: "combo", tier: 4 }, reward: { kind: "apex" } });
-  return T;
+const AZ_SUB_REWARDS = [
+  ["addpip", "addpip", "flat"],
+  ["addpip", "bigpip", "addmult"],
+  ["bigpip", "evolve", "addmult"],
+  ["evolve", "bigpip", "amp"],
+  ["addmult", "amp", "bigpip"],
+  ["amp", "evolve", "apex"],
+];
+const AZ_MAIN_BONUS = ["flat", "evolve", "amp", "bigpip", "addmult", "apex"]; // per-tier completion bonus
+function buildAzMains() {
+  const M = [];
+  AZ_TIER_IDS.forEach((ids, t) => ids.forEach((id, i) => M.push({ id, col: t, row: i, n: ids.length, face: AZ_MAIN_FACE[id] || null, req: t === 0 ? [] : AZ_TIER_IDS[t - 1], bonus: { kind: AZ_MAIN_BONUS[t] } })));
+  return M;
 }
-const AZ_TREE = buildAzTree();
+const AZ_MAINS = buildAzMains();
+const azMain = (id) => AZ_MAINS.find((m) => m.id === id);
+// The claimable nodes are the sub-nodes: three per main, each a goal + reward.
+function buildAzSubs() {
+  const S = [];
+  for (const m of AZ_MAINS) for (let i = 0; i < 3; i++) S.push({ id: m.id + "." + i, main: m.id, col: m.col, si: i, goal: AZ_SUB_GOALS[m.col][i], reward: { kind: AZ_SUB_REWARDS[m.col][i] } });
+  return S;
+}
+const AZ_TREE = buildAzSubs();
 const azNode = (id) => AZ_TREE.find((n) => n.id === id);
+const azSubsOf = (mainId) => AZ_TREE.filter((n) => n.main === mainId);
+// Max node count: 15 spheres × 3 sub-nodes = 45 claimable nodes (plus 15 completion
+// bonuses). Twenty throws claim at most ~19 subs, so you can never take them all — you
+// trade depth (one sub per sphere, rush to richer spheres) against completion bonuses.
+const AZ_MAX_NODES = AZ_TREE.length;
 function dealAzzardo(dealer, tally) {
   return {
     turn: dealer,
@@ -1406,10 +1415,20 @@ function azCombo(pips) {
   return 0;
 }
 const azRollDie = (die, rng) => 1 + Math.floor(rng() * die.sides);
-// Frontier: the nodes you could next reach — not yet held, at least one prereq held.
+// A main is unlocked when it's your flipped start, or any main in the tier before it has a
+// sub claimed. (AZ_MAINS is in tier order, so a single forward pass resolves it.)
+function azUnlocked(track) {
+  const claimed = new Set(track.path);
+  const mainHasSub = (mid) => azSubsOf(mid).some((s) => claimed.has(s.id));
+  const open = new Set(track.start ? [track.start] : []);
+  for (const m of AZ_MAINS) if (m.req.length && m.req.some((r) => mainHasSub(r))) open.add(m.id);
+  return open;
+}
+// Frontier: the unclaimed sub-nodes of every unlocked sphere.
 function azFrontier(track) {
-  const have = new Set(track.path);
-  return AZ_TREE.filter((n) => !n.root && !have.has(n.id) && n.req.some((r) => have.has(r)));
+  if (!track.start) return [];
+  const open = azUnlocked(track), claimed = new Set(track.path);
+  return AZ_TREE.filter((s) => open.has(s.main) && !claimed.has(s.id));
 }
 // Does a throw meet a node's goal? Sum is over pip dice; a combo goal wants that tier
 // or better; a mult goal wants a ×die showing at least n.
@@ -1432,20 +1451,20 @@ function azApplyReward(tr, reward, g) {
   else if (k === "amp") tr.amp += 1;
   else if (k === "apex") { tr.amp += 2; tr.flat += 5; }
 }
-// Root your path on one of the six branches. All are balanced starts; they differ in
-// the rewards they hand out as you climb.
-function azChoose(gs, seat, rootId) {
-  if (gs.turn !== seat || gs.phase !== "throw" || gs.done) return null;
-  const tr = gs.tracks[seat];
-  const node = azNode(rootId);
-  if (tr.root || !node || !node.root) return null;
+// You don't choose your start — you FLIP the coin. The seeded charge decides 1 or 2, and
+// that roots you in one of the two starting spheres.
+function azFlip(gs, seat, seed) {
+  if (gs.turn !== seat || gs.phase !== "throw" || gs.done || gs.tracks[seat].start) return null;
   const g = clone(gs);
-  g.tracks[seat].root = rootId;
-  g.tracks[seat].path = [rootId];
-  return { g, quiet: true, nojolt: true, ev: { t: "choose", seat, root: rootId } };
+  const rng = seed == null ? Math.random : mulberry32(seed >>> 0);
+  const face = rng() < 0.5 ? 1 : 2;
+  g.tracks[seat].flip = face;
+  g.tracks[seat].start = face === 1 ? "F1" : "F2";
+  g.tracks[seat].path = [];
+  return { g, kind: "take", nojolt: true, ev: { t: "flip", seat, face } };
 }
 function azThrow(gs, seat, seed) {
-  if (gs.turn !== seat || gs.phase !== "throw" || gs.done || !gs.tracks[seat].root) return null;
+  if (gs.turn !== seat || gs.phase !== "throw" || gs.done || !gs.tracks[seat].start) return null;
   const g = clone(gs);
   const rng = seed == null ? Math.random : mulberry32(seed >>> 0);
   const tr = g.tracks[seat];
@@ -1462,19 +1481,21 @@ function azThrow(gs, seat, seed) {
   g.last = { seat, gained, tier };
   return { g, kind: "take", nojolt: true, ev: { t: "throw", seat, gained, tier } };
 }
-// Claim a frontier node your throw qualified for — or pass (nodeId null). Then the
-// throw is spent and the turn passes.
-function azClaim(gs, seat, nodeId) {
+// Claim a frontier sub-node your throw qualified for — or pass (subId null). Completing a
+// sphere's third sub also pays its bonus. Then the throw is spent and the turn passes.
+function azClaim(gs, seat, subId) {
   if (gs.turn !== seat || gs.phase !== "claim" || gs.done) return null;
   const g = clone(gs);
   const tr = g.tracks[seat];
-  if (nodeId) {
-    const node = azNode(nodeId);
-    if (!node || node.root || tr.path.includes(nodeId)) return null;
-    if (!azFrontier(tr).some((n) => n.id === nodeId)) return null; // not reachable yet
-    if (!azGoalMet(node.goal, g.roll)) return null; // the throw didn't meet its goal
-    tr.path = [...tr.path, nodeId];
-    azApplyReward(tr, node.reward, g);
+  if (subId) {
+    const sub = azNode(subId);
+    if (!sub || tr.path.includes(subId)) return null;
+    if (!azFrontier(tr).some((s) => s.id === subId)) return null; // locked / not reachable yet
+    if (!azGoalMet(sub.goal, g.roll)) return null; // the throw didn't meet its goal
+    tr.path = [...tr.path, subId];
+    azApplyReward(tr, sub.reward, g);
+    const claimed = new Set(tr.path);
+    if (azSubsOf(sub.main).every((s) => claimed.has(s.id))) { azApplyReward(tr, azMain(sub.main).bonus, g); g.last = { seat, complete: sub.main }; } // sphere completed → bonus
   }
   g.throws[seat] += 1;
   g.roll = null;
@@ -1488,13 +1509,13 @@ function azClaim(gs, seat, nodeId) {
     g.phase = "throw";
     g.turn = other(seat);
   }
-  return { g, kind: "take", nojolt: true, ev: { t: "claim", seat, node: nodeId || null } };
+  return { g, kind: "take", nojolt: true, ev: { t: "claim", seat, node: subId || null } };
 }
 const AZ_REWARD_VAL = { apex: 6, bigpip: 5, addmult: 4, evolve: 3, amp: 2, addpip: 2, flat: 1 };
-// Solo CPU / fuzzer: pick a root, then each claim take the best goal met (or pass).
+// Solo CPU / fuzzer: flip the coin, then each claim take the best goal met (or pass).
 function azBot(gs, seat) {
   const tr = gs.tracks[seat];
-  if (!tr.root) return { kind: "choose", root: AZ_BRANCHES[seat === "A" ? 0 : 3].key + "0" };
+  if (!tr.start) return { kind: "flip" };
   if (gs.phase === "claim") {
     const met = azFrontier(tr).filter((n) => azGoalMet(n.goal, gs.roll));
     if (!met.length) return { kind: "claim", node: null };
@@ -9794,13 +9815,15 @@ function azPoly(cx, cy, r, n, rot) {
   return p.join(" ");
 }
 const AZ_POLY = { 4: [3, -Math.PI / 2], 8: [4, 0], 10: [5, -Math.PI / 2], 12: [6, 0], 20: [8, Math.PI / 8] }; // sides → [polygon corners, rotation]; 2 & 6 special-cased
-function AzDie({ die, face, size = 40 }) {
+function AzDie({ die, face, size = 40, tint }) {
   const mult = die ? die.kind === "mult" : face && face.kind === "mult";
   const sides = die ? die.sides : face && face.sides;
   const rolled = face != null;
   const col = mult ? "#B8862B" : T.ink;
-  const fill = rolled ? (mult ? "rgba(184,134,43,0.92)" : T.ink) : "transparent";
-  const txt = rolled ? T.bg : col;
+  // Rolled dice show a light off-white face; the number takes the player's colour (red /
+  // blue), except ×dice which stay gold-on-gold. Idle dice are just an outline.
+  const fill = rolled ? (mult ? "rgba(184,134,43,0.92)" : "#f4f0e8") : "transparent";
+  const txt = rolled ? (mult ? T.bg : tint || T.ink) : col;
   const whiff = rolled && mult && face.v <= 1;
   const r = size / 2 - 2.5, c = size / 2;
   let shape;
@@ -9833,19 +9856,17 @@ const azRewardText = (reward) => ({
   amp: L("Combo +1 più forti", "Combos +1 stronger"),
   apex: L("Combo +2 e +5 base", "Combos +2 and +5 base"),
 }[reward.kind] || "");
-// A tiny tag shown on each tree node so you can read what it grants at a glance.
+// A tiny tag shown on each node so you can read what it grants at a glance.
 const AZ_TAG = { addpip: "+d4", bigpip: "+d6", addmult: "+×", evolve: "▲", flat: "+3", amp: "◆", apex: "★" };
-// One-word flavour for each branch, shown on the class picker.
-const azBranchFlavor = (key) => ({ F: L("dadi grandi", "big dice"), O: L("moltiplicatori", "× multipliers"), V: L("evoluzione", "evolving dice"), B: L("combo forti", "strong combos"), M: L("misto", "mixed"), A: L("misto", "mixed") }[key] || "");
-const azBranchName = (key) => { const b = AZ_BRANCHES.find((x) => x.key === key); return b ? L(b.it, b.en) : ""; };
+const AZ_PCOL = { A: "#b23a2e", B: "#2f5fa6" }; // dice numbers are red for seat A, blue for seat B
 function Azzardo({ room, gs, seat, mine, commit }) {
   const opp = other(seat);
   const [showHelp, setShowHelp] = useState(false);
-  const [tapNode, setTapNode] = useState(null); // a node inspected for its goal/reward
+  const [tapNode, setTapNode] = useState(null); // a sub-node inspected for its goal/reward
   const tr = gs.tracks[seat], otr = gs.tracks[opp];
   const throwPhase = gs.phase === "throw", claimPhase = gs.phase === "claim";
   const roll = gs.roll;
-  const rootless = mine && throwPhase && !tr.root && !gs.done; // must pick a starting face first
+  const rootless = mine && throwPhase && !tr.start && !gs.done; // must flip the coin first
 
   useEffect(() => { setTapNode(null); }, [gs.turn, gs.phase, gs.roll]);
 
@@ -9860,11 +9881,13 @@ function Azzardo({ room, gs, seat, mine, commit }) {
   }, [roll && roll.gained, roll && roll.seat]); // eslint-disable-line
 
   const held = new Set(tr.path);
-  const frontier = tr.root ? azFrontier(tr) : [];
-  const frontierIds = new Set(frontier.map((n) => n.id));
+  const unlocked = tr.start ? azUnlocked(tr) : new Set();
+  const frontier = tr.start ? azFrontier(tr) : [];
   const claimable = claimPhase && mine && roll ? frontier.filter((n) => azGoalMet(n.goal, roll)) : [];
   const claimIds = new Set(claimable.map((n) => n.id));
   const doClaim = (id) => { commit(azClaim(gs, seat, id)); setTapNode(null); };
+  const subsClaimed = (mid) => azSubsOf(mid).filter((s) => held.has(s.id)).length;
+  const wouldComplete = (s) => azSubsOf(s.main).every((x) => x.id === s.id || held.has(x.id));
 
   // the running score breakdown for a throw: sum [+ flat] [+ combo bonus] [× mult] = gained
   const mathLine = (r) => {
@@ -9878,45 +9901,44 @@ function Azzardo({ room, gs, seat, mine, commit }) {
     return `${s} = ${r.gained}`;
   };
 
-  // the path tree — the map of your build. Held nodes are gold, the ones you qualify
-  // for right now pulse (tap to claim), reachable-but-not-yet ones are outlined, the
-  // rest faint. Root nodes show the branch name; every other node shows a tag for what
-  // it grants (+d6, ×, ▲…). Tap any node to read its goal and reward. Scrolls sideways.
-  const NW = 54, NH = 28;
-  const nx = (n) => 34 + n.col * 74, ny = (n) => 24 + n.row * 46;
-  const TW = 34 + 7 * 74 + 40, THh = 24 + 5 * 46 + 26;
+  // the path — SPHERES OF INFLUENCE. Each sphere is a hub with three sub-pips; claim one
+  // to unlock the next tier, all three to complete it (★ bonus). Claimable pips pulse,
+  // held pips are gold, locked spheres are faint. Tap a pip to read its goal + reward.
+  const COL = 96, MW = 80, MH = 46, ROWSP = 54, midY = 130, THh = 260;
+  const TW = 48 + 5 * COL + MW / 2 + 24;
+  const mpos = (m) => ({ x: 48 + m.col * COL, y: midY + (m.row - (m.n - 1) / 2) * ROWSP });
   const tree = (
     <div style={{ overflowX: "auto", overflowY: "hidden", WebkitOverflowScrolling: "touch" }}>
       <div style={{ position: "relative", width: TW, height: THh, margin: "0 auto" }}>
         <svg width={TW} height={THh} viewBox={`0 0 ${TW} ${THh}`} style={{ position: "absolute", inset: 0 }}>
-          {AZ_TREE.flatMap((n) => n.req.map((r) => {
-            const a = azNode(r), lit = held.has(r) && held.has(n.id);
-            return <line key={r + n.id} x1={nx(a)} y1={ny(a)} x2={nx(n)} y2={ny(n)} stroke={lit ? "#B8862B" : T.line} strokeWidth={lit ? 2 : 1} opacity={lit ? 0.85 : 0.4} />;
+          {AZ_MAINS.flatMap((m) => m.req.map((rid) => {
+            const a = mpos(azMain(rid)), b = mpos(m), lit = unlocked.has(m.id);
+            return <line key={rid + ">" + m.id} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={lit ? "#B8862B" : T.line} strokeWidth={lit ? 1.4 : 1} opacity={lit ? 0.45 : 0.22} />;
           }))}
         </svg>
-        {AZ_TREE.map((n) => {
-          const x = nx(n), y = ny(n), isRoot = !!n.root, isHeld = held.has(n.id);
-          const chooseHere = rootless && isRoot;
-          const canClaim = claimIds.has(n.id);
-          const onFront = frontierIds.has(n.id) || (rootless && isRoot);
-          const faint = !isHeld && !onFront && !chooseHere;
-          const bg = isHeld ? "#8a6414" : canClaim ? "rgba(184,134,43,0.18)" : "transparent";
-          const fg = isHeld ? "#fff" : faint ? T.ink30 : T.ink;
-          const bd = canClaim || chooseHere ? "#B8862B" : isHeld ? "#8a6414" : faint ? T.line : T.ink;
-          const active = mine && (chooseHere || canClaim);
-          const onTap = () => {
-            if (chooseHere) return commit(azChoose(gs, seat, n.id));
-            if (canClaim) return doClaim(n.id);
-            setTapNode((c) => (c === n.id ? null : n.id));
-          };
-          const label = isRoot ? L(n.it, n.en) : n.id === "APEX" ? "★" : AZ_TAG[n.reward.kind] || "";
+        {AZ_MAINS.map((m) => {
+          const p = mpos(m), open = unlocked.has(m.id), subs = azSubsOf(m.id), done = subsClaimed(m.id) === 3;
+          const isStart = !!m.face;
           return (
-            <button key={n.id} onClick={onTap} className={active ? "hexpulse" : ""}
-              style={{ position: "absolute", left: x - NW / 2, top: y - NH / 2, width: NW, height: NH, borderRadius: isRoot ? 999 : 8,
-                background: bg, color: fg, border: `${active ? 2 : 1.5}px solid ${bd}`, opacity: faint ? 0.55 : 1, outline: tapNode === n.id ? `2px solid ${T.ink}` : "none", outlineOffset: 1,
-                fontFamily: BRAND, fontWeight: 700, fontSize: isRoot ? 11 : 12.5, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent", padding: 0, overflow: "hidden", whiteSpace: "nowrap" }}>
-              {label}{canClaim ? " ✓" : ""}
-            </button>
+            <div key={m.id} style={{ position: "absolute", left: p.x - MW / 2, top: p.y - MH / 2, width: MW, height: MH, borderRadius: 13,
+              border: `1.5px solid ${done ? "#B8862B" : open ? T.ink : T.line}`, background: done ? "rgba(184,134,43,0.12)" : "transparent",
+              opacity: open ? 1 : 0.5, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                {subs.map((s) => {
+                  const isHeld = held.has(s.id), can = claimIds.has(s.id), active = mine && can;
+                  return (
+                    <button key={s.id} className={active ? "hexpulse" : ""} onClick={() => { if (can) return doClaim(s.id); setTapNode((c) => (c === s.id ? null : s.id)); }}
+                      style={{ width: 15, height: 15, borderRadius: 999, padding: 0, cursor: "pointer", WebkitTapHighlightColor: "transparent",
+                        background: isHeld ? "#B8862B" : can ? "rgba(184,134,43,0.25)" : "transparent",
+                        border: `1.5px solid ${isHeld || can ? "#B8862B" : open ? T.ink60 : T.line}`,
+                        outline: tapNode === s.id ? `2px solid ${T.ink}` : "none", outlineOffset: 1 }} />
+                  );
+                })}
+              </div>
+              <span style={{ fontSize: 9.5, fontFamily: MONO, letterSpacing: "0.03em", color: done ? "#8a6414" : open ? T.ink60 : T.ink30 }}>
+                {isStart ? `${L("moneta", "coin")} ${m.face}` : done ? `★ ${AZ_TAG[m.bonus.kind]}` : `${L("sfera", "sphere")} ${m.col}`}
+              </span>
+            </div>
           );
         })}
       </div>
@@ -9930,8 +9952,9 @@ function Azzardo({ room, gs, seat, mine, commit }) {
       {showHelp && (
         <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
           <div style={{ fontSize: 13.5, lineHeight: 1.6, color: T.ink80 || T.ink }}>
-            <p style={{ margin: "0 0 10px" }}>{L("Parti con tre dadi (una moneta e due d4) e scegli una delle sei CLASSI: apre il tuo Sentiero, un grande albero di potenziamenti. Ogni classe regala premi diversi — Ferro dadi grandi, Oro moltiplicatori, Vento evoluzioni, Brace combo — e i rami si incrociano, così più avanti puoi sconfinare nei vicini.", "Start with three dice (a coin and two d4) and pick one of six CLASSES: it roots your Path, a big tree of upgrades. Each class hands out different rewards — Iron big dice, Gold multipliers, Wind evolves, Fire combos — and the branches cross, so deeper in you can drift into your neighbours.")}</p>
-            <p style={{ margin: "0 0 10px" }}>{L("Ogni tipo di dado ha una forma: moneta (d2), triangolo (d4), quadrato (d6), rombo (d8), pentagono (d10), esagono (d12), ottagono (d20). I dadi × sono dorati.", "Each die type is a shape: coin (d2), triangle (d4), square (d6), diamond (d8), pentagon (d10), hexagon (d12), octagon (d20). ×dice are gold.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Parti con tre dadi (una moneta e due d4) e LANCI la moneta — esce 1 o 2 — che ti fa partire in una delle due sfere iniziali. Non scegli: è il caso.", "Start with three dice (a coin and two d4) and FLIP the coin — 1 or 2 — which drops you into one of the two starting spheres. You don't choose: it's chance.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Il Sentiero è fatto di SFERE D'INFLUENZA: ogni sfera ha 3 sotto-nodi. Rivendica almeno UN sotto-nodo per sbloccare le sfere successive; prendili tutti e tre per COMPLETARE la sfera e incassare un bonus. Puoi correre in profondità (un nodo per sfera) o fermarti a completare.", "The Path is SPHERES OF INFLUENCE: each sphere has 3 sub-nodes. Claim at least ONE to unlock the next spheres; take all three to COMPLETE a sphere and bank a bonus. Rush deep (one node per sphere) or stop to complete.")}</p>
+            <p style={{ margin: "0 0 10px" }}>{L("Ogni tipo di dado ha una forma: moneta (d2), triangolo (d4), quadrato (d6), rombo (d8), pentagono (d10), esagono (d12), ottagono (d20). I dadi × sono dorati; i numeri sono rossi o blu secondo il giocatore.", "Each die type is a shape: coin (d2), triangle (d4), square (d6), diamond (d8), pentagon (d10), hexagon (d12), octagon (d20). ×dice are gold; the numbers are red or blue by player.")}</p>
             <p style={{ margin: "0 0 10px" }}>{L("Ogni tiro segna: i dadi numero si sommano, i dadi × moltiplicano (un × che esce 1 è sprecato), e la combo (coppia, tris, scala, full…) aggiunge un bonus. Punteggio = (somma + bonus) × moltiplicatori.", "Every throw scores: number dice add up, ×dice multiply (a × that rolls 1 is wasted), and the combo (pair, triple, straight, full…) adds a bonus. Score = (sum + bonus) × the ×dice.")}</p>
             <p style={{ margin: "0 0 10px" }}>{L("Ogni nodo del Sentiero chiede un TRAGUARDO al tiro (una somma facile, una coppia, una scala…): più è difficile, più forte è il premio. Dopo il tiro rivendichi UN nodo che hai centrato, oppure passi.", "Each Path node names a GOAL for the throw (an easy sum, a pair, a straight…): the harder it is, the stronger the reward. After the throw you claim ONE node you hit, or pass.")}</p>
             <p style={{ margin: 0 }}>{L("Venti tiri a testa: vince il totale più alto. Tieni premuto Tira per caricare il tiro.", "Twenty throws each: highest total wins. Hold Roll to charge the throw.")}</p>
@@ -9943,7 +9966,7 @@ function Azzardo({ room, gs, seat, mine, commit }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <div>
           <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
-          <Micro>{gs.throws[opp]}/{AZ_THROWS} {L("tiri", "throws")} · {Math.max(0, otr.path.length - 1)} {L("nodi", "nodes")} · {otr.dice.length} {L("dadi", "dice")}</Micro>
+          <Micro>{gs.throws[opp]}/{AZ_THROWS} {L("tiri", "throws")} · {otr.path.length} {L("nodi", "nodes")} · {otr.dice.length} {L("dadi", "dice")}</Micro>
         </div>
         <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24 }}>{otr.score}</div>
       </div>
@@ -9953,7 +9976,7 @@ function Azzardo({ room, gs, seat, mine, commit }) {
         {roll ? (
           <>
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", maxWidth: 340 }}>
-              {roll.faces.map((f, i) => <AzDie key={i} face={f} size={44} />)}
+              {roll.faces.map((f, i) => <AzDie key={i} face={f} size={44} tint={AZ_PCOL[roll.seat]} />)}
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
               {flash && <span className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 15, color: "#B8862B" }}>{L(AZ_COMBO[roll.tier].it, AZ_COMBO[roll.tier].en)}</span>}
@@ -9962,7 +9985,7 @@ function Azzardo({ room, gs, seat, mine, commit }) {
             <Micro>{mathLine(roll)}</Micro>
           </>
         ) : (
-          <Micro>{rootless ? L("scegli una classe per iniziare", "pick a class to begin") : throwPhase ? (mine ? L("tira i dadi", "throw the dice") : `${who(room, gs.turn)} ${L("tira", "throws")}`) : ""}</Micro>
+          <Micro>{rootless ? L("lancia la moneta per iniziare", "flip the coin to begin") : throwPhase ? (mine ? L("tira i dadi", "throw the dice") : `${who(room, gs.turn)} ${L("tira", "throws")}`) : ""}</Micro>
         )}
       </div>
 
@@ -9973,8 +9996,8 @@ function Azzardo({ room, gs, seat, mine, commit }) {
       <div style={{ minHeight: 40, marginTop: 6 }}>
         {info ? (
           <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: "7px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 13 }}>{info.root || info.id === "APEX" ? L(info.it, info.en) : `${azBranchName(info.branch)} · ${L("nodo", "node")} ${info.col}`}</span>
-            <span style={{ fontSize: 12, color: T.ink60, textAlign: "right" }}>{info.root ? azBranchFlavor(info.branch) : <>{azGoalText(info.goal)} → <b style={{ color: T.ink }}>{azRewardText(info.reward)}</b></>}</span>
+            <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 13 }}>{L("Sfera", "Sphere")} {info.col} · {L("nodo", "node")} {info.si + 1}</span>
+            <span style={{ fontSize: 12, color: T.ink60, textAlign: "right" }}>{azGoalText(info.goal)} → <b style={{ color: T.ink }}>{azRewardText(info.reward)}</b></span>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -9996,16 +10019,8 @@ function Azzardo({ room, gs, seat, mine, commit }) {
           <Micro style={{ textAlign: "center" }}>{claimPhase ? `${who(room, gs.turn)} ${L("sceglie sul Sentiero…", "is picking a Path node…")}` : `${L("tocca a", "over to")} ${who(room, opp)}`}</Micro>
         ) : rootless ? (
           <>
-            <Micro style={{ textAlign: "center" }}>{L("Scegli la tua classe di partenza", "Choose your starting class")}</Micro>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              {AZ_BRANCHES.map((b) => (
-                <button key={b.key} onClick={() => commit(azChoose(gs, seat, b.key + "0"))}
-                  style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 1, padding: "9px 12px", background: "transparent", border: `1.5px solid ${T.ink}`, borderRadius: 12, cursor: "pointer", WebkitTapHighlightColor: "transparent", fontFamily: BRAND }}>
-                  <span style={{ fontWeight: 700, fontSize: 14, color: T.ink }}>{L(b.it, b.en)}</span>
-                  <span style={{ fontSize: 11.5, color: T.ink60 }}>{azBranchFlavor(b.key)}</span>
-                </button>
-              ))}
-            </div>
+            <ChargeButton onThrow={(seed) => commit(azFlip(gs, seat, seed))}>{L("Tieni premuto e lancia la moneta", "Hold and flip the coin")}</ChargeButton>
+            <Micro style={{ textAlign: "center" }}>{L("1 o 2 — è il caso a decidere la tua sfera di partenza", "1 or 2 — chance picks your starting sphere")}</Micro>
           </>
         ) : throwPhase ? (
           <>
@@ -10014,12 +10029,12 @@ function Azzardo({ room, gs, seat, mine, commit }) {
           </>
         ) : claimPhase ? (
           <>
-            <Micro style={{ textAlign: "center" }}>{claimable.length ? L("Traguardi centrati — rivendica un nodo", "Goals met — claim a node") : L("Nessun traguardo stavolta — passa", "No goal met this time — pass")}</Micro>
+            <Micro style={{ textAlign: "center" }}>{claimable.length ? L("Traguardi centrati — rivendica un sotto-nodo", "Goals met — claim a sub-node") : L("Nessun traguardo stavolta — passa", "No goal met this time — pass")}</Micro>
             {claimable.map((n) => (
               <button key={n.id} onClick={() => doClaim(n.id)}
                 style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, width: "100%", padding: "10px 14px", background: "rgba(184,134,43,0.10)", border: `1.5px solid #B8862B`, borderRadius: 12, cursor: "pointer", WebkitTapHighlightColor: "transparent", fontFamily: BRAND }}>
                 <span style={{ fontWeight: 700, fontSize: 14, color: T.ink }}>{azRewardText(n.reward)}</span>
-                <span style={{ fontWeight: 700, fontSize: 12, color: "#8a6414", textAlign: "right" }}>{n.id === "APEX" ? L(n.it, n.en) : azBranchName(n.branch)}</span>
+                <span style={{ fontWeight: 700, fontSize: 12, color: "#8a6414", textAlign: "right" }}>{L("Sfera", "Sphere")} {n.col}{wouldComplete(n) ? ` · ${L("completa ★", "completes ★")}` : ""}</span>
               </button>
             ))}
             <Button kind="line" full onClick={() => doClaim(null)}>{claimable.length ? L("Passa (non prendere nulla)", "Pass (take nothing)") : L("Passa e continua", "Pass and continue")}</Button>
