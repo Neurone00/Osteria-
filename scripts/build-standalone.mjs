@@ -18,7 +18,9 @@ const result = await build({
   minify: true,
   format: "iife",
   jsx: "automatic",
-  define: { "process.env.NODE_ENV": '"production"' },
+  // __OSTERIA_NATIVE__ false → the Bluetooth/native transport is dead-code-eliminated
+  // from the web bundle entirely (the APK build in native/prepare-android.mjs sets it true).
+  define: { "process.env.NODE_ENV": '"production"', "globalThis.__OSTERIA_NATIVE__": "false" },
   write: false,
   outfile: "bundle.js",
 });

@@ -41,15 +41,17 @@ android-www/       generated — offline web root the APK ships (gitignored). Ne
 - **`src/App.jsx` must keep running unmodified as a Claude artifact.** That means: no `localStorage`, no
   `sessionStorage`, and no imports beyond `react` on any code path that runs when `window.storage` exists. The
   browser-storage calls that do exist are gated behind `!hasStore()` and wrapped in try/catch. Keep it that way.
-- **Five transports, chosen at runtime, same state shape on all of them:** `window.storage` shared keys in the
+- **Four transports, chosen at runtime, same state shape on all of them:** `window.storage` shared keys in the
   artifact; a WebSocket to `/room/CODE` when served by the Worker; PeerJS as the fallback for dumb static hosts;
-  **Web Bluetooth** (`openBluetooth`) for offline play on the web; and **native Bluetooth** (`openNative`) in the
-  Capacitor APK. A browser page can only be a BLE *central*, so on the web the two phones meet on a shared Osteria
-  GATT service — a host peripheral or the `scripts/bt-relay.mjs` relay. In the APK the host *is* the peripheral, so
-  no relay: `native/bridge.js` (bundled only into `android-www/`, never the web build) attaches a runtime
-  `OsteriaNative` global that `App.jsx` feature-detects — App.jsx itself still imports nothing but React. All of
-  them sync the room over one notify+write characteristic, the JSON fragmented into short `[msgId,total,index]`
-  frames because a BLE write is MTU-capped. Adding a sixth is fine; branching the state shape is not.
+  and **native Bluetooth** (`openNative`) in the Capacitor APK only — the offline phone-to-phone channel. The web
+  build has **no Bluetooth at all**: everything native is gated on `globalThis.__OSTERIA_NATIVE__`, a bundler
+  literal (true only for the APK build in `native/prepare-android.mjs`, false in `scripts/build-standalone.mjs`),
+  so the whole transport and its UI are dead-code-eliminated from `standalone/`. In the APK the host *is* a BLE
+  peripheral (a browser page can only be a central): `native/bridge.js` (bundled only into `android-www/`) attaches
+  a runtime `OsteriaNative` global that `App.jsx` calls — App.jsx itself still imports nothing but React, and reads
+  as the web build in the raw artifact (the flag is undefined → false). All transports sync the room over one
+  channel, the JSON fragmented into short `[msgId,total,index]` frames because a BLE write is MTU-capped. Adding a
+  fifth is fine; branching the state shape is not.
 - **One writer per move.** The player whose turn it is computes the whole next state, bumps `v`, and sends the
   lot. Receivers adopt anything with a higher `v` and ignore the rest. Turn-based play means writes never race —
   don't introduce partial/delta updates without solving that.

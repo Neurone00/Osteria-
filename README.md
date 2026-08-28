@@ -88,9 +88,9 @@ carries itself:
   lower `FRAME` in `native/bridge.js` (a device that won't raise its BLE MTU caps a frame near 20 bytes).
 
 **Why not just Bluetooth from the website?** A web *page* can only be a BLE central, never a peripheral, so two
-browsers can't pair page-to-page — that's the whole reason the offline route needs the native app (or, on the web,
-a laptop running `npm run bt-relay` as the shared peripheral, see below). Wrapped in the APK the host *can* be a
-peripheral, which is what makes true no-internet two-phone play work.
+browsers can't pair page-to-page — that's the whole reason the offline route is the native app, and why the web
+build ships no Bluetooth at all. Wrapped in the APK the host *can* be a peripheral, which is what makes true
+no-internet two-phone play work.
 
 ## Deploy to Cloudflare
 
@@ -199,34 +199,21 @@ shows *disconnected*, the **Reconnect** control in the header re-runs the handsh
 | Inside a Claude artifact | `window.storage` shared keys, polled every 1.2 s |
 | On the Cloudflare Worker | WebSocket to `/room/CODE`, relayed and persisted by a Durable Object |
 | Any other static host | WebRTC data channel via [PeerJS](https://peerjs.com), loaded from a CDN at runtime |
-| No network, on the web | **Web Bluetooth** — both phones connect to a shared Osteria BLE service (a relay) and sync over it |
-| No network, in the APK | **Native Bluetooth** — host advertises as a BLE peripheral, guest joins as a central, no relay |
+| No network, in the APK | **Native Bluetooth** — host advertises as a BLE peripheral, guest joins as a central |
 
-### Bluetooth (offline, no network)
+### Native Bluetooth (APK only — offline phone-to-phone)
 
-On the home screen, under **Bluetooth**, one phone taps **Host** and the other **Join** (Web Bluetooth needs Chrome
-on Android or desktop). Because a browser page can only be a BLE *central*, never a peripheral, the two phones can't
-pair directly — they meet on a shared **Osteria GATT service** and sync the room over one notify+write
-characteristic, the state JSON fragmented into short `[msgId, total, index]` frames (a BLE write is MTU-capped) and
-reassembled on the far side. That shared service is the one piece that has to live outside the browser: run the
-bundled relay on any machine with Bluetooth —
+The **web version has no Bluetooth at all.** Offline play lives only in the installed Android app, where the
+browser-page limit is gone: the **host phone advertises the Osteria GATT service as a real BLE peripheral** and the
+**guest joins as a central**, so two phones pair directly with no relay and no network. `native/bridge.js` (bundled
+only into the APK) attaches a `window.OsteriaNative` global that `App.jsx` drives — same `{send, hello, close}`
+contract, same fragmented `[msgId, total, index]` frames.
 
-```bash
-npm install @abandonware/bleno
-npm run bt-relay        # advertises as "Osteria"; connect both phones to it
-```
-
-— or point the phones at any peripheral exposing the same service UUID (`scripts/bt-relay.mjs` has it). No Wi-Fi, no
-internet, no server. It's the same one-writer-per-move state as every other transport.
-
-### Native Bluetooth (the APK, no relay)
-
-Inside the Capacitor APK the browser-page limit is gone, so no relay is needed: the **host phone advertises the
-Osteria GATT service as a real BLE peripheral** and the **guest joins as a central**. `native/bridge.js` (bundled
-only into the APK, never the web build) attaches a `window.OsteriaNative` global that `App.jsx` feature-detects and
-uses as a fifth transport — same `{send, hello, close}` contract, same fragmented frames. Because the detection is
-purely runtime and the bridge is a separate file, `src/App.jsx` still imports nothing but React and the web artifact
-is byte-for-byte unaffected. Build steps and permissions are under *Making a shareable APK* above.
+The split is a bundler flag: everything native is gated on `globalThis.__OSTERIA_NATIVE__`, which
+`native/prepare-android.mjs` sets to the literal `true` for the APK build and `scripts/build-standalone.mjs` sets to
+`false` for the web. So the whole Bluetooth transport and its UI are **dead-code-eliminated from the web build** —
+and, since it's a bare property read, it's simply `undefined → false` in the raw Claude artifact, which reads as the
+web version. Build steps and permissions are under *Making a shareable APK* above.
 
 For the self-hosted path the host's browser registers the peer id `osteria-tavolo-CODE` on PeerJS's free public
 broker, and the guest dials that id. After the handshake the two phones talk directly — the broker only introduces

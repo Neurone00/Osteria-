@@ -51,31 +51,11 @@ function shuffle(a) {
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const tilt = (id) => (((id.charCodeAt(0) * 31 + id.charCodeAt(1) * 7) % 9) - 4) * 0.9;
 
-/* ── Bluetooth transport (the fourth peer channel) ──────────────
-   A browser page can only be a GATT *central*, never a peripheral, so two phones
-   can't pair page-to-page directly — they meet on a shared Osteria BLE service (a
-   host peripheral or a small relay) and sync the room over one notify+write
-   characteristic. The room JSON is fragmented into short frames — [msgId, total,
-   index] + payload — because a BLE write is capped near the negotiated MTU; the far
-   side reassembles per msgId. Same state shape as the other three transports. */
-const BT_SERVICE = "6f737465-7269-6161-0000-000000000001"; // "oster…" — a fixed 128-bit UUID
-const BT_CHAR = "6f737465-7269-6161-0000-000000000002";
-const BT_FRAME = 180; // payload bytes per frame, comfortably under a long-write
-const btSupported = () => typeof navigator !== "undefined" && !!navigator.bluetooth;
-// The native wrapper (Capacitor APK) injects a global OsteriaNative — a fifth transport
-// where the *host* is a real BLE peripheral (a browser page can't be), so two phones
-// pair directly with no relay and no network. Same {send,hello,close} shape as the rest;
-// the bridge owns the radio and the framing, App.jsx just hands it JSON. Absent on the
-// web, so this whole path is dead code in the artifact — it never imports anything.
-const nativeSupported = () => typeof globalThis !== "undefined" && !!(globalThis.OsteriaNative && globalThis.OsteriaNative.available);
-function btConcat(parts) {
-  let len = 0;
-  for (const p of parts) len += p.length;
-  const out = new Uint8Array(len);
-  let o = 0;
-  for (const p of parts) { out.set(p, o); o += p.length; }
-  return out;
-}
+// Native app (Capacitor APK) build flag: globalThis.__OSTERIA_NATIVE__, which the
+// bundler substitutes with a literal — true for the APK, false for the web. It's
+// referenced directly at each gate (never through a const) so the branch folds to a
+// literal and everything Bluetooth is dead-code-eliminated from the web build: no
+// code, no UI. A bare property read stays safe (undefined → false) in the raw artifact.
 
 // Flotta2's deploy and mines are the one moment both players write at the SAME
 // version — each fills its own slot (deploy[seat] / mines[seat]) at once. Plain
@@ -5482,7 +5462,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     // Native app: settle the Bluetooth permission at launch so the first "Ospita"
     // tap isn't the moment Android is still granting it (which jams the peripheral
     // plugin until a restart). No-op on the web — the global isn't there.
-    try { if (nativeSupported()) globalThis.OsteriaNative.prewarm?.(); } catch {}
+    try { if (globalThis.__OSTERIA_NATIVE__) globalThis.OsteriaNative?.prewarm?.(); } catch {}
   }, []);
 
   const roomRef = useRef(null);
@@ -5832,84 +5812,14 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     [receive, publish]
   );
 
-  // Bluetooth: connect to the shared Osteria GATT service and sync the room over one
-  // notify+write characteristic. requestDevice must run from a user gesture (a tap).
-  // Host/guest is fixed at connect (seat A / seat B) since BLE has no relay presence.
-  const openBluetooth = useCallback(
-    async (host, nm) => {
-      if (!btSupported()) {
-        setMsg(L("Il Bluetooth non è disponibile in questo browser (serve Chrome su Android/desktop).", "Bluetooth isn't available in this browser (needs Chrome on Android/desktop)."));
-        return false;
-      }
-      let device, characteristic;
-      try {
-        device = await navigator.bluetooth.requestDevice({ filters: [{ services: [BT_SERVICE] }], optionalServices: [BT_SERVICE] });
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(BT_SERVICE);
-        characteristic = await service.getCharacteristic(BT_CHAR);
-        await characteristic.startNotifications();
-      } catch (e) {
-        if (String(e).includes("cancel")) return false; // the user dismissed the chooser
-        setMsg(L("Nessun tavolo Bluetooth trovato. Assicurati che l'altro dispositivo sia in ascolto.", "No Bluetooth table found. Make sure the other device is listening."));
-        return false;
-      }
-      setLink("waiting");
-      // reassemble incoming frames per message id
-      const inbox = {};
-      characteristic.addEventListener("characteristicvaluechanged", (ev) => {
-        const dv = ev.target.value;
-        if (!dv || dv.byteLength < 3) return;
-        const id = dv.getUint8(0), total = dv.getUint8(1), idx = dv.getUint8(2);
-        const payload = new Uint8Array(dv.buffer.slice(dv.byteOffset + 3, dv.byteOffset + dv.byteLength));
-        const slot = inbox[id] || (inbox[id] = { total, parts: [] });
-        slot.parts[idx] = payload;
-        if (slot.parts.filter(Boolean).length !== slot.total) return;
-        delete inbox[id];
-        let d;
-        try { d = JSON.parse(new TextDecoder().decode(btConcat(slot.parts))); } catch { return; }
-        if (d && d.hello !== undefined) {
-          const cur = roomRef.current;
-          if (cur) publish({ ...cur, names: { ...cur.names, B: d.hello } });
-        } else if (d && d.type === "state" && d.room) {
-          setLink("live");
-          receive(d.room);
-        }
-      });
-      device.addEventListener("gattserverdisconnected", () => setLink("lost"));
-      // fragment the JSON into short frames and write them in order
-      let seq = 0;
-      const write = async (obj) => {
-        if (!device.gatt.connected) return;
-        const bytes = new TextEncoder().encode(JSON.stringify(obj));
-        const total = Math.max(1, Math.ceil(bytes.length / BT_FRAME));
-        const id = (seq = (seq + 1) & 0xff);
-        for (let i = 0; i < total; i++) {
-          const slice = bytes.subarray(i * BT_FRAME, (i + 1) * BT_FRAME);
-          const frame = new Uint8Array(3 + slice.length);
-          frame[0] = id; frame[1] = total; frame[2] = i;
-          frame.set(slice, 3);
-          try { await characteristic.writeValueWithResponse(frame); } catch { return; }
-        }
-      };
-      setLink("live");
-      if (!host) write({ hello: nm || "Ospite" });
-      netRef.current = {
-        send: (r) => { write({ type: "state", room: r }); },
-        hello: async (n) => { await write({ hello: n || "Ospite" }); return true; },
-        close: () => { try { device.gatt.disconnect(); } catch {} },
-      };
-      return true;
-    },
-    [receive, publish]
-  );
-
-  // Native Bluetooth (Capacitor APK): the host is a real BLE peripheral and the guest
-  // a central, so two phones pair directly with no relay and no network. The bridge
-  // (window.OsteriaNative, injected only in the APK) owns the radio and the framing; we
-  // hand it JSON and adopt whatever comes back, exactly like the other transports. This
-  // never runs on the web — window.OsteriaNative is absent — so the artifact is untouched.
-  const openNative = useCallback(
-    async (host, nm) => {
+  // Native Bluetooth (Capacitor APK only): the host is a real BLE peripheral and the
+  // guest a central, so two phones pair directly with no relay and no network. The
+  // bridge (window.OsteriaNative, injected only in the APK) owns the radio and the
+  // framing; we hand it JSON and adopt whatever comes back, like the other transports.
+  // The leading guard folds to `return false` on the web (the flag is a literal there),
+  // so the bundler strips the whole body and no Bluetooth reference survives.
+  const openNative = async (host, nm) => {
+      if (!globalThis.__OSTERIA_NATIVE__) return false;
       const N = typeof window !== "undefined" ? window.OsteriaNative : null;
       if (!N || !N.available) {
         setMsg(L("Bluetooth nativo non disponibile (serve l'app installata).", "Native Bluetooth unavailable (needs the installed app)."));
@@ -5944,9 +5854,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         close: () => { try { N.close(); } catch {} },
       };
       return true;
-    },
-    [receive, publish]
-  );
+  };
 
   /* ── lifecycle ── */
   const openTable = async (preCode) => {
@@ -5984,41 +5892,10 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     setScreen("table");
   };
 
-  // Host a table over Bluetooth: same fresh room as openTable, but the sync runs on
-  // the BLE characteristic instead of the relay. Host is seat A.
-  const openTableBluetooth = async () => {
-    const code = Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
-    const g0 = mostPlayedGame(boardRef.current);
-    const fresh = {
-      code, v: 0, ts: Date.now(),
-      names: { A: name.trim() || "Oste", B: null },
-      status: "lobby", game: g0,
-      opts: { ...GAMES[g0].def, ...(savedRules[g0] || {}) },
-      scores: showScores, gs: null, log: [], ev: null, anim: null,
-    };
-    setSeat("A"); seatRef.current = "A"; claimRef.current = false;
-    roomRef.current = fresh; setRoom(fresh); setLink("waiting");
-    const ok = await openBluetooth(true, name);
-    if (!ok) return;
-    netRef.current.send(fresh); // broadcast the opening state to whoever's on the wire
-    saveSession({ code, seat: "A", name: name.trim() || "Oste", room: fresh });
-    setScreen("table");
-  };
-  // Join a table over Bluetooth: guest is seat B, greets, and adopts the host's state.
-  const joinTableBluetooth = async () => {
-    const nm = name.trim() || "Ospite";
-    setSeat("B"); seatRef.current = "B"; claimRef.current = false;
-    setLink("waiting");
-    const ok = await openBluetooth(false, nm);
-    if (!ok) return;
-    await netRef.current.hello(nm);
-    saveSession({ code: "BT", seat: "B", name: nm });
-    setScreen("table");
-  };
-
   // Host a table over native Bluetooth (installed app): same fresh room as openTable,
   // synced over the direct phone-to-phone BLE link. Host is seat A, the peripheral.
   const openTableNative = async () => {
+    if (!globalThis.__OSTERIA_NATIVE__) return;
     const code = Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
     const g0 = mostPlayedGame(boardRef.current);
     const fresh = {
@@ -6038,6 +5915,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   };
   // Join a native Bluetooth table: guest is seat B, the central; greets and adopts state.
   const joinTableNative = async () => {
+    if (!globalThis.__OSTERIA_NATIVE__) return;
     const nm = name.trim() || "Ospite";
     setSeat("B"); seatRef.current = "B"; claimRef.current = false;
     setLink("waiting");
@@ -6560,7 +6438,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           >
             Osteria<span style={{ color: "#A5342F", display: "inline-block", transform: "rotate(7deg)" }}>!</span>
           </h1>
-          <Micro style={{ textAlign: "center", marginTop: 6 }}>{nativeSupported() ? L("Due giocatori · due telefoni · offline", "Two players · two phones · offline") : L("Due giocatori · due telefoni · un codice", "Two players · two phones · one code")}</Micro>
+          <Micro style={{ textAlign: "center", marginTop: 6 }}>{globalThis.__OSTERIA_NATIVE__ ? L("Due giocatori · due telefoni · offline", "Two players · two phones · offline") : L("Due giocatori · due telefoni · un codice", "Two players · two phones · one code")}</Micro>
 
           <div style={{ marginTop: 18 }}>
             <input
@@ -6577,7 +6455,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                 table are the quieter fallbacks. In the artifact (single device,
                 no server) there's no Bump, so opening a table leads. */}
             {!hasStore() ? (
-              nativeSupported() ? (
+              globalThis.__OSTERIA_NATIVE__ ? (
                 <>
                   {/* Installed app, offline: the only way in is the direct phone-to-phone
                       Bluetooth link. Bump and codes need the network, so they're gone. */}
@@ -6659,7 +6537,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
               <Ico n="turn" s={15} /> {L("Un solo telefono", "One phone")} <span style={{ color: T.ink30, fontWeight: 400 }}>{L("· a turno, senza rete", "· take turns, no network")}</span>
             </button>
             {msg && <p style={{ color: T.ink, fontSize: 13, marginTop: 12, textAlign: "center" }}>{msg}</p>}
-            {!hasStore() && !nativeSupported() && <InstallPrompt />}
+            {!hasStore() && !globalThis.__OSTERIA_NATIVE__ && <InstallPrompt />}
           </div>
         </div>
         <BumpVeil show={bumping} onCancel={cancelBump} />
