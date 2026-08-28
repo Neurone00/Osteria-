@@ -23,9 +23,14 @@
  *   }
  */
 import { BleClient, numbersToDataView } from "@capacitor-community/bluetooth-le";
+import { App } from "@capacitor/app";
+import { Filesystem, Directory } from "@capacitor/filesystem";
 
 const SERVICE = "6f737465-7269-6161-0000-000000000001"; // must match BT_SERVICE in App.jsx
 const CHAR = "6f737465-7269-6161-0000-000000000002"; //   and BT_CHAR
+
+// The GitHub repo the in-app updater checks for a newer signed APK.
+const UPDATE_REPO = "Neurone00/Osteria-";
 
 // Payload bytes per frame. Android negotiates a 512-byte MTU on connect (the
 // central plugin requests it), so 160 is comfortable; drop it toward ~17 if a
@@ -191,7 +196,22 @@ async function host(name, { onMessage, onStatus } = {}) {
 }
 
 // ── guest: BLE central ───────────────────────────────────────────────────────
-async function guest(name, { onMessage, onStatus } = {}) {
+// Wire the central transport onto an already-chosen host (by deviceId): connect,
+// subscribe, and route sends. Shared by the manual "Entra" chooser and Bump's
+// automatic scan, so the two paths behave identically once a host is picked.
+async function guestConnect(id, name, { onMessage, onStatus } = {}) {
+  await BleClient.connect(id, () => onStatus && onStatus("lost"));
+  const inbox = makeInbox((o) => onMessage && onMessage(o));
+  await BleClient.startNotifications(id, SERVICE, CHAR, (dv) => {
+    inbox(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+  });
+  sendRaw = (u8) => BleClient.write(id, SERVICE, CHAR, numbersToDataView(Array.from(u8)));
+  teardown = () => { try { BleClient.stopNotifications(id, SERVICE, CHAR); } catch {} try { BleClient.disconnect(id); } catch {} };
+  onStatus && onStatus("live");
+  return true;
+}
+
+async function guest(name, handlers = {}) {
   if (!(await bluetoothOn())) throw new Error("attiva il Bluetooth e riprova");
   if (!(await ensureBtPermissions())) throw new Error("concedi il permesso «Dispositivi nelle vicinanze» (Impostazioni ▸ App ▸ Osteria ▸ Autorizzazioni)");
   await BleClient.initialize({ androidNeverForLocation: true });
@@ -203,16 +223,43 @@ async function guest(name, { onMessage, onStatus } = {}) {
     if (/cancel/i.test(errText(e))) throw new Error("annullato");
     throw new Error("ricerca — " + errText(e));
   }
-  const id = device.deviceId;
-  await BleClient.connect(id, () => onStatus && onStatus("lost"));
-  const inbox = makeInbox((o) => onMessage && onMessage(o));
-  await BleClient.startNotifications(id, SERVICE, CHAR, (dv) => {
-    inbox(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength));
+  return guestConnect(device.deviceId, name, handlers);
+}
+
+// Silent scan (no system chooser) for an Osteria host that's advertising right now.
+// Resolves the first host's deviceId, or null if none appears within `ms`. BLE scan
+// needs no location — androidNeverForLocation keeps us off it.
+async function scanHost(ms) {
+  await BleClient.initialize({ androidNeverForLocation: true });
+  return new Promise((resolve) => {
+    let found = null, done = false;
+    const finish = async () => {
+      if (done) return; done = true;
+      try { await BleClient.stopLEScan(); } catch {}
+      resolve(found);
+    };
+    BleClient.requestLEScan({ services: [SERVICE] }, (res) => {
+      if (!found && res && res.device) { found = res.device.deviceId; finish(); }
+    }).catch(() => { done = true; resolve(null); });
+    setTimeout(finish, ms);
   });
-  sendRaw = (u8) => BleClient.write(id, SERVICE, CHAR, numbersToDataView(Array.from(u8)));
-  teardown = () => { try { BleClient.stopNotifications(id, SERVICE, CHAR); } catch {} try { BleClient.disconnect(id); } catch {} };
-  onStatus && onStatus("live");
-  return true;
+}
+
+// Bump: one button, no roles. Scan briefly for a host; if one is already advertising
+// we're the guest and connect to it, otherwise nobody's home so WE become the host.
+// So the first phone to tap Bump finds no host → hosts; the second finds it → joins.
+// A little jitter on the scan window staggers two near-simultaneous taps so they don't
+// both decide "no host" and both start advertising.
+async function bump(name, handlers = {}) {
+  if (!(await bluetoothOn())) throw new Error("attiva il Bluetooth e riprova");
+  if (!(await ensureBtPermissions())) throw new Error("concedi il permesso «Dispositivi nelle vicinanze» (Impostazioni ▸ App ▸ Osteria ▸ Autorizzazioni)");
+  const id = await scanHost(1800 + Math.floor(Math.random() * 700));
+  if (id) {
+    await guestConnect(id, name, handlers);
+    return { role: "guest" };
+  }
+  await host(name, handlers);
+  return { role: "host" };
 }
 
 function close() {
@@ -229,6 +276,65 @@ async function prewarm() {
   try { await ensureBtPermissions(); } catch {}
 }
 
+// ── in-app updater ───────────────────────────────────────────────────────────
+// The installed build's versionCode (CI stamps it to the run number, same N that
+// appears in the release asset name Osteria-v1.0.N-sha.apk).
+async function appBuild() {
+  try { const i = await App.getInfo(); return parseInt(i.build, 10) || 0; } catch { return 0; }
+}
+
+// Ask GitHub for the latest published APK and whether it's newer than what's installed.
+// Returns { current, latest, available, name, url }. Best-effort — any failure (offline,
+// rate limit) throws, and the caller just skips the update prompt.
+async function checkUpdate() {
+  const current = await appBuild();
+  const r = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/tags/apk`, {
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!r.ok) throw new Error("controllo aggiornamenti non riuscito");
+  const j = await r.json();
+  const assets = j.assets || [];
+  let best = null;
+  for (const a of assets) {
+    const m = /v\d+\.\d+\.(\d+)/.exec(a.name || "");
+    if (m) { const n = +m[1]; if (!best || n > best.build) best = { build: n, name: a.name, url: a.browser_download_url }; }
+  }
+  return {
+    current,
+    latest: best ? best.build : 0,
+    available: !!best && best.build > current,
+    name: best && best.name,
+    url: best && best.url,
+  };
+}
+
+function blobToB64(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error("lettura file non riuscita"));
+    fr.onload = () => resolve(String(fr.result).split(",")[1] || "");
+    fr.readAsDataURL(blob);
+  });
+}
+
+// Download the APK to the app cache and hand it to the system package installer.
+// Android shows its own install screen (unavoidable for a sideloaded app); this just
+// removes the browser download + find-the-file dance.
+async function installUpdate(url, name) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("download non riuscito");
+  const b64 = await blobToB64(await res.blob());
+  const path = name || "Osteria-update.apk";
+  await Filesystem.writeFile({ path, data: b64, directory: Directory.Cache });
+  const { uri } = await Filesystem.getUri({ path, directory: Directory.Cache });
+  const opener = typeof window !== "undefined" && window.cordova && window.cordova.plugins && window.cordova.plugins.fileOpener2;
+  if (!opener || !opener.open) throw new Error("installer non disponibile");
+  await new Promise((resolve, reject) => {
+    opener.open(uri, "application/vnd.android.package-archive", { success: resolve, error: (e) => reject(new Error(errText(e))) });
+  });
+  return true;
+}
+
 if (typeof window !== "undefined") {
-  window.OsteriaNative = { available: true, host, guest, send, close, prewarm };
+  window.OsteriaNative = { available: true, host, guest, bump, send, close, prewarm, checkUpdate, installUpdate };
 }

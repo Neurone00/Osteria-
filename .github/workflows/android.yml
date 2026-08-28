@@ -76,19 +76,21 @@ jobs:
           sed -i "s/versionName \"1.0\"/versionName \"${VER} (${SHORT})\"/" android/app/build.gradle
           grep -E 'versionCode|versionName' android/app/build.gradle
 
-      - name: Build debug APK
+      - name: Build signed release APK
         run: |
           cd android
           chmod +x gradlew
+          # Release build, signed with the committed fixed key (see app/build.gradle) so
+          # every build shares one certificate and installs over the last in place.
           # Maven Central occasionally answers dependency fetches with 429 (Too Many
           # Requests) — a transient infra flake, not a build error. Retry with backoff
           # so a rate-limited download doesn't fail the whole APK build.
           n=0
           until [ "$n" -ge 4 ]; do
-            ./gradlew assembleDebug --no-daemon --stacktrace && break
+            ./gradlew assembleRelease --no-daemon --stacktrace && break
             n=$((n+1))
             if [ "$n" -ge 4 ]; then
-              echo "gradle assembleDebug failed after $n attempts" >&2
+              echo "gradle assembleRelease failed after $n attempts" >&2
               exit 1
             fi
             wait=$((5 * 2 ** (n - 1)))
@@ -99,8 +101,8 @@ jobs:
       - name: Stage the APK
         run: |
           mkdir -p out
-          cp android/app/build/outputs/apk/debug/app-debug.apk "out/${APK_NAME}"
-          cp android/app/build/outputs/apk/debug/app-debug.apk out/Osteria.apk
+          cp android/app/build/outputs/apk/release/app-release.apk "out/${APK_NAME}"
+          cp android/app/build/outputs/apk/release/app-release.apk out/Osteria.apk
           ls -l out
 
       - name: Upload APK artifact

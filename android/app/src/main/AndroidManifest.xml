@@ -39,6 +39,11 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- In-app updater: check GitHub for a newer build and install it in place. Android
+         still shows its own install-confirmation screen (a sideloaded app can never
+         update fully silently), but this saves the browser round-trip and manual file. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Bluetooth: host advertises as a peripheral, guest scans + connects as a
          central. Android 12+ needs the runtime BLUETOOTH_* permissions; the legacy
          ones cover Android 11 and below. neverForLocation keeps us off location. -->

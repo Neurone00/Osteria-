@@ -5505,6 +5505,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [askLeave, setAskLeave] = useState(false);
   const [bumping, setBumping] = useState(false); // waiting in the bump lobby
   const [board, setBoard] = useState({}); // local head-to-head record between name pairs
+  const [update, setUpdate] = useState(null); // installed app: a newer APK is on GitHub
+  const [updating, setUpdating] = useState(false);
   const bumpRef = useRef(null);
   const boardRef = useRef({});
   boardRef.current = board;
@@ -5517,7 +5519,31 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     // tap isn't the moment Android is still granting it (which jams the peripheral
     // plugin until a restart). No-op on the web — the global isn't there.
     try { if (globalThis.__OSTERIA_NATIVE__) globalThis.OsteriaNative?.prewarm?.(); } catch {}
+    // Installed app: quietly ask GitHub whether a newer signed build exists. If so a
+    // one-tap "Aggiorna" banner appears on the home screen. Silent on any failure
+    // (offline, rate-limited) and absent entirely on the web.
+    (async () => {
+      try {
+        if (!globalThis.__OSTERIA_NATIVE__) return;
+        const u = await globalThis.OsteriaNative?.checkUpdate?.();
+        if (u && u.available) setUpdate(u);
+      } catch {}
+    })();
   }, []);
+
+  // Download + install the newer APK. Android still shows its own install prompt, but
+  // no browser, no hunting for the file. On failure, say so — the release link is the
+  // manual fallback.
+  const doUpdate = async () => {
+    if (!update || updating) return;
+    setUpdating(true);
+    try {
+      await globalThis.OsteriaNative.installUpdate(update.url, update.name);
+    } catch (e) {
+      setMsg(L("Aggiornamento non riuscito — scaricalo dal link della release.", "Update failed — grab it from the release link."));
+    }
+    setUpdating(false);
+  };
 
   const roomRef = useRef(null);
   const netRef = useRef(null);
@@ -5872,6 +5898,29 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   // framing; we hand it JSON and adopt whatever comes back, like the other transports.
   // The leading guard folds to `return false` on the web (the flag is a literal there),
   // so the bundler strips the whole body and no Bluetooth reference survives.
+  // The transport-agnostic BLE message handlers, shared by host/guest/bump: a guest
+  // hello names seat B, a state frame is adopted like any other transport's.
+  const makeNativeHandlers = () => ({
+    onStatus: (s) => { if (s === "waiting" || s === "live" || s === "lost") setLink(s); },
+    onMessage: (d) => {
+      if (d && d.hello !== undefined) {
+        const cur = roomRef.current;
+        if (cur) publish({ ...cur, names: { ...cur.names, B: d.hello } });
+      } else if (d && d.type === "state" && d.room) {
+        setLink("live");
+        receive(d.room);
+      }
+    },
+  });
+  // The netRef wiring over the native channel — identical whichever role opened it.
+  const wireNativeNet = (N) => {
+    netRef.current = {
+      send: (r) => { try { N.send({ type: "state", room: r }); } catch {} },
+      hello: async (n) => { try { await N.send({ hello: n || "Ospite" }); } catch {} return true; },
+      close: () => { try { N.close(); } catch {} },
+    };
+  };
+
   const openNative = async (host, nm) => {
       if (!globalThis.__OSTERIA_NATIVE__) return false;
       const N = typeof window !== "undefined" ? window.OsteriaNative : null;
@@ -5879,18 +5928,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         setMsg(L("Bluetooth nativo non disponibile (serve l'app installata).", "Native Bluetooth unavailable (needs the installed app)."));
         return false;
       }
-      const handlers = {
-        onStatus: (s) => { if (s === "waiting" || s === "live" || s === "lost") setLink(s); },
-        onMessage: (d) => {
-          if (d && d.hello !== undefined) {
-            const cur = roomRef.current;
-            if (cur) publish({ ...cur, names: { ...cur.names, B: d.hello } });
-          } else if (d && d.type === "state" && d.room) {
-            setLink("live");
-            receive(d.room);
-          }
-        },
-      };
+      const handlers = makeNativeHandlers();
       setLink("waiting");
       let ok = false, err = null;
       try { ok = host ? await N.host(nm, handlers) : await N.guest(nm, handlers); } catch (e) { err = e; ok = false; }
@@ -5902,11 +5940,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       }
       setLink("live");
       if (!host) { try { await N.send({ hello: nm || "Ospite" }); } catch {} }
-      netRef.current = {
-        send: (r) => { try { N.send({ type: "state", room: r }); } catch {} },
-        hello: async (n) => { try { await N.send({ hello: n || "Ospite" }); } catch {} return true; },
-        close: () => { try { N.close(); } catch {} },
-      };
+      wireNativeNet(N);
       return true;
   };
 
@@ -5977,6 +6011,51 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     if (!ok) return;
     await netRef.current.hello(nm);
     saveSession({ code: "BT", seat: "B", name: nm });
+    setScreen("table");
+  };
+
+  // Bump over Bluetooth (installed app, no internet): one tap, no roles. The bridge
+  // scans for a host and, finding none, becomes one — so the FIRST phone to tap Bump
+  // hosts (seat A) and the second joins (seat B). No codes, no picking sides.
+  const bumpNative = async () => {
+    if (!globalThis.__OSTERIA_NATIVE__) return;
+    const N = typeof window !== "undefined" ? window.OsteriaNative : null;
+    if (!N || !N.available || !N.bump) {
+      setMsg(L("Bluetooth nativo non disponibile (serve l'app installata).", "Native Bluetooth unavailable (needs the installed app)."));
+      return;
+    }
+    const nm = name.trim() || "Oste";
+    const handlers = makeNativeHandlers();
+    setBumping(true); setLink("waiting");
+    let res = null, err = null;
+    try { res = await N.bump(nm, handlers); } catch (e) { err = e; }
+    setBumping(false);
+    if (!res) {
+      const detail = (err && (err.message || String(err))) || L("non riuscito", "failed");
+      setMsg(`Bump: ${detail}`);
+      return;
+    }
+    wireNativeNet(N);
+    if (res.role === "host") {
+      const code = Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
+      const g0 = mostPlayedGame(boardRef.current);
+      const fresh = {
+        code, v: 0, ts: Date.now(),
+        names: { A: nm, B: null },
+        status: "lobby", game: g0,
+        opts: { ...GAMES[g0].def, ...(savedRules[g0] || {}) },
+        scores: showScores, gs: null, log: [], ev: null, anim: null,
+      };
+      setSeat("A"); seatRef.current = "A"; claimRef.current = false;
+      roomRef.current = fresh; setRoom(fresh);
+      netRef.current.send(fresh);
+      saveSession({ code, seat: "A", name: nm, room: fresh });
+    } else {
+      setSeat("B"); seatRef.current = "B"; claimRef.current = false;
+      await netRef.current.hello(nm);
+      saveSession({ code: "BT", seat: "B", name: nm });
+    }
+    setLink("live");
     setScreen("table");
   };
 
@@ -6494,6 +6573,20 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
           </h1>
           <Micro style={{ textAlign: "center", marginTop: 6 }}>{globalThis.__OSTERIA_NATIVE__ ? L("Due giocatori · due telefoni · offline", "Two players · two phones · offline") : L("Due giocatori · due telefoni · un codice", "Two players · two phones · one code")}</Micro>
 
+          {/* Installed app: a newer signed build is on GitHub → one-tap update. Android
+              still shows its own install screen; this just skips the browser + file hunt. */}
+          {globalThis.__OSTERIA_NATIVE__ && update && (
+            <div style={{ marginTop: 14, padding: "12px 14px", border: `1px solid ${T.line}`, borderRadius: 12, background: T.paper, display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 15, color: T.ink }}>{L("Aggiornamento disponibile", "Update available")}</div>
+                <Micro>{L(`Versione ${update.latest} · la tua ${update.current}`, `Version ${update.latest} · yours ${update.current}`)}</Micro>
+              </div>
+              <Button onClick={doUpdate} disabled={updating}>
+                {updating ? L("Scarico…", "Downloading…") : L("Aggiorna", "Update")}
+              </Button>
+            </div>
+          )}
+
           <div style={{ marginTop: 18 }}>
             <input
               value={name}
@@ -6511,17 +6604,30 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
             {!hasStore() ? (
               globalThis.__OSTERIA_NATIVE__ ? (
                 <>
-                  {/* Installed app, offline: the only way in is the direct phone-to-phone
-                      Bluetooth link. Bump and codes need the network, so they're gone. */}
-                  <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-                    <Button full onClick={openTableNative}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}><Ico n="bump" s={19} /> {L("Ospita", "Host")}</span>
+                  {/* Installed app, offline: the direct phone-to-phone Bluetooth link.
+                      Bump leads — both tap it, the first becomes host automatically —
+                      with the explicit Host/Join as the quiet manual fallback. */}
+                  <div style={{ marginTop: 12 }}>
+                    <Button full onClick={bumpNative}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <Ico n="bump" s={20} /> {L("Bump — avvicina i telefoni", "Bump — tap phones together")}
+                      </span>
+                    </Button>
+                  </div>
+                  <Micro style={{ textAlign: "center", marginTop: 8 }}>{L("Vicini, offline — toccate Bump insieme, il primo ospita", "Nearby, offline — both tap Bump, the first one hosts")}</Micro>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
+                    <div style={{ flex: 1, height: 1, background: T.line }} />
+                    <Micro>{L("oppure a mano", "or by hand")}</Micro>
+                    <div style={{ flex: 1, height: 1, background: T.line }} />
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Button kind="line" full onClick={openTableNative}>
+                      {L("Ospita", "Host")}
                     </Button>
                     <Button kind="line" full onClick={joinTableNative}>
                       {L("Entra", "Join")}
                     </Button>
                   </div>
-                  <Micro style={{ textAlign: "center", marginTop: 8 }}>{L("Vicini, offline — uno ospita, l'altro entra", "Nearby, offline — one hosts, the other joins")}</Micro>
                 </>
               ) : (
                 <>
