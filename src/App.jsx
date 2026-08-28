@@ -4035,9 +4035,16 @@ function mostPlayedGame(board) {
   return played.reduce((best, g) => (tally[g] > tally[best] ? g : best), played[0]);
 }
 
+/* The deployed Worker's public origin — used only by the installed APK, which is
+   served from file:// and so has no same-origin host to infer. The web build always
+   uses its own origin (below) and never references this. */
+const NATIVE_RELAY_HOST = "osteria.neurone00.workers.dev";
+
 /* Same-origin WebSocket relay — the Cloudflare Worker in ./worker. If it isn't
-   there (a plain static host), the app falls back to PeerJS on its own. */
+   there (a plain static host), the app falls back to PeerJS on its own. In the APK
+   there is no same origin, so point at the deployed Worker explicitly. */
 function relayUrl(code) {
+  if (globalThis.__OSTERIA_NATIVE__) return `wss://${NATIVE_RELAY_HOST}/room/${code.toUpperCase()}`;
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${location.host}/room/${code.toUpperCase()}`;
 }
@@ -5899,13 +5906,26 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   // The leading guard folds to `return false` on the web (the flag is a literal there),
   // so the bundler strips the whole body and no Bluetooth reference survives.
   // The transport-agnostic BLE message handlers, shared by host/guest/bump: a guest
-  // hello names seat B, a state frame is adopted like any other transport's.
-  const makeNativeHandlers = () => ({
+  // hello names seat B, a state frame is adopted like any other transport's. When both
+  // phones are online the pair also hands the session off to the internet relay right
+  // here in the lobby (before any move), to spare the battery — see tryHandoff*.
+  // role is read from a ref because Bump decides it inside the bridge, after the
+  // handlers are already built; it's set before any handoff message can arrive.
+  const nativeRoleRef = useRef(null);
+  const makeNativeHandlers = (N, nm) => ({
     onStatus: (s) => { if (s === "waiting" || s === "live" || s === "lost") setLink(s); },
     onMessage: (d) => {
+      const role = nativeRoleRef.current;
       if (d && d.hello !== undefined) {
         const cur = roomRef.current;
         if (cur) publish({ ...cur, names: { ...cur.names, B: d.hello } });
+        // Guest just greeted, carrying whether it's online. If we are too, move play
+        // onto the relay to save Bluetooth battery. Best-effort — stays on BLE if it fails.
+        if (role === "host" && navigator.onLine && d.net) tryHandoffHost(N, nm);
+      } else if (d && d.handoff && role === "guest") {
+        tryHandoffGuest(N, nm, d.handoff);
+      } else if (d && d.handoffAck && role === "host") {
+        if (handoffAckRef.current) handoffAckRef.current();
       } else if (d && d.type === "state" && d.room) {
         setLink("live");
         receive(d.room);
@@ -5913,12 +5933,58 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     },
   });
   // The netRef wiring over the native channel — identical whichever role opened it.
+  // The guest's hello carries navigator.onLine so the host can decide on the handoff.
   const wireNativeNet = (N) => {
     netRef.current = {
       send: (r) => { try { N.send({ type: "state", room: r }); } catch {} },
-      hello: async (n) => { try { await N.send({ hello: n || "Ospite" }); } catch {} return true; },
+      hello: async (n) => { try { await N.send({ hello: n || "Ospite", net: navigator.onLine }); } catch {} return true; },
       close: () => { try { N.close(); } catch {} },
     };
+  };
+
+  // ── Bluetooth → internet handoff ──────────────────────────────────────────
+  // Once a Bump pair is connected over BLE, if BOTH phones are online we lift the
+  // still-lobby session onto the Cloudflare relay and drop the Bluetooth link, so a
+  // long game doesn't drain the radio. It's an ack-confirmed switch: the host only
+  // abandons BLE once the guest confirms it has joined the relay, so a dropped frame
+  // can never split the two onto different transports — on any failure both stay on BLE.
+  const handoffRef = useRef("idle"); // idle | pending | done
+  const handoffAckRef = useRef(null);
+  const tryHandoffHost = async (N, nm) => {
+    if (handoffRef.current !== "idle") return;
+    const code = roomRef.current && roomRef.current.code;
+    if (!code) return;
+    handoffRef.current = "pending";
+    const ok = await openRelay(code, true, nm); // repoints netRef → relay
+    if (!ok) { handoffRef.current = "idle"; relayRef.current = false; wireNativeNet(N); return; }
+    // Wait (≤2.5s) for the guest to confirm it's on the relay before dropping BLE.
+    const acked = await new Promise((resolve) => {
+      handoffAckRef.current = () => resolve(true);
+      try { N.send({ handoff: code }); } catch {}
+      setTimeout(() => { try { N.send({ handoff: code }); } catch {} }, 350); // one resend
+      setTimeout(() => resolve(false), 2500);
+    });
+    handoffAckRef.current = null;
+    if (!acked) { // guest never made it online → abandon the relay, keep Bluetooth
+      handoffRef.current = "idle";
+      try { netRef.current.close(); } catch {}
+      relayRef.current = false; wireNativeNet(N); setLink("live");
+      return;
+    }
+    handoffRef.current = "done";
+    if (roomRef.current) netRef.current.send(roomRef.current); // seed the relay room
+    try { N.close(); } catch {} // drop Bluetooth — we're online now
+    setLink("live");
+  };
+  const tryHandoffGuest = async (N, nm, code) => {
+    if (handoffRef.current !== "idle") return;
+    handoffRef.current = "pending";
+    const ok = await openRelay(code, false, nm); // repoints netRef → relay, seat B
+    if (!ok) { handoffRef.current = "idle"; relayRef.current = false; wireNativeNet(N); return; }
+    handoffRef.current = "done";
+    try { N.send({ handoffAck: 1 }); } catch {} // tell the host we're on the relay (still on BLE)
+    setTimeout(() => { try { N.close(); } catch {} }, 600); // let the ack flush, then drop BLE
+    setLink("live");
   };
 
   const openNative = async (host, nm) => {
@@ -5928,7 +5994,9 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         setMsg(L("Bluetooth nativo non disponibile (serve l'app installata).", "Native Bluetooth unavailable (needs the installed app)."));
         return false;
       }
-      const handlers = makeNativeHandlers();
+      handoffRef.current = "idle";
+      nativeRoleRef.current = host ? "host" : "guest";
+      const handlers = makeNativeHandlers(N, nm);
       setLink("waiting");
       let ok = false, err = null;
       try { ok = host ? await N.host(nm, handlers) : await N.guest(nm, handlers); } catch (e) { err = e; ok = false; }
@@ -5939,7 +6007,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         return false;
       }
       setLink("live");
-      if (!host) { try { await N.send({ hello: nm || "Ospite" }); } catch {} }
+      if (!host) { try { await N.send({ hello: nm || "Ospite", net: navigator.onLine }); } catch {} }
       wireNativeNet(N);
       return true;
   };
@@ -6025,7 +6093,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       return;
     }
     const nm = name.trim() || "Oste";
-    const handlers = makeNativeHandlers();
+    handoffRef.current = "idle";
+    const handlers = makeNativeHandlers(N, nm);
     setBumping(true); setLink("waiting");
     let res = null, err = null;
     try { res = await N.bump(nm, handlers); } catch (e) { err = e; }
@@ -6035,6 +6104,9 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       setMsg(`Bump: ${detail}`);
       return;
     }
+    // Now that the bridge has decided who hosts, record the role so the handoff
+    // handler branches correctly, then wire the BLE transport.
+    nativeRoleRef.current = res.role;
     wireNativeNet(N);
     if (res.role === "host") {
       const code = Array.from({ length: 4 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[Math.floor(Math.random() * 24)]).join("");
