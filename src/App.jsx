@@ -9859,6 +9859,120 @@ const azRewardText = (reward) => ({
 // A tiny tag shown on each node so you can read what it grants at a glance.
 const AZ_TAG = { addpip: "+d4", bigpip: "+d6", addmult: "+×", evolve: "▲", flat: "+3", amp: "◆", apex: "★" };
 const AZ_PCOL = { A: "#b23a2e", B: "#2f5fa6" }; // dice numbers are red for seat A, blue for seat B
+
+// ── 3D dice (three.js) ──────────────────────────────────────────────────────
+// A light, shaderless render of the thrown dice: off-white bevelled solids (primitive
+// polyhedra — tetra d4, cube d6, octa d8, dodeca d12, icosa d20; a coin d2, a pentagon
+// d10), soft hemisphere + key light and a contact shadow for an ambient-occlusion feel,
+// and the rolled number as a sprite in the player's colour (red / blue). three is a
+// runtime global (window.THREE) so App.jsx still imports nothing but React — vendored
+// beside the app for web + offline APK, CDN fallback for the raw artifact. If three or
+// WebGL isn't available we fall back to the 2D shapes.
+let azThreeP = null;
+function azLoadScript(src) {
+  return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.async = true; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+}
+function azEnsureThree() {
+  if (azThreeP) return azThreeP;
+  azThreeP = (async () => {
+    if (!window.THREE) { try { await azLoadScript("three.min.js"); } catch { await azLoadScript("https://cdnjs.cloudflare.com/ajax/libs/three.js/r137/three.min.js"); } }
+    if (!window.THREE) throw new Error("no three");
+    if (!window.THREE.RoundedBoxGeometry) { try { await azLoadScript("RoundedBoxGeometry.js"); } catch {} }
+    return window.THREE;
+  })();
+  return azThreeP;
+}
+function azGeom(THREE, sides) {
+  switch (sides) {
+    case 2: return new THREE.CylinderGeometry(0.62, 0.62, 0.18, 40); // coin
+    case 4: return new THREE.TetrahedronGeometry(0.74);
+    case 6: return THREE.RoundedBoxGeometry ? new THREE.RoundedBoxGeometry(0.98, 0.98, 0.98, 4, 0.12) : new THREE.BoxGeometry(0.92, 0.92, 0.92);
+    case 8: return new THREE.OctahedronGeometry(0.68);
+    case 10: return new THREE.CylinderGeometry(0.6, 0.6, 0.52, 5); // pentagon prism ≈ d10
+    case 12: return new THREE.DodecahedronGeometry(0.63);
+    case 20: return new THREE.IcosahedronGeometry(0.63);
+    default: return new THREE.BoxGeometry(0.92, 0.92, 0.92);
+  }
+}
+function azNumberSprite(THREE, label, color) {
+  const cv = document.createElement("canvas"); cv.width = cv.height = 128;
+  const ctx = cv.getContext("2d");
+  ctx.font = "bold 72px Georgia, 'Times New Roman', serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = color; ctx.fillText(label, 64, 70);
+  const tex = new THREE.CanvasTexture(cv);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+  sp.scale.set(0.85, 0.85, 0.85);
+  return sp;
+}
+// Build the scene into `el`; returns a cleanup fn. Any WebGL failure is swallowed so the
+// caller can drop back to 2D.
+function azRenderDice(el, faces, seatColor) {
+  const THREE = window.THREE;
+  let renderer;
+  try { renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); } catch { return () => {}; }
+  const W = el.clientWidth || 320, H = el.clientHeight || 120;
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.setSize(W, H, false);
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.domElement.style.width = "100%"; renderer.domElement.style.height = "100%";
+  el.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const n = faces.length, spacing = n > 6 ? 1.05 : 1.35, spanX = (n - 1) * spacing;
+  const camera = new THREE.PerspectiveCamera(38, W / H, 0.1, 100);
+  camera.position.set(0, 1.5, Math.max(4.4, spanX * 0.62 + 3.4)); camera.lookAt(0, -0.05, 0);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0xb6ada0, 0.9));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.22));
+  const key = new THREE.DirectionalLight(0xffffff, 0.8);
+  key.position.set(2.4, 6, 4); key.castShadow = true;
+  key.shadow.mapSize.set(512, 512); key.shadow.camera.near = 1; key.shadow.camera.far = 20;
+  key.shadow.camera.left = -7; key.shadow.camera.right = 7; key.shadow.camera.top = 7; key.shadow.camera.bottom = -7;
+  scene.add(key);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), new THREE.ShadowMaterial({ opacity: 0.16 }));
+  ground.rotation.x = -Math.PI / 2; ground.position.y = -0.95; ground.receiveShadow = true; scene.add(ground);
+
+  const dice = [];
+  faces.forEach((f, i) => {
+    const mult = f.kind === "mult";
+    const mat = new THREE.MeshStandardMaterial({ color: mult ? 0xc9a24a : 0xf2eee4, roughness: mult ? 0.4 : 0.55, metalness: mult ? 0.35 : 0.05, flatShading: f.sides !== 6 && f.sides !== 2 });
+    const mesh = new THREE.Mesh(azGeom(THREE, f.sides), mat); mesh.castShadow = true;
+    mesh.position.x = -spanX / 2 + i * spacing;
+    mesh.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+    scene.add(mesh);
+    const sp = azNumberSprite(THREE, mult ? `×${f.v}` : `${f.v}`, seatColor);
+    sp.position.set(mesh.position.x, 0.02, 0.8); scene.add(sp);
+    dice.push({ mesh, vx: (Math.random() < 0.5 ? -1 : 1) * (0.006 + Math.random() * 0.01), vy: 0.008 + Math.random() * 0.012 });
+  });
+
+  let raf, alive = true;
+  const tick = () => { if (!alive) return; for (const d of dice) { d.mesh.rotation.x += d.vy; d.mesh.rotation.y += d.vx; } renderer.render(scene, camera); raf = requestAnimationFrame(tick); };
+  raf = requestAnimationFrame(tick);
+  const onResize = () => { const w = el.clientWidth || W, h = el.clientHeight || H; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); };
+  window.addEventListener("resize", onResize);
+
+  return () => {
+    alive = false; cancelAnimationFrame(raf); window.removeEventListener("resize", onResize);
+    scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
+    renderer.dispose(); if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
+  };
+}
+// The dice display: a live 3D roll when three is available, else the flat 2D shapes.
+function AzDice3D({ faces, seat, height = 120 }) {
+  const ref = useRef(null);
+  const [ready, setReady] = useState(typeof window !== "undefined" && !!window.THREE);
+  useEffect(() => { let a = true; azEnsureThree().then(() => a && setReady(true)).catch(() => {}); return () => { a = false; }; }, []);
+  useEffect(() => {
+    if (!ready || !ref.current || !faces || typeof window === "undefined" || !window.THREE) return;
+    let cleanup = () => {};
+    try { cleanup = azRenderDice(ref.current, faces, AZ_PCOL[seat] || "#b23a2e"); } catch { cleanup = () => {}; }
+    return cleanup;
+  }, [ready, faces, seat]);
+  if (!ready || typeof window === "undefined" || !window.THREE) {
+    return <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", maxWidth: 340 }}>{(faces || []).map((f, i) => <AzDie key={i} face={f} size={44} tint={AZ_PCOL[seat]} />)}</div>;
+  }
+  return <div ref={ref} style={{ width: "100%", height, maxWidth: 360, margin: "0 auto" }} />;
+}
 function Azzardo({ room, gs, seat, mine, commit }) {
   const opp = other(seat);
   const [showHelp, setShowHelp] = useState(false);
@@ -9975,9 +10089,7 @@ function Azzardo({ room, gs, seat, mine, commit }) {
       <div style={{ minHeight: 78, margin: "8px 0", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5 }}>
         {roll ? (
           <>
-            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", justifyContent: "center", maxWidth: 340 }}>
-              {roll.faces.map((f, i) => <AzDie key={i} face={f} size={44} tint={AZ_PCOL[roll.seat]} />)}
-            </div>
+            <AzDice3D faces={roll.faces} seat={roll.seat} />
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
               {flash && <span className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 15, color: "#B8862B" }}>{L(AZ_COMBO[roll.tier].it, AZ_COMBO[roll.tier].en)}</span>}
               <span key={"g" + roll.gained} className="pop" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22 }}>+{roll.gained}</span>
