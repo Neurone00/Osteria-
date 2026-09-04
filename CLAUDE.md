@@ -1,0 +1,117 @@
+# CLAUDE.md
+
+Context for anyone — human or agent — picking this repo up cold.
+
+## What this is
+
+Osteria: six two-player games for **two players on two devices**, joined by a four-letter table code (or a QR /
+shared link). Four card games — Scopa, Rubamazzo, Straccia camicia, Briscola — and two dice games — Perudo and
+Yahtzee (shake-to-throw via DeviceMotion). Card games start with a hands-on shuffle (tap to shuffle, seeded by
+tap timing) and cut (drag) ritual. Hosted on Cloudflare (worker + Durable Object), a playable MVP, not a product.
+
+The interface is Italian, Jackbox-minimal on the home screen, with a per-device deck-face choice (Napoletane or
+French/Lombard) and a default-off "show points" toggle. Rules engines live in `src/App.jsx` and are exercised by
+`scripts/simulate.mjs`; keep adding coverage there for every new game.
+
+Read `README.md` first — it documents the rules as implemented, with the reasoning behind the variant choices.
+Those rules were researched against Italian sources and verified by simulation; **don't "fix" them from memory.**
+Two that look like bugs and aren't:
+
+- Straccia camicia attacks on **asso, due, tre** (paying 1, 2, 3). The A4/R3/C2/F1 scheme is the *international*
+  variant, available behind a toggle. The Italian baseline is the default and is correct.
+- Scopa forces the single-card capture: if a table card matches your card's value exactly, you may not take a sum
+  instead. Intentional.
+
+## Layout
+
+```
+src/App.jsx        everything: rules engines, transports, UI, motion. ~1500 lines, single file on purpose
+src/main.jsx       React root for the Vite build
+worker/index.js    Cloudflare Worker: serves the game, one Durable Object per table code
+wrangler.toml      name = "osteria", assets + DO binding
+scripts/           build-standalone.mjs inlines the app into standalone/index.html
+standalone/        generated — the single file Cloudflare uploads. Never hand-edit
+native/            bridge.js (native BLE transport) + prepare-android.mjs (builds android-www/ for the APK)
+capacitor.config.json  Capacitor: offline Android APK, webDir = generated android-www/
+android-www/       generated — offline web root the APK ships (gitignored). Never hand-edit
+```
+
+## Invariants
+
+- **`src/App.jsx` must keep running unmodified as a Claude artifact.** That means: no `localStorage`, no
+  `sessionStorage`, and no imports beyond `react` on any code path that runs when `window.storage` exists. The
+  browser-storage calls that do exist are gated behind `!hasStore()` and wrapped in try/catch. Keep it that way.
+- **Four transports, chosen at runtime, same state shape on all of them:** `window.storage` shared keys in the
+  artifact; a WebSocket to `/room/CODE` when served by the Worker; PeerJS as the fallback for dumb static hosts;
+  and **native Bluetooth** (`openNative`) in the Capacitor APK only — the offline phone-to-phone channel. The web
+  build has **no Bluetooth at all**: everything native is gated on `globalThis.__OSTERIA_NATIVE__`, a bundler
+  literal (true only for the APK build in `native/prepare-android.mjs`, false in `scripts/build-standalone.mjs`),
+  so the whole transport and its UI are dead-code-eliminated from `standalone/`. In the APK the host *is* a BLE
+  peripheral (a browser page can only be a central): `native/bridge.js` (bundled only into `android-www/`) attaches
+  a runtime `OsteriaNative` global that `App.jsx` calls — App.jsx itself still imports nothing but React, and reads
+  as the web build in the raw artifact (the flag is undefined → false). All transports sync the room over one
+  channel, the JSON fragmented into short `[msgId,total,index]` frames because a BLE write is MTU-capped. Adding a
+  fifth is fine; branching the state shape is not.
+- **One writer per move.** The player whose turn it is computes the whole next state, bumps `v`, and sends the
+  lot. Receivers adopt anything with a higher `v` and ignore the rest. Turn-based play means writes never race —
+  don't introduce partial/delta updates without solving that.
+- **`standalone/index.html` is a build artifact.** Edit `src/App.jsx`, then `npm run bundle`. `npm run deploy`
+  runs the bundle first via `predeploy`, so the deployed asset can't go stale.
+- **The slam is the design.** Overshoot animation, screen jolt, synthesised thwack, haptic tap, all firing on both
+  players' screens. Everything else is deliberately quiet — paper grey, hairlines, SVG pips, no chrome. Don't add
+  decoration; don't remove the `prefers-reduced-motion` guards or the sound toggle.
+- **Pull-to-refresh must stay disabled** (`overscroll-behavior: none` plus the `touchmove` guard), and the session
+  restore on boot must keep working. Losing a hand to a stray thumb was the specific thing this fixes.
+
+## State shape
+
+```js
+room = {
+  code, v, ts,
+  names: { A, B },              // A is the host, B is the guest
+  status: "lobby" | "play",
+  game: "scopa" | "ruba" | "camicia",
+  opts: { ... },                // house rules, host-controlled
+  gs,                           // game state, shape depends on game
+  log: [string],                // last 3 events
+  anim: { id, kind, card, seat } // drives the slam on both clients
+}
+```
+
+## Commands
+
+```bash
+npm install
+npm run dev        # vite, localhost:5173 — two browser tabs won't share a table, use two devices or two profiles
+npm run bundle     # regenerate standalone/index.html
+npm run deploy     # bundle + wrangler deploy
+npm run tail       # live Worker logs
+npx wrangler deploy --dry-run --outdir=/tmp/w   # validates config without touching the account
+npm test           # smoke test + rules simulation
+```
+
+`scripts/smoke.mjs` boots the built page in jsdom and checks the lobby renders — it catches the white
+screen that a rules test can't. `scripts/simulate.mjs` plays 300 random deals of each of the six variants
+and checks the 40 cards are always accounted for, that no seat is ever stuck, and that every hand ends.
+It reads the rules straight out of `src/App.jsx` — slicing the file from the react import to the feedback
+banner and evaluating that as a module — precisely so `App.jsx` does not have to grow an import of a
+`rules.js` and lose the artifact invariant above.
+
+## Known gaps
+
+Roughly in the order worth doing:
+
+1. **Never tested on two real devices.** Everything so far is simulation and headless rendering. First job after
+   deploying: two phones, all three games, a hand each.
+2. **Hands live in the shared state object.** A determined opponent can read yours off the wire. Fine among
+   friends, wrong for anything competitive. Fixing it properly means moving rule enforcement into the Durable
+   Object and sending each player a redacted view — a real refactor, not a patch.
+3. ~~**The rules engines are welded into `App.jsx`.**~~ Done, without moving them: `scripts/simulate.mjs`
+   slices the rules region out of `App.jsx` at test time and plays 300 random deals of each variant.
+   Extracting to `src/rules.js` and importing it back would have broken the no-imports-beyond-react
+   invariant, so the test reaches into the file instead of the file reaching out to a module.
+4. **Reconnect is a page reload.** The "Reconnect" control in the header reloads and rejoins from the saved
+   session. A proper WebSocket retry with backoff would be smoother.
+5. **No spectators, no more than two seats, no rematch history beyond the running tally.** All deliberate.
+6. Sicilian slap rule for Straccia camicia is deliberately absent: network latency would decide the race instead
+   of reflexes. Don't add it without solving that.

@@ -1,0 +1,151 @@
+name: Build Android APK
+
+# Builds the offline Osteria APK on GitHub's runners — they have the Android SDK
+# and can reach Google's Maven, which the dev sandbox can't. The finished APK is
+# uploaded as a workflow artifact and force-pushed (alone) to the `apk` branch, so
+# it can be handed straight to a phone with no local Android toolchain anywhere.
+
+on:
+  push:
+    branches: [claude/chat-loop-issue-kcnx28, main]
+    paths:
+      - "src/**"
+      - "native/**"
+      - "android/**"
+      - "scripts/**"
+      - "capacitor.config.json"
+      - "package.json"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Only one build at a time — a push to both main and the feature branch would
+# otherwise race on the release and the apk branch.
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Prepare offline web root + native bridge
+        run: npm run cap:prepare
+
+      - name: Patch the BLE peripheral plugin (advert size + re-open null GATT server)
+        run: |
+          # Two patches to node_modules before cap sync (which regenerates the app copy):
+          #
+          # 1. setIncludeDeviceName(false): the plugin hard-codes true, and together with
+          #    our 128-bit service UUID that overflows the 31-byte advert (startAdvertising
+          #    error 1 = DATA_TOO_LARGE). The guest finds the host by service UUID anyway.
+          #
+          # 2. Re-open the GATT server when it's null. The plugin opens it only on the very
+          #    first action (guarded by `bluetoothAdapter == null`); if that first
+          #    openGattServer returns null (an Android 12 permission/timing race) the block
+          #    never runs again and every publishService crashes with "addService on null"
+          #    until the app is killed. Widening the guard to also re-open when gattServer
+          #    is null lets a retry recover it in place.
+          for f in \
+            node_modules/cordova-plugin-ble-peripheral/src/android/BLEPeripheralPlugin.java \
+            android/capacitor-cordova-android-plugins/src/main/java/com/megster/cordova/ble/peripheral/BLEPeripheralPlugin.java; do
+            [ -f "$f" ] || continue
+            sed -i 's/setIncludeDeviceName(true)/setIncludeDeviceName(false)/' "$f"
+            sed -i 's/if (bluetoothAdapter == null) {/if (bluetoothAdapter == null || gattServer == null) {/' "$f"
+          done
+          grep -rn "setIncludeDeviceName\|gattServer == null" node_modules/cordova-plugin-ble-peripheral/src/android/ || true
+
+      - name: Sync Capacitor android project
+        run: npx cap sync android
+
+      - name: Stamp version
+        run: |
+          # Monotonic build number + short SHA, so every build is a distinct,
+          # identifiable file — and the same version shows in the phone's App info.
+          VER="1.0.${{ github.run_number }}"
+          SHORT="${GITHUB_SHA:0:7}"
+          echo "APP_VER=$VER" >> "$GITHUB_ENV"
+          echo "APK_NAME=Osteria-v${VER}-${SHORT}.apk" >> "$GITHUB_ENV"
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          sed -i "s/versionName \"1.0\"/versionName \"${VER} (${SHORT})\"/" android/app/build.gradle
+          grep -E 'versionCode|versionName' android/app/build.gradle
+
+      - name: Build signed release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          # Release build, signed with the committed fixed key (see app/build.gradle) so
+          # every build shares one certificate and installs over the last in place.
+          # Maven Central occasionally answers dependency fetches with 429 (Too Many
+          # Requests) — a transient infra flake, not a build error. Retry with backoff
+          # so a rate-limited download doesn't fail the whole APK build.
+          n=0
+          until [ "$n" -ge 4 ]; do
+            ./gradlew assembleRelease --no-daemon --stacktrace && break
+            n=$((n+1))
+            if [ "$n" -ge 4 ]; then
+              echo "gradle assembleRelease failed after $n attempts" >&2
+              exit 1
+            fi
+            wait=$((5 * 2 ** (n - 1)))
+            echo "gradle attempt $n failed — retrying in ${wait}s" >&2
+            sleep "$wait"
+          done
+
+      - name: Stage the APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk "out/${APK_NAME}"
+          cp android/app/build/outputs/apk/release/app-release.apk out/Osteria.apk
+          ls -l out
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Osteria-apk-${{ env.APP_VER }}
+          path: out/
+
+      - name: Publish a shareable Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Stable tag "apk" (latest), carrying both the versioned file and a
+          # constant Osteria.apk so the direct link never changes:
+          #   https://github.com/${{ github.repository }}/releases/download/apk/Osteria.apk
+          gh release delete apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create apk "out/${APK_NAME}" out/Osteria.apk \
+            --title "Osteria ${APP_VER}" \
+            --notes "Version **${APP_VER}** (\`${GITHUB_SHA}\`). Uninstall any previous Osteria first, then install **${APK_NAME}** on both Android phones and play offline over Bluetooth — one taps **Ospita**, the other **Entra**. Stable link: \`Osteria.apk\` (always the latest)."
+
+      - name: Publish APK to the apk branch
+        run: |
+          cp "out/${APK_NAME}" "/tmp/${APK_NAME}"
+          cp out/Osteria.apk /tmp/Osteria.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan apk-publish
+          git rm -r --cached . >/dev/null 2>&1 || true
+          cp "/tmp/${APK_NAME}" "${APK_NAME}"
+          cp /tmp/Osteria.apk Osteria.apk
+          printf '%s\n' "# Osteria APK — ${APP_VER}" "Built from \`${GITHUB_SHA}\`." "Uninstall the old app, then install **${APK_NAME}** (or Osteria.apk) on both phones and play offline." > README.md
+          git add -f "${APK_NAME}" Osteria.apk README.md
+          git commit -m "APK ${APP_VER} from ${GITHUB_SHA}"
+          # Fully-qualify the destination: the Release creates a *tag* named apk,
+          # so a bare `:apk` is ambiguous (matches both the tag and this branch).
+          git push -f origin apk-publish:refs/heads/apk

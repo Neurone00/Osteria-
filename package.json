@@ -1,0 +1,42 @@
+{
+  "name": "osteria",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scopa, Rubamazzo and Straccia camicia for two players on two devices, joined by a four-letter table code.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "bundle": "node scripts/build-standalone.mjs",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "predeploy": "npm run bundle",
+    "simulate": "node scripts/simulate.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "test": "npm run smoke && npm run simulate",
+    "cap:prepare": "npm run bundle && node native/prepare-android.mjs",
+    "cap:sync": "npm run cap:prepare && cap sync android",
+    "cap:open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor-community/bluetooth-le": "^6.1.0",
+    "@capacitor/android": "^6.2.1",
+    "@capacitor/app": "^6.0.3",
+    "@capacitor/core": "^6.2.1",
+    "@capacitor/filesystem": "^6.0.4",
+    "cordova-plugin-android-permissions": "^1.1.5",
+    "cordova-plugin-ble-peripheral": "^1.0.0",
+    "cordova-plugin-file-opener2": "^4.0.0",
+    "jsdom": "^30.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "esbuild": "^0.25.12",
+    "vite": "^5.4.11",
+    "wrangler": "^4.24.0"
+  }
+}
