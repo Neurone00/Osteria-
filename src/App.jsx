@@ -213,6 +213,7 @@ const GAMES = {
   },
   azzardo: {
     name: "Azzardo",
+    disabled: true, // hidden from the lobby — engine kept intact (still simulated/tested)
     tag: "moneta, sfere, dadi",
     line: "Lancia una moneta per partire, poi risali le Sfere d'Influenza: ogni sfera ha 3 sotto-nodi — prendine almeno uno per avanzare, tutti e tre per un bonus. Ogni tiro segna e sblocca i nodi. Venti tiri: vince il totale più alto.",
     en: { tag: "coin, spheres, dice", line: "Flip a coin to start, then climb the Spheres of Influence: each sphere has 3 sub-nodes — take one to advance, all three for a bonus. Every throw scores and unlocks nodes. Twenty throws: highest total wins." },
