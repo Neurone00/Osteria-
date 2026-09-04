@@ -9667,37 +9667,7 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
   const upperNeed = 63 - myTotal.upper; // points still needed in the numbers for the +35
 
   return (
-    <div style={{ paddingBottom: 56 }}>
-      {/* peek the opponent's scorecard — a toggle pinned bottom-right, out of
-          the way of the dice and your own card */}
-      <button
-        onClick={() => setShowOpp((v) => !v)}
-        aria-label={`${L("Scheda di", "Sheet for")} ${who(room, opp)}`}
-        style={{
-          position: "fixed",
-          right: "calc(14px + env(safe-area-inset-right))",
-          bottom: "calc(14px + env(safe-area-inset-bottom))",
-          zIndex: 60,
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 7,
-          background: showOpp ? T.ink : T.paper,
-          color: showOpp ? T.bg : T.ink,
-          border: `1px solid ${showOpp ? T.ink : T.line}`,
-          borderRadius: 999,
-          padding: "9px 14px",
-          boxShadow: "0 6px 18px rgba(18,18,18,0.18)",
-          fontFamily: BRAND,
-          fontWeight: 600,
-          fontSize: 13,
-          cursor: "pointer",
-          transition: "background 160ms ease, color 160ms ease",
-          WebkitTapHighlightColor: "transparent",
-        }}
-      >
-        <Ico n="clip" s={16} /> {who(room, opp)}
-      </button>
-
+    <div style={{ paddingBottom: 104 }}>
       {yflash > 0 && (
         <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
           <div key={yflash} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(56px, 19vw, 132px)", color: "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap" }}>
@@ -9781,19 +9751,6 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
           ))}
         </div>
         <Micro style={{ marginTop: 8, minHeight: 14 }}>{gs.rolled && canRoll ? L("tocca i dadi da tenere", "tap the dice to keep") : ""}</Micro>
-        <div style={{ marginTop: 10 }}>
-          {mine && !gs.done ? (
-            gs.rollsLeft > 0 ? (
-              <ChargeButton onThrow={tapRoll}>
-                {gs.rolled ? `${L("Ritira","Reroll")} · ${gs.rollsLeft} ${L("rimasti","left")}` : L("Tieni premuto e lancia","Hold and roll")}
-              </ChargeButton>
-            ) : (
-              <Micro>{L("segna un punteggio qui sotto","score a box below")}</Micro>
-            )
-          ) : (
-            <Micro>tocca a {who(room, opp)}</Micro>
-          )}
-        </div>
       </div>
 
       {/* your scorecard — the upper "numbers" section (Uno–Sei) and its bonus first,
@@ -9818,6 +9775,64 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 15 }}>
         <span>{L("Totale", "Total")} {myTotal.total}</span>
+      </div>
+
+      {/* fixed action bar — the roll button lives down here, away from the scorecard
+          boxes, so reaching for a box can't trigger a roll by mistake. The opponent
+          peek toggle rides along on the left so nothing floats over the bar. */}
+      <div
+        style={{
+          position: "fixed",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 60,
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "10px 16px calc(12px + env(safe-area-inset-bottom))",
+          background: `linear-gradient(to top, ${T.bg} 62%, rgba(231,229,224,0))`,
+        }}
+      >
+        <button
+          onClick={() => setShowOpp((v) => !v)}
+          aria-label={`${L("Scheda di", "Sheet for")} ${who(room, opp)}`}
+          style={{
+            flexShrink: 0,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 7,
+            background: showOpp ? T.ink : T.paper,
+            color: showOpp ? T.bg : T.ink,
+            border: `1px solid ${showOpp ? T.ink : T.line}`,
+            borderRadius: 999,
+            padding: "9px 13px",
+            boxShadow: "0 6px 18px rgba(18,18,18,0.12)",
+            fontFamily: BRAND,
+            fontWeight: 600,
+            fontSize: 13,
+            cursor: "pointer",
+            transition: "background 160ms ease, color 160ms ease",
+            WebkitTapHighlightColor: "transparent",
+          }}
+        >
+          <Ico n="clip" s={16} />
+        </button>
+        <div style={{ flex: 1, display: "flex", justifyContent: "center", minWidth: 0 }}>
+          {mine && !gs.done ? (
+            gs.rollsLeft > 0 ? (
+              <ChargeButton onThrow={tapRoll}>
+                {gs.rolled ? `${L("Ritira", "Reroll")} · ${gs.rollsLeft} ${L("rimasti", "left")}` : L("Tieni premuto e lancia", "Hold and roll")}
+              </ChargeButton>
+            ) : (
+              <Micro>{L("segna un punteggio qui sopra", "score a box above")}</Micro>
+            )
+          ) : (
+            <Micro>tocca a {who(room, opp)}</Micro>
+          )}
+        </div>
+        {/* right-hand spacer keeps the roll control visually centred against the peek pill */}
+        <div style={{ flexShrink: 0, width: 42 }} aria-hidden="true" />
       </div>
     </div>
   );
