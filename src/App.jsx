@@ -9631,6 +9631,41 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
     if (!isYahtzee) yseen.current = null;
   }, [diceKey, gs.rolled]);
 
+  // One scorecard box, reused by the upper "numbers" section and the lower combos.
+  const yBox = (cat) => {
+    const filled = cat.k in myScore;
+    const preview = !filled && canScore ? yahtValue(cat.k, gs.dice) : null;
+    const tappable = !filled && canScore;
+    return (
+      <button
+        key={cat.k}
+        disabled={!tappable}
+        onClick={() => tappable && commit(yahtScore(gs, seat, cat.k))}
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 6,
+          border: `1px solid ${tappable ? T.ink : T.line}`,
+          background: filled ? "transparent" : tappable ? "rgba(18,18,18,0.03)" : "transparent",
+          borderRadius: 8,
+          padding: "9px 11px",
+          cursor: tappable ? "pointer" : "default",
+          WebkitTapHighlightColor: "transparent",
+        }}
+      >
+        <span style={{ fontSize: 13, color: filled ? T.ink60 : T.ink }}>{cat.label}</span>
+        <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 15, color: filled ? T.ink : preview != null ? T.ink30 : T.line }}>
+          {filled ? myScore[cat.k] : preview != null ? preview : "–"}
+        </span>
+      </button>
+    );
+  };
+  const secLabel = (t) => (
+    <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.18em", textTransform: "uppercase", color: T.ink30, margin: "14px 2px 6px" }}>{t}</div>
+  );
+  const upperNeed = 63 - myTotal.upper; // points still needed in the numbers for the +35
+
   return (
     <div style={{ paddingBottom: 56 }}>
       {/* peek the opponent's scorecard — a toggle pinned bottom-right, out of
@@ -9702,8 +9737,8 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
             ))}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, fontFamily: BRAND, fontWeight: 600, fontSize: 15 }}>
-            <span style={{ color: T.ink60 }}>Bonus {oppTotal.upper}/63{oppTotal.bonus ? " +35" : ""}</span>
-            <span>Totale {oppTotal.total}</span>
+            <span style={{ color: T.ink60 }}>{L("Bonus numeri", "Numbers bonus")} {oppTotal.upper}/63{oppTotal.bonus ? " +35" : ""}</span>
+            <span>{L("Totale", "Total")} {oppTotal.total}</span>
           </div>
         </Sheet>
       )}
@@ -9711,8 +9746,8 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
         <Sheet title={L("Come si contano i punti","How scoring works")} onClose={() => setShowHelp(false)}>
           <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink80 || T.ink }}>
             {[
-              ["Uno–Sei", L("somma dei dadi di quel numero", "sum of the dice showing that number")],
-              ["Bonus", L("+35 se in alto (Uno–Sei) arrivi a 63", "+35 if the upper section (Uno–Sei) reaches 63")],
+              ["Uno–Sei", L("i «numeri»: somma dei dadi di quel numero", "the «numbers»: sum of the dice showing that number")],
+              [L("Bonus numeri", "Numbers bonus"), L("+35 se i numeri (Uno–Sei) insieme arrivano a 63", "+35 if the numbers (Ones–Sixes) together reach 63")],
               ["Tris", L("con almeno 3 dadi uguali, vale la somma di tutti e cinque i dadi (non solo dei tre uguali)", "with 3 or more matching dice, scores all five dice (not just the three)")],
               ["Poker", L("con almeno 4 dadi uguali, vale la somma di tutti e cinque i dadi (non solo dei quattro uguali)", "with 4 or more matching dice, scores all five dice (not just the four)")],
               ["Full", L("25 — tre uguali più due uguali", "25 — three of a kind plus a pair")],
@@ -9761,43 +9796,28 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
         </div>
       </div>
 
-      {/* your scorecard */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
-        {YCATS.map((cat) => {
-          const filled = cat.k in myScore;
-          const preview = !filled && canScore ? yahtValue(cat.k, gs.dice) : null;
-          const tappable = !filled && canScore;
-          return (
-            <button
-              key={cat.k}
-              disabled={!tappable}
-              onClick={() => tappable && commit(yahtScore(gs, seat, cat.k))}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: 6,
-                border: `1px solid ${tappable ? T.ink : T.line}`,
-                background: filled ? "transparent" : tappable ? "rgba(18,18,18,0.03)" : "transparent",
-                borderRadius: 8,
-                padding: "9px 11px",
-                cursor: tappable ? "pointer" : "default",
-                WebkitTapHighlightColor: "transparent",
-              }}
-            >
-              <span style={{ fontSize: 13, color: filled ? T.ink60 : T.ink }}>{cat.label}</span>
-              <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 15, color: filled ? T.ink : preview != null ? T.ink30 : T.line }}>
-                {filled ? myScore[cat.k] : preview != null ? preview : "–"}
-              </span>
-            </button>
-          );
-        })}
+      {/* your scorecard — the upper "numbers" section (Uno–Sei) and its bonus first,
+          so it's clear the +35 comes from them, then the combinations below */}
+      {secLabel(L("Numeri · Uno–Sei", "Numbers · Ones–Sixes"))}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        {YCATS.filter((c) => c.up).map(yBox)}
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
-        <span style={{ color: T.ink60 }}>
-          Bonus {myTotal.upper}/63{myTotal.bonus ? " +35" : ""}
+      {/* bonus tracker, tied to the numbers above */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, padding: "8px 11px", borderRadius: 8, border: `1px dashed ${myTotal.bonus ? T.ink : T.line}`, background: myTotal.bonus ? "rgba(184,134,43,0.10)" : "transparent" }}>
+        <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 13, color: T.ink }}>
+          {L("Bonus numeri", "Numbers bonus")} <span style={{ color: T.ink60, fontWeight: 400 }}>+35</span>
         </span>
-        <span>Totale {myTotal.total}</span>
+        <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 14, color: myTotal.bonus ? "#B8862B" : T.ink }}>
+          {myTotal.bonus ? L("ottenuto ✓", "earned ✓") : `${myTotal.upper}/63`}
+          {!myTotal.bonus && upperNeed > 0 && <span style={{ color: T.ink30, fontWeight: 400 }}> · {L("mancano", "need")} {upperNeed}</span>}
+        </span>
+      </div>
+      {secLabel(L("Combinazioni", "Combinations"))}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        {YCATS.filter((c) => !c.up).map(yBox)}
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14, fontFamily: BRAND, fontWeight: 700, fontSize: 15 }}>
+        <span>{L("Totale", "Total")} {myTotal.total}</span>
       </div>
     </div>
   );
