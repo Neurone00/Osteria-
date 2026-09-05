@@ -44,6 +44,7 @@ const EXPORTS = [
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
   "dealAzzardo", "azFlip", "azThrow", "azClaim", "azBot", "azCombo", "azFrontier", "azGoalMet", "azUnlocked", "azSubsOf", "azMain", "AZ_THROWS", "AZ_COMBO", "AZ_TREE", "AZ_MAINS", "AZ_MAX_NODES",
+  "makeAssoloDeck", "dealAssolo", "assoloPlay", "assoloDraw", "assoloPass", "assoloLegal", "assoloCanPlay", "AS_COLORS",
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
@@ -1857,6 +1858,123 @@ function flotta2RuleTests() {
 /* ── run ────────────────────────────────────────────────────── */
 const stat = (xs) => `${Math.min(...xs)}–${Math.max(...xs)}, median ${xs.slice().sort((a, b) => a - b)[xs.length >> 1]}`;
 
+/* ── assolo (uno) ───────────────────────────────────────────── */
+function assoloCensus(g, label) {
+  const ids = [...g.hands.A, ...g.hands.B, ...g.pile, ...g.discard].map((c) => c.id);
+  if (ids.length !== 108) fail(label, `${ids.length} cards, expected 108`);
+  else if (new Set(ids).size !== 108) fail(label, "duplicate or missing card ids");
+}
+function playAssolo(opts) {
+  let g = R.dealAssolo("A", { A: 0, B: 0 }, opts);
+  assoloCensus(g, "assolo deal");
+  let steps = 0;
+  const MAX = 6000;
+  while (!g.done) {
+    if (++steps > MAX) return fail("assolo", `no end after ${MAX} plays (opts ${JSON.stringify(opts)})`);
+    const seat = g.turn;
+    const legal = R.assoloLegal(g, seat);
+    let res;
+    // A reasonable shedder: play when you can (so hands drain and the game ends),
+    // but still exercise the draw/pass paths a fraction of the time.
+    if (legal.canPass) {
+      res = Math.random() < 0.5 && legal.playable.length ? R.assoloPlay(g, seat, legal.playable[0].id, legal.playable[0].c === "w" ? pick(R.AS_COLORS) : undefined) : R.assoloPass(g, seat);
+    } else if (legal.playable.length && (!legal.canDraw || Math.random() < 0.85)) {
+      const c = pick(legal.playable);
+      res = R.assoloPlay(g, seat, c.id, c.c === "w" ? pick(R.AS_COLORS) : undefined);
+    } else if (legal.canDraw) {
+      res = R.assoloDraw(g, seat);
+    } else if (legal.canPass) {
+      res = R.assoloPass(g, seat);
+    } else {
+      return fail("assolo", `${seat} has no legal move (pending ${g.pending}, drew ${g.drew})`);
+    }
+    if (!res) return fail("assolo", `move refused (pending ${g.pending}, drew ${g.drew})`);
+    g = res.g;
+    if (steps % 50 === 0) assoloCensus(g, "assolo mid");
+  }
+  assoloCensus(g, "assolo end");
+  if (!g.win) return fail("assolo", "ended with no winner");
+  else if (g.hands[g.win].length !== 0) fail("assolo", `winner ${g.win} still holds ${g.hands[g.win].length} cards`);
+  return steps;
+}
+function assoloTests() {
+  const deck = R.makeAssoloDeck();
+  if (deck.length !== 108) fail("assolo rules", `deck ${deck.length}, expected 108`);
+  const count = (p) => deck.filter(p).length;
+  if (count((c) => c.k === "n" && c.n === 0) !== 4) fail("assolo rules", "four 0s (one per colour)");
+  if (count((c) => c.k === "n" && c.n === 5) !== 8) fail("assolo rules", "eight 5s (two per colour)");
+  if (count((c) => c.k === "wild") !== 4 || count((c) => c.k === "wd4") !== 4) fail("assolo rules", "four wild + four wd4");
+  if (count((c) => c.k === "d2") !== 8) fail("assolo rules", "eight +2");
+  let n = 0;
+  const card = (c, k, num) => ({ id: "t" + n++, c, k, n: num });
+  const base = (o) => { const g = R.dealAssolo("A", { A: 0, B: 0 }, o || {}); g.pending = 0; g.drew = null; return g; };
+
+  // matching by colour / number / symbol; wild always
+  {
+    const g = base(); g.top = { c: "r", k: "n", n: 5 }; g.color = "r";
+    if (!R.assoloCanPlay(card("r", "n", 9), g)) fail("assolo rules", "same colour should play");
+    if (!R.assoloCanPlay(card("b", "n", 5), g)) fail("assolo rules", "same number should play");
+    if (R.assoloCanPlay(card("b", "n", 9), g)) fail("assolo rules", "off colour+number shouldn't play");
+    if (!R.assoloCanPlay(card("w", "wild"), g)) fail("assolo rules", "wild always plays");
+    g.top = { c: "r", k: "skip" };
+    if (!R.assoloCanPlay(card("g", "skip"), g)) fail("assolo rules", "symbol match: skip on skip");
+  }
+  // +2 without stacking → opponent draws 2 and is skipped
+  {
+    const g = base(); g.turn = "A"; g.color = "b"; g.top = { c: "b", k: "n", n: 3 };
+    g.hands.A = [card("b", "d2"), card("r", "n", 1)];
+    g.hands.B = [card("g", "n", 7), card("y", "n", 8), card("r", "n", 2)];
+    const bHad = g.hands.B.length;
+    let s = R.assoloPlay(g, "A", g.hands.A[0].id).g;
+    if (s.pending !== 2) fail("assolo rules", `+2 should set pending 2, got ${s.pending}`);
+    if (s.turn !== "B") fail("assolo rules", "+2 should pass to B");
+    if (R.assoloLegal(s, "B").playable.length !== 0) fail("assolo rules", "no stacking: B has no stack move");
+    s = R.assoloDraw(s, "B").g;
+    if (s.hands.B.length !== bHad + 2) fail("assolo rules", "B should draw 2");
+    if (s.pending !== 0) fail("assolo rules", "pending should clear after taking the pile");
+    if (s.turn !== "A") fail("assolo rules", "B is skipped after taking +2 — back to A");
+  }
+  // stacking: +2 answered by +2 accumulates to 4
+  {
+    const g = base({ cumulo: true }); g.turn = "A"; g.color = "b"; g.top = { c: "b", k: "n", n: 3 };
+    g.hands.A = [card("b", "d2"), card("r", "n", 1)];
+    g.hands.B = [card("g", "d2"), card("y", "n", 8)];
+    let s = R.assoloPlay(g, "A", g.hands.A[0].id).g;
+    if (!R.assoloLegal(s, "B").playable.some((c) => c.k === "d2")) fail("assolo rules", "stacking: B should be able to stack a +2");
+    s = R.assoloPlay(s, "B", g.hands.B[0].id).g;
+    if (s.pending !== 4) fail("assolo rules", `stacking: pending should be 4, got ${s.pending}`);
+  }
+  // skip → play again (turn stays with you)
+  {
+    const g = base(); g.turn = "A"; g.color = "r"; g.top = { c: "r", k: "n", n: 4 };
+    g.hands.A = [card("r", "skip"), card("r", "n", 9)];
+    g.hands.B = [card("b", "n", 1)];
+    if (R.assoloPlay(g, "A", g.hands.A[0].id).g.turn !== "A") fail("assolo rules", "skip should let A play again");
+  }
+  // seven-zero swaps the two hands
+  {
+    const g = base({ settezero: true }); g.turn = "A"; g.color = "r"; g.top = { c: "r", k: "n", n: 4 };
+    g.hands.A = [card("r", "n", 7), card("r", "n", 1)];
+    g.hands.B = [card("b", "n", 2), card("g", "n", 3), card("y", "n", 5)];
+    const s = R.assoloPlay(g, "A", g.hands.A[0].id).g;
+    if (s.hands.A.length !== 3 || s.hands.B.length !== 1) fail("assolo rules", "7-0 should swap the hands");
+  }
+  // force play: holding a playable card, drawing is refused
+  {
+    const g = base({ forza: true }); g.turn = "A"; g.color = "r"; g.top = { c: "r", k: "n", n: 4 };
+    g.hands.A = [card("r", "n", 9), card("b", "n", 2)];
+    if (R.assoloDraw(g, "A") !== null) fail("assolo rules", "force play: draw refused when a play exists");
+  }
+  // win on empty hand
+  {
+    const g = base(); g.turn = "A"; g.color = "r"; g.top = { c: "r", k: "n", n: 4 };
+    g.hands.A = [card("r", "n", 8)];
+    g.hands.B = [card("b", "n", 1), card("g", "n", 2)];
+    const s = R.assoloPlay(g, "A", g.hands.A[0].id).g;
+    if (!s.done || s.win !== "A") fail("assolo rules", "emptying the hand should win");
+  }
+}
+
 const runs = [
   ["scopa, base rules", () => playScopa({ target: 11, asso: false, acepile: false, rebello: false, napola: false })],
   ["scopa, asso piglia tutto + rebello + napola", () => playScopa({ target: 11, asso: true, acepile: false, rebello: true, napola: true })],
@@ -1875,6 +1993,10 @@ const runs = [
   ["diecimila (farkle)", () => playFarkle({ target: 2000 })],
   ["diecimila, no last round + entry 500", () => playFarkle({ target: 2000, entry: true, lastRound: false })],
   ["azzardo (dice deck-builder)", () => playAzzardo()],
+  ["assolo (uno), base", () => playAssolo({})],
+  ["assolo, cumulo +2/+4", () => playAssolo({ cumulo: true })],
+  ["assolo, sette-zero + pesca-fino", () => playAssolo({ settezero: true, pescafino: true })],
+  ["assolo, obbligo di giocare", () => playAssolo({ forza: true })],
   ["bestiario (onitama)", () => playBestiario()],
   ["flotta (battaglia navale)", () => playFlotta()],
   ["flotta 2 (fleet duel)", () => playFlotta2()],
@@ -1940,6 +2062,11 @@ for (const [label, run] of runs) {
   const before = failures;
   azzardoTests();
   console.log(`${failures === before ? "✓" : "✗"} ${"azzardo rules".padEnd(44)} combos, the path (roots cross), goals, claim/pass`);
+}
+{
+  const before = failures;
+  assoloTests();
+  console.log(`${failures === before ? "✓" : "✗"} ${"assolo rules".padEnd(44)} deck 108, matching, +2 stack, 7-0, force, win`);
 }
 {
   const before = failures;

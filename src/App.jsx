@@ -223,6 +223,21 @@ const GAMES = {
     ],
     def: { mode: "2p" },
   },
+  assolo: {
+    name: "Assolo",
+    cat: "carte",
+    instant: true, // its own 108-card deck — no Italian shuffle/cut ritual
+    tag: "una carta, l'ultima",
+    line: "L'Uno dell'Osteria. Scarta abbinando colore, numero o simbolo, oppure cala un Jolly e chiama il colore. Salta, inverti, +2 e Jolly +4. Quando resti con una carta è il tuo «Assolo!»: svuota la mano per vincere.",
+    en: { tag: "one card left", line: "The tavern's Uno. Shed a card matching the colour, number or symbol, or drop a Jolly and call a colour. Skip, reverse, +2 and Jolly +4. Down to one card it's your «Assolo!»: empty your hand to win." },
+    opts: [
+      { k: "cumulo", label: "Cumulo +2/+4", le: "Stacking", cycle: [false, true], hint: "Rispondi a un +2 o +4 con un altro +2/+4: il totale si somma, chi non può cala pesca tutto", he: "Answer a +2 or +4 with another +2/+4: the total stacks, and whoever can't add draws it all" },
+      { k: "settezero", label: "Sette e zero", le: "Seven-Zero", cycle: [false, true], hint: "Giocare un 7 o uno 0 scambia le due mani", he: "Playing a 7 or a 0 swaps the two hands" },
+      { k: "pescafino", label: "Pesca fino a giocare", le: "Draw to match", cycle: [false, true], hint: "Se non puoi giocare, peschi finché non esce una carta buona", he: "If you can't play, keep drawing until a playable card turns up" },
+      { k: "forza", label: "Obbligo di giocare", le: "Force play", cycle: [false, true], hint: "Se hai una carta giocabile non puoi pescare", he: "If you hold a playable card you can't draw instead" },
+    ],
+    def: { cumulo: true, settezero: false, pescafino: false, forza: false },
+  },
   scala: {
     name: "Scala 40",
     tag: "aprire a quaranta",
@@ -3794,6 +3809,172 @@ function tacticsActivate(gs, seat, unitId, toKey, action) {
   return { g, kind, ev, roll };
 }
 
+/* ── assolo (uno) ──────────────────────────────────────────────
+   A 108-card shedding game for two, Uno-style. Four colours; number cards 0–9,
+   actions Salta (skip), Inverti (reverse — a skip with two players) and +2, plus
+   Jolly (wild) and Jolly +4. Match the top card by colour, number or symbol, or drop
+   a jolly and name a colour. Down to one card you're on your "Assolo!"; empty the
+   hand to win. House-rule toggles, all off-by-default except stacking: cumulo (stack
+   +2/+4 progressively), sette-e-zero (a 7 or 0 swaps hands), pesca-fino (draw until
+   playable) and obbligo (must play if able). Turn-based, one writer per move, so it
+   rides the same transports as every other game. */
+const AS_COLORS = ["r", "y", "g", "b"];
+
+function makeAssoloDeck() {
+  const d = [];
+  let n = 0;
+  const push = (c, k, num) => d.push({ id: "a" + n++, c, k, n: num });
+  for (const c of AS_COLORS) {
+    push(c, "n", 0); // one zero per colour
+    for (let v = 1; v <= 9; v++) { push(c, "n", v); push(c, "n", v); } // two each of 1–9
+    for (const k of ["skip", "rev", "d2"]) { push(c, k); push(c, k); } // two of each action
+  }
+  for (let i = 0; i < 4; i++) { push("w", "wild"); push("w", "wd4"); } // four jolly, four jolly +4
+  return d; // 108
+}
+
+// Can `card` be laid on the current top? Wilds always; else colour, number or symbol.
+function assoloCanPlay(card, g) {
+  if (card.k === "wild" || card.k === "wd4") return true;
+  if (card.c === g.color) return true;
+  if (card.k === "n") return g.top.k === "n" && card.n === g.top.n;
+  return card.k === g.top.k; // symbol match: skip on skip, +2 on +2, …
+}
+// A card that can answer a pending +2/+4 chain — only when stacking is on.
+function assoloCanStack(card, g) {
+  return !!(g.rules && g.rules.cumulo) && (card.k === "d2" || card.k === "wd4");
+}
+// The legal moves open to `seat` right now: which hand cards are playable, and whether
+// drawing/passing is allowed. Shared by the UI and the simulator so they never diverge.
+function assoloLegal(g, seat) {
+  const hand = g.hands[seat] || [];
+  const pend = g.pending > 0;
+  const playable = hand.filter((c) => (g.drew ? c.id === g.drew : pend ? assoloCanStack(c, g) : assoloCanPlay(c, g)));
+  const canPass = !!g.drew; // drew a playable card and may decline it
+  // You may draw when there's no just-drawn card to resolve, and either you owe a
+  // pending chain, or (force-play off) or you simply hold nothing playable.
+  const canDraw = !g.drew && (pend || !g.rules.forza || !hand.some((c) => assoloCanPlay(c, g)));
+  return { playable, canPass, canDraw, pend };
+}
+// Draw n cards for a seat, reshuffling the discard (minus its top) when the pile dries up.
+function assoloDrawInto(g, seat, n) {
+  let got = 0;
+  for (let i = 0; i < n; i++) {
+    if (!g.pile.length) {
+      if (g.discard.length <= 1) break; // nothing left to reshuffle
+      const top = g.discard.pop();
+      g.pile = shuffle(g.discard);
+      g.discard = [top];
+    }
+    if (!g.pile.length) break;
+    g.hands[seat].push(g.pile.pop());
+    got++;
+  }
+  return got;
+}
+function dealAssolo(dealer, tally, opts) {
+  const pile = shuffle(makeAssoloDeck());
+  const hands = { A: [], B: [] };
+  for (let i = 0; i < 7; i++) { hands.A.push(pile.pop()); hands.B.push(pile.pop()); }
+  // Turn up the first card; keep it a plain number so there's no opening action to adjudicate.
+  let first = pile.pop();
+  while (first.k !== "n") { pile.unshift(first); first = pile.pop(); }
+  return {
+    hands,
+    pile,
+    discard: [first],
+    top: { c: first.c, k: first.k, n: first.n },
+    color: first.c,
+    pending: 0, // accumulated +2/+4 to answer or draw
+    turn: other(dealer),
+    dealer,
+    drew: null, // id of a just-drawn playable card the player may still play or pass on
+    rules: {
+      cumulo: !!(opts && opts.cumulo),
+      settezero: !!(opts && opts.settezero),
+      pescafino: !!(opts && opts.pescafino),
+      forza: !!(opts && opts.forza),
+    },
+    last: null, // { seat, card, color, swap, drawn, passed } — for the feed
+    tally: tally || { A: 0, B: 0 },
+    done: false,
+    win: null,
+  };
+}
+
+function assoloPlay(gs, seat, cardId, chosen) {
+  if (gs.done || gs.turn !== seat) return null;
+  const g = clone(gs);
+  const hand = g.hands[seat];
+  const idx = hand.findIndex((c) => c.id === cardId);
+  if (idx < 0) return null;
+  const card = hand[idx];
+  if (g.drew && card.id !== g.drew) return null; // after a draw, only the drawn card plays
+  if (g.pending > 0) { if (!assoloCanStack(card, g)) return null; }
+  else if (!assoloCanPlay(card, g)) return null;
+  const wild = card.k === "wild" || card.k === "wd4";
+  if (wild && !AS_COLORS.includes(chosen)) return null; // a jolly must name a colour
+  hand.splice(idx, 1);
+  g.discard.push(card);
+  g.color = wild ? chosen : card.c;
+  g.top = { c: card.c, k: card.k, n: card.n };
+  g.drew = null;
+  if (hand.length === 0) { // empty hand wins, even on an action card
+    g.done = true; g.win = seat; g.tally[g.win] += 1;
+    g.last = { seat, card: { c: card.c, k: card.k, n: card.n }, color: g.color };
+    return { g, kind: "slam", ev: { t: "asplay", k: card.k } };
+  }
+  let swap = false;
+  if (g.rules.settezero && card.k === "n" && (card.n === 7 || card.n === 0)) {
+    const t = g.hands.A; g.hands.A = g.hands.B; g.hands.B = t; swap = true;
+  }
+  if (card.k === "d2") { g.pending += 2; g.turn = other(seat); }
+  else if (card.k === "wd4") { g.pending += 4; g.turn = other(seat); }
+  else if (card.k === "skip" || card.k === "rev") { g.turn = seat; } // 2P: opponent skipped, play again
+  else { g.turn = other(seat); } // number or plain jolly
+  g.last = { seat, card: { c: card.c, k: card.k, n: card.n }, color: g.color, swap };
+  const punch = card.k === "d2" || card.k === "wd4" || card.k === "skip" || card.k === "rev";
+  return { g, kind: punch ? "slam" : "play", ev: { t: "asplay", k: card.k } };
+}
+
+function assoloDraw(gs, seat) {
+  if (gs.done || gs.turn !== seat || gs.drew) return null;
+  const g = clone(gs);
+  if (g.pending > 0) { // answer a +2/+4 chain by taking the pile, then lose the turn
+    const drawn = assoloDrawInto(g, seat, g.pending);
+    g.pending = 0; g.turn = other(seat);
+    g.last = { seat, drawn };
+    return { g, kind: "deal", ev: { t: "asdraw", drawn } };
+  }
+  if (g.rules.forza && g.hands[seat].some((c) => assoloCanPlay(c, g))) return null; // must play if able
+  const before = g.hands[seat].length;
+  if (g.rules.pescafino) {
+    let guard = 0;
+    while (guard++ < 200) {
+      if (!g.pile.length && g.discard.length <= 1) break;
+      if (assoloDrawInto(g, seat, 1) === 0) break;
+      const last = g.hands[seat][g.hands[seat].length - 1];
+      if (last && assoloCanPlay(last, g)) break;
+    }
+  } else {
+    assoloDrawInto(g, seat, 1);
+  }
+  const drawn = g.hands[seat].length - before;
+  const last = drawn > 0 ? g.hands[seat][g.hands[seat].length - 1] : null;
+  if (last && assoloCanPlay(last, g)) { g.drew = last.id; g.turn = seat; } // may play it or pass
+  else { g.turn = other(seat); } // nothing playable (or deck dry) — turn passes
+  g.last = { seat, drawn };
+  return { g, kind: "deal", ev: { t: "asdraw", drawn } };
+}
+
+function assoloPass(gs, seat) {
+  if (gs.done || gs.turn !== seat || !gs.drew) return null;
+  const g = clone(gs);
+  g.drew = null; g.turn = other(seat);
+  g.last = { seat, passed: true };
+  return { g, kind: "play", quiet: true, ev: { t: "aspass" } };
+}
+
 /* ═══════════════════════════ feedback ═══════════════════════════ */
 let AC = null;
 function slamSound(kind, on) {
@@ -6537,6 +6718,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       ? dealFarkle(dealer, cont?.tally || null, o)
       : game === "azzardo"
       ? dealAzzardo(dealer, cont?.tally || null)
+      : game === "assolo"
+      ? dealAssolo(dealer, cont?.tally || null, o)
       : game === "scala"
       ? dealScala(dealer, cont?.tally || null, deck)
       : game === "peppa"
@@ -7006,6 +7189,8 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         <Farkle room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "azzardo" ? (
         <Azzardo room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
+      ) : room.game === "assolo" ? (
+        <Assolo room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "scala" ? (
         <Scala room={room} gs={gs} seat={seat} mine={mine} commit={commit} />
       ) : room.game === "peppa" ? (
@@ -7035,7 +7220,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
         />
       )}
 
-      {room.ev && !gs.done && isCard(room.game) && room.game !== "scala" && room.game !== "condottieri" && (
+      {room.ev && !gs.done && isCard(room.game) && room.game !== "scala" && room.game !== "condottieri" && room.game !== "assolo" && (
         <p style={{ color: T.ink60, fontSize: 12, textAlign: "center", marginTop: 14, minHeight: 16 }}>
           {who(room, room.ev.seat)} {describe(room.ev, french)}
         </p>
@@ -9601,6 +9786,237 @@ const stepBtn = {
   cursor: "pointer",
   WebkitTapHighlightColor: "transparent",
 };
+
+/* ── assolo (uno) UI ── */
+const AS_HEX = { r: "#c0392b", y: "#c79a12", g: "#2e8b57", b: "#2f5fa6" };
+const AS_CNAME = { r: { it: "rosso", en: "red" }, y: { it: "giallo", en: "yellow" }, g: { it: "verde", en: "green" }, b: { it: "blu", en: "blue" } };
+function asGlyph(card) {
+  if (card.k === "n") return String(card.n);
+  if (card.k === "skip") return "⊘"; // ⊘ salta
+  if (card.k === "rev") return "⇄"; // ⇄ inverti
+  if (card.k === "d2") return "+2";
+  if (card.k === "wd4") return "+4";
+  return "J"; // jolly
+}
+function AsCard({ card, w = 46, dim, onClick, sel }) {
+  const h = Math.round(w * 1.5);
+  const isWild = card.c === "w";
+  const glyph = asGlyph(card);
+  const face = isWild
+    ? `conic-gradient(${AS_HEX.r} 0 25%, ${AS_HEX.y} 0 50%, ${AS_HEX.g} 0 75%, ${AS_HEX.b} 0)`
+    : AS_HEX[card.c];
+  return (
+    <button
+      onClick={onClick}
+      disabled={!onClick}
+      aria-label={glyph}
+      style={{
+        position: "relative", width: w, height: h, flexShrink: 0,
+        borderRadius: Math.round(w * 0.18),
+        border: `2px solid ${sel ? T.ink : "rgba(255,255,255,0.9)"}`,
+        background: face,
+        boxShadow: sel ? "0 10px 20px rgba(18,18,18,0.28)" : "0 2px 6px rgba(18,18,18,0.18)",
+        transform: sel ? "translateY(-10px)" : "none",
+        transition: "transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease",
+        opacity: dim ? 0.4 : 1,
+        cursor: onClick ? "pointer" : "default",
+        padding: 0, WebkitTapHighlightColor: "transparent",
+        display: "grid", placeItems: "center", overflow: "hidden",
+      }}
+    >
+      <span style={{ position: "absolute", inset: "16%", borderRadius: "50%", background: "rgba(255,255,255,0.94)", transform: "rotate(-20deg)" }} />
+      <span style={{ position: "relative", fontFamily: BRAND, fontWeight: 800, fontSize: Math.round(w * (glyph.length > 1 ? 0.44 : 0.58)), color: isWild ? T.ink : AS_HEX[card.c], lineHeight: 1 }}>{glyph}</span>
+    </button>
+  );
+}
+function AsBack({ w = 30, style }) {
+  const h = Math.round(w * 1.5);
+  return (
+    <div style={{ width: w, height: h, borderRadius: Math.round(w * 0.18), background: T.ink, border: "2px solid rgba(255,255,255,0.85)", display: "grid", placeItems: "center", flexShrink: 0, boxShadow: "0 2px 5px rgba(18,18,18,0.18)", ...style }}>
+      <span style={{ fontFamily: BRAND, fontWeight: 800, fontSize: Math.round(w * 0.42), color: T.bg, transform: "rotate(-20deg)" }}>A</span>
+    </div>
+  );
+}
+function Assolo({ room, gs, seat, mine, commit }) {
+  const opp = other(seat);
+  const [showHelp, setShowHelp] = useState(false);
+  const [wildPick, setWildPick] = useState(null); // card id of a jolly awaiting its colour
+  const myHand = gs.hands[seat];
+  const oppCount = gs.hands[opp].length;
+  const legal = assoloLegal(gs, seat);
+  const playable = new Set(mine ? legal.playable.map((c) => c.id) : []);
+  const top = gs.discard[gs.discard.length - 1];
+
+  // "Assolo!" flash when either player drops to a single card
+  const [flash, setFlash] = useState(null);
+  const seenCount = useRef({});
+  useEffect(() => {
+    for (const s of ["A", "B"]) {
+      const n = gs.hands[s].length;
+      if (n === 1 && seenCount.current[s] !== 1 && seenCount.current[s] !== undefined) setFlash({ id: uid(), s });
+      seenCount.current[s] = n;
+    }
+  }, [gs.hands.A.length, gs.hands.B.length]);
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 1500);
+    return () => clearTimeout(t);
+  }, [flash]);
+
+  const playCard = (card) => {
+    if (!mine || !playable.has(card.id)) return;
+    if (card.c === "w") { setWildPick(card.id); return; } // pick a colour first
+    commit(assoloPlay(gs, seat, card.id));
+  };
+  const chooseColor = (col) => {
+    const id = wildPick;
+    setWildPick(null);
+    if (id) commit(assoloPlay(gs, seat, id, col));
+  };
+
+  const statusText = gs.done
+    ? ""
+    : !mine
+    ? `${L("tocca a", "waiting for")} ${who(room, opp)}`
+    : legal.canPass
+    ? L("Gioca la carta pescata o passa", "Play the drawn card or pass")
+    : gs.pending > 0
+    ? `${L("Rispondi con +2/+4 o pesca", "Answer with +2/+4 or draw")} ${gs.pending}`
+    : legal.playable.length === 0
+    ? L("Niente da giocare — pesca", "Nothing to play — draw")
+    : L("Gioca una carta o pesca", "Play a card or draw");
+
+  return (
+    <div style={{ paddingBottom: 118 }}>
+      {flash && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+          <div key={flash.id} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(52px, 18vw, 128px)", color: "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap" }}>
+            Assolo!
+          </div>
+        </div>
+      )}
+
+      {/* opponent — face-down hand + count */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
+          {who(room, opp)}
+          {oppCount === 1 && <span style={{ marginLeft: 8, fontFamily: MONO, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#B8862B", border: "1px solid #B8862B", borderRadius: 999, padding: "1px 7px" }}>Assolo!</span>}
+        </div>
+        <Micro>{oppCount} {oppCount === 1 ? L("carta", "card") : L("carte", "cards")}</Micro>
+      </div>
+      <div style={{ display: "flex", gap: 3, marginTop: 6, minHeight: 30, overflow: "hidden" }}>
+        {Array.from({ length: Math.min(oppCount, 12) }).map((_, i) => <AsBack key={i} w={20} />)}
+        {oppCount > 12 && <span style={{ alignSelf: "center", marginLeft: 4, color: T.ink30, fontSize: 12 }}>+{oppCount - 12}</span>}
+      </div>
+
+      {/* table: draw pile + discard top + active colour */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 22, margin: "22px 0 10px" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ position: "relative", width: 62, height: 93, margin: "0 auto" }}>
+            <AsBack w={62} style={{ position: "absolute", inset: 0 }} />
+            <div style={{ position: "absolute", top: -3, left: 3 }}><AsBack w={62} /></div>
+          </div>
+          <Micro style={{ marginTop: 6 }}>{L("pozzo", "pile")} {gs.pile.length}</Micro>
+        </div>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ position: "relative", display: "inline-block" }}>
+            <AsCard card={top} w={64} />
+            {gs.pending > 0 && (
+              <span style={{ position: "absolute", top: -10, right: -12, background: "#B23A2E", color: "#fff", fontFamily: BRAND, fontWeight: 800, fontSize: 15, borderRadius: 999, padding: "3px 9px", boxShadow: "0 3px 8px rgba(18,18,18,0.3)" }}>+{gs.pending}</span>
+            )}
+          </div>
+          <div style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 12, height: 12, borderRadius: "50%", background: AS_HEX[gs.color], border: "1px solid rgba(18,18,18,0.2)" }} />
+            <Micro>{L(AS_CNAME[gs.color].it, AS_CNAME[gs.color].en)}</Micro>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ textAlign: "center", minHeight: 18 }}>
+        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+          <Ico n="help" s={14} /> {L("come si gioca", "how to play")}
+        </button>
+      </div>
+      <p style={{ textAlign: "center", color: T.ink60, fontSize: 13, margin: "6px 0 0", minHeight: 16 }}>{statusText}</p>
+
+      {/* your hand */}
+      <div style={{ display: "flex", gap: 5, overflowX: "auto", padding: "16px 2px 8px", alignItems: "flex-end", WebkitOverflowScrolling: "touch" }}>
+        {myHand.map((card) => {
+          const ok = mine && playable.has(card.id);
+          return <AsCard key={card.id} card={card} w={52} sel={ok} dim={mine && !ok} onClick={ok ? () => playCard(card) : undefined} />;
+        })}
+      </div>
+
+      {/* colour picker for a jolly */}
+      {wildPick && (
+        <div onClick={() => setWildPick(null)} style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(18,18,18,0.5)", display: "grid", placeItems: "center" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: T.bg, borderRadius: 18, padding: "20px 20px 22px", width: "min(320px, 86vw)", boxShadow: "0 20px 50px rgba(18,18,18,0.35)" }}>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 17, textAlign: "center", marginBottom: 14 }}>{L("Scegli il colore", "Choose the colour")}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              {AS_COLORS.map((c) => (
+                <button key={c} onClick={() => chooseColor(c)} style={{ height: 62, borderRadius: 12, border: "2px solid rgba(255,255,255,0.85)", background: AS_HEX[c], color: "#fff", fontFamily: BRAND, fontWeight: 700, fontSize: 15, cursor: "pointer", boxShadow: "0 3px 8px rgba(18,18,18,0.2)", WebkitTapHighlightColor: "transparent", textTransform: "capitalize" }}>
+                  {L(AS_CNAME[c].it, AS_CNAME[c].en)}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink }}>
+            {[
+              [L("Scarto", "Discard"), L("cala una carta dello stesso colore, numero o simbolo di quella in cima", "play a card matching the top one by colour, number or symbol")],
+              [L("Jolly", "Wild"), L("giocabile su tutto; scegli tu il colore che continua", "playable on anything; you pick the colour that follows")],
+              ["+2 / +4", L("l'avversario pesca 2 o 4 e salta il turno", "the opponent draws 2 or 4 and misses a turn")],
+              [L("Salta / Inverti", "Skip / Reverse"), L("in due, l'avversario salta il turno: rigiochi tu", "with two players the opponent is skipped: you play again")],
+              [L("Pesca", "Draw"), L("se non puoi (o non vuoi) giocare, peschi una carta", "if you can't (or won't) play, draw a card")],
+              ["Assolo!", L("quando ti resta una sola carta; svuota la mano per vincere", "when you're down to one card; empty your hand to win")],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0" }}>
+                <span style={{ fontWeight: 700, minWidth: 96, color: T.ink }}>{k}</span>
+                <span style={{ color: T.ink60 }}>{v}</span>
+              </div>
+            ))}
+            {/* active house rules */}
+            <div style={{ borderTop: `1px solid ${T.line}`, marginTop: 10, paddingTop: 10 }}>
+              <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.18em", textTransform: "uppercase", color: T.ink30, marginBottom: 6 }}>{L("Regole in tavola", "House rules on")}</div>
+              {[
+                gs.rules.cumulo && L("Cumulo +2/+4 — rispondi accumulando, chi non può pesca tutto", "Stacking +2/+4 — add on, whoever can't draws it all"),
+                gs.rules.settezero && L("Sette e zero — un 7 o uno 0 scambia le mani", "Seven-Zero — a 7 or 0 swaps hands"),
+                gs.rules.pescafino && L("Pesca fino a giocare", "Draw until playable"),
+                gs.rules.forza && L("Obbligo di giocare se puoi", "Must play if able"),
+              ].filter(Boolean).map((t, i) => <div key={i} style={{ color: T.ink60, padding: "2px 0" }}>· {t}</div>)}
+              {!gs.rules.cumulo && !gs.rules.settezero && !gs.rules.pescafino && !gs.rules.forza && <div style={{ color: T.ink30 }}>{L("nessuna — regole essenziali", "none — base rules")}</div>}
+            </div>
+          </div>
+        </Sheet>
+      )}
+
+      {/* fixed action bar — draw / pass, out of the way of the hand */}
+      <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 60, display: "flex", alignItems: "center", gap: 10, padding: "10px 16px calc(12px + env(safe-area-inset-bottom))", background: `linear-gradient(to top, ${T.bg} 62%, rgba(231,229,224,0))` }}>
+        <button onClick={() => setShowHelp(true)} aria-label={L("Aiuto", "Help")} style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", background: T.paper, color: T.ink, border: `1px solid ${T.line}`, borderRadius: 999, width: 40, height: 40, boxShadow: "0 6px 18px rgba(18,18,18,0.12)", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+          <Ico n="help" s={16} />
+        </button>
+        <div style={{ flex: 1, display: "flex", justifyContent: "center", minWidth: 0 }}>
+          {gs.done ? (
+            <Micro>{gs.win === seat ? L("Hai vinto", "You won") : L("Ha vinto", "Winner:") + " " + who(room, gs.win)}</Micro>
+          ) : !mine ? (
+            <Micro>{L("tocca a", "waiting for")} {who(room, opp)}</Micro>
+          ) : legal.canPass ? (
+            <Button onClick={() => commit(assoloPass(gs, seat))}>{L("Passa", "Pass")}</Button>
+          ) : legal.canDraw ? (
+            <Button onClick={() => commit(assoloDraw(gs, seat))}>{gs.pending > 0 ? `${L("Pesca", "Draw")} ${gs.pending}` : L("Pesca", "Draw")}</Button>
+          ) : (
+            <Micro>{L("gioca una carta", "play a card")}</Micro>
+          )}
+        </div>
+        <div style={{ flexShrink: 0, width: 40 }} aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
 
 /* ── yahtzee ── */
 function Yahtzee({ room, gs, seat, mine, commit }) {
