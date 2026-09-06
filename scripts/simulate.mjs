@@ -44,7 +44,7 @@ const EXPORTS = [
   "dealYahtzee", "yahtRoll", "yahtScore", "yahtValue", "yahtTotal", "YCATS",
   "dealFarkle", "farkleRoll", "farkleRollOn", "farkleBank", "farkleSelectionScore", "farkleHasScore",
   "dealAzzardo", "azFlip", "azThrow", "azClaim", "azBot", "azCombo", "azFrontier", "azGoalMet", "azUnlocked", "azSubsOf", "azMain", "AZ_THROWS", "AZ_COMBO", "AZ_TREE", "AZ_MAINS", "AZ_MAX_NODES",
-  "makeAssoloDeck", "dealAssolo", "assoloPlay", "assoloDraw", "assoloPass", "assoloLegal", "assoloCanPlay", "AS_COLORS",
+  "makeAssoloDeck", "dealAssolo", "assoloPlay", "assoloDraw", "assoloPass", "assoloCall", "assoloLegal", "assoloCanPlay", "AS_COLORS",
   "dealBestiario", "bestiarioPlay", "bestiarioPass", "bestDests", "bestAnyMove", "BEST_CARDS", "BEST_TEMPLE",
   "dealFlotta", "flottaSetup", "flottaFire", "flottaMove", "flottaSonar", "flottaRepair", "flRandomFleet", "flFleetValid", "FL_FLEET", "FL_N",
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
@@ -1972,6 +1972,20 @@ function assoloTests() {
     g.hands.B = [card("b", "n", 1), card("g", "n", 2)];
     const s = R.assoloPlay(g, "A", g.hands.A[0].id).g;
     if (!s.done || s.win !== "A") fail("assolo rules", "emptying the hand should win");
+  }
+  // "Assolo!" call window: penultimate card arms it; declaring clears it; the opponent
+  // catching first makes the culprit draw two
+  {
+    const g = base(); g.turn = "A"; g.color = "r"; g.top = { c: "r", k: "n", n: 4 };
+    g.hands.A = [card("r", "n", 8), card("b", "n", 1)]; // two cards → playing one leaves one
+    g.hands.B = [card("g", "n", 2)];
+    const s = R.assoloPlay(g, "A", g.hands.A[0].id).g;
+    if (s.callPending !== "A") fail("assolo rules", "penultimate card should arm A's Assolo call");
+    const declared = R.assoloCall(s, "A").g;
+    if (declared.callPending !== null) fail("assolo rules", "declaring should clear the call");
+    const caught = R.assoloCall(s, "B").g;
+    if (caught.callPending !== null) fail("assolo rules", "a catch should clear the call");
+    if (caught.hands.A.length !== 3) fail("assolo rules", "caught silent → the culprit draws two");
   }
 }
 

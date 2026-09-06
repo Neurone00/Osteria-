@@ -3889,6 +3889,7 @@ function dealAssolo(dealer, tally, opts) {
     turn: other(dealer),
     dealer,
     drew: null, // id of a just-drawn playable card the player may still play or pass on
+    callPending: null, // a seat that just reached one card and hasn't declared "Assolo!" yet
     rules: {
       cumulo: !!(opts && opts.cumulo),
       settezero: !!(opts && opts.settezero),
@@ -3932,6 +3933,8 @@ function assoloPlay(gs, seat, cardId, chosen) {
   else if (card.k === "wd4") { g.pending += 4; g.turn = other(seat); }
   else if (card.k === "skip" || card.k === "rev") { g.turn = seat; } // 2P: opponent skipped, play again
   else { g.turn = other(seat); } // number or plain jolly
+  // Down to one card: the "Assolo!" must be called (or the other player can catch it).
+  if (hand.length === 1) g.callPending = seat;
   g.last = { seat, card: { c: card.c, k: card.k, n: card.n }, color: g.color, swap };
   const punch = card.k === "d2" || card.k === "wd4" || card.k === "skip" || card.k === "rev";
   return { g, kind: punch ? "slam" : "play", ev: { t: "asplay", k: card.k } };
@@ -3960,11 +3963,31 @@ function assoloDraw(gs, seat) {
     assoloDrawInto(g, seat, 1);
   }
   const drawn = g.hands[seat].length - before;
+  if (g.callPending === seat && g.hands[seat].length !== 1) g.callPending = null; // no longer on your Assolo
   const last = drawn > 0 ? g.hands[seat][g.hands[seat].length - 1] : null;
   if (last && assoloCanPlay(last, g)) { g.drew = last.id; g.turn = seat; } // may play it or pass
   else { g.turn = other(seat); } // nothing playable (or deck dry) — turn passes
   g.last = { seat, drawn };
   return { g, kind: "deal", ev: { t: "asdraw", drawn } };
+}
+
+// Declare (or catch) the "Assolo!". Either player may press, out of turn: the player
+// on one card presses to declare safely; the opponent pressing first catches an
+// undeclared Assolo and the culprit draws two. Their screen only offers it after a
+// one-second handicap, so the caller gets first shot.
+function assoloCall(gs, presser) {
+  if (gs.done || !gs.callPending) return null;
+  const owner = gs.callPending;
+  const g = clone(gs);
+  if (presser === owner) { // declared in time — safe
+    g.callPending = null;
+    g.last = { seat: owner, call: "declared" };
+    return { g, kind: "slam", ev: { t: "ascall", call: "declared", who: owner } };
+  }
+  assoloDrawInto(g, owner, 2); // caught silent — draw two
+  g.callPending = null;
+  g.last = { seat: presser, call: "caught", who: owner };
+  return { g, kind: "slam", ev: { t: "ascall", call: "caught", who: owner } };
 }
 
 function assoloPass(gs, seat) {
@@ -9857,21 +9880,33 @@ function Assolo({ room, gs, seat, mine, commit }) {
   const playable = new Set(mine ? legal.playable.map((c) => c.id) : []);
   const top = gs.discard[gs.discard.length - 1];
 
-  // "Assolo!" flash when either player drops to a single card
+  // Flash on a declared / caught Assolo (driven by the shared anim id, so both screens react)
   const [flash, setFlash] = useState(null);
-  const seenCount = useRef({});
+  const seenAnim = useRef(null);
   useEffect(() => {
-    for (const s of ["A", "B"]) {
-      const n = gs.hands[s].length;
-      if (n === 1 && seenCount.current[s] !== 1 && seenCount.current[s] !== undefined) setFlash({ id: uid(), s });
-      seenCount.current[s] = n;
-    }
-  }, [gs.hands.A.length, gs.hands.B.length]);
+    const a = room?.anim, ev = room?.ev;
+    if (!a || a.id === seenAnim.current) return;
+    seenAnim.current = a.id;
+    if (ev?.t === "ascall") setFlash({ id: a.id, call: ev.call, who: ev.who });
+  }, [room?.anim?.id]);
   useEffect(() => {
     if (!flash) return;
     const t = setTimeout(() => setFlash(null), 1500);
     return () => clearTimeout(t);
   }, [flash]);
+
+  // The "ASSOLO" call button: it pops the instant someone reaches one card — right away
+  // on that player's own screen, but only after a one-second handicap on the other's,
+  // so the caller gets first shot at declaring before they can be caught.
+  const owner = gs.callPending; // seat that owes a call, or null
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!owner || gs.done) { setArmed(false); return; }
+    if (owner === seat) { setArmed(true); return; } // my own Assolo — no delay
+    setArmed(false);
+    const t = setTimeout(() => setArmed(true), 1000); // the opponent's — 1s handicap
+    return () => clearTimeout(t);
+  }, [owner, seat, gs.done]);
 
   const playCard = (card) => {
     if (!mine || !playable.has(card.id)) return;
@@ -9900,8 +9935,30 @@ function Assolo({ room, gs, seat, mine, commit }) {
     <div style={{ paddingBottom: 118 }}>
       {flash && (
         <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
-          <div key={flash.id} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(52px, 18vw, 128px)", color: "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap" }}>
-            Assolo!
+          <div key={flash.id} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: flash.call === "caught" ? "clamp(34px, 11vw, 76px)" : "clamp(52px, 18vw, 128px)", color: flash.call === "caught" ? "#B23A2E" : "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap", textAlign: "center" }}>
+            {flash.call === "caught" ? L("Contestato! +2", "Caught! +2") : "Assolo!"}
+          </div>
+        </div>
+      )}
+
+      {/* the call button — pops on every screen when a player reaches one card */}
+      {owner && armed && !gs.done && (
+        <div style={{ position: "fixed", left: 0, right: 0, top: "38%", zIndex: 65, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+          <button
+            onClick={() => commit(assoloCall(gs, seat))}
+            style={{
+              pointerEvents: "auto",
+              fontFamily: BRAND, fontWeight: 800, fontSize: 30, letterSpacing: "0.04em",
+              color: "#fff", background: owner === seat ? "#B8862B" : "#B23A2E",
+              border: "3px solid #fff", borderRadius: 999, padding: "16px 40px",
+              boxShadow: "0 12px 30px rgba(18,18,18,0.4)", cursor: "pointer",
+              WebkitTapHighlightColor: "transparent", animation: "azpop 320ms ease",
+            }}
+          >
+            ASSOLO!
+          </button>
+          <div style={{ marginTop: 10, fontFamily: MONO, fontSize: 11, letterSpacing: "0.08em", color: T.ink60, background: T.bg, padding: "2px 8px", borderRadius: 6 }}>
+            {owner === seat ? L("chiama prima di essere scoperto!", "call it before you're caught!") : L("scoprilo se non chiama!", "catch them if they don't call!")}
           </div>
         </div>
       )}
@@ -9922,11 +9979,25 @@ function Assolo({ room, gs, seat, mine, commit }) {
       {/* table: draw pile + discard top + active colour */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 22, margin: "22px 0 10px" }}>
         <div style={{ textAlign: "center" }}>
-          <div style={{ position: "relative", width: 62, height: 93, margin: "0 auto" }}>
-            <AsBack w={62} style={{ position: "absolute", inset: 0 }} />
-            <div style={{ position: "absolute", top: -3, left: 3 }}><AsBack w={62} /></div>
-          </div>
-          <Micro style={{ marginTop: 6 }}>{L("pozzo", "pile")} {gs.pile.length}</Micro>
+          {/* tap the deck to draw (also takes a pending +2/+4). Glows when it's your move to draw. */}
+          <button
+            onClick={mine && legal.canDraw ? () => commit(assoloDraw(gs, seat)) : undefined}
+            disabled={!(mine && legal.canDraw)}
+            aria-label={L("Pesca dal pozzo", "Draw from the pile")}
+            style={{
+              position: "relative", width: 68, height: 99, margin: "0 auto", padding: 0, background: "none", border: "none",
+              cursor: mine && legal.canDraw ? "pointer" : "default", WebkitTapHighlightColor: "transparent",
+              borderRadius: 14, outline: mine && legal.canDraw ? `3px solid ${gs.pending > 0 ? "#B23A2E" : "#B8862B"}` : "none",
+              outlineOffset: 3, animation: mine && legal.canDraw ? "azglow 1.6s ease-in-out infinite" : "none",
+            }}
+          >
+            <AsBack w={62} style={{ position: "absolute", top: 3, left: 3 }} />
+            <div style={{ position: "absolute", top: 0, left: 6 }}><AsBack w={62} /></div>
+            {mine && legal.canDraw && gs.pending > 0 && (
+              <span style={{ position: "absolute", bottom: -6, left: "50%", transform: "translateX(-50%)", background: "#B23A2E", color: "#fff", fontFamily: BRAND, fontWeight: 800, fontSize: 13, borderRadius: 999, padding: "2px 9px", boxShadow: "0 3px 8px rgba(18,18,18,0.3)", whiteSpace: "nowrap" }}>+{gs.pending}</span>
+            )}
+          </button>
+          <Micro style={{ marginTop: 8 }}>{mine && legal.canDraw ? L("tocca per pescare", "tap to draw") : `${L("pozzo", "pile")} ${gs.pile.length}`}</Micro>
         </div>
         <div style={{ textAlign: "center" }}>
           <div style={{ position: "relative", display: "inline-block" }}>
@@ -10018,10 +10089,12 @@ function Assolo({ room, gs, seat, mine, commit }) {
             <Micro>{L("tocca a", "waiting for")} {who(room, opp)}</Micro>
           ) : legal.canPass ? (
             <Button onClick={() => commit(assoloPass(gs, seat))}>{L("Passa", "Pass")}</Button>
-          ) : legal.canDraw ? (
-            <Button onClick={() => commit(assoloDraw(gs, seat))}>{gs.pending > 0 ? `${L("Pesca", "Draw")} ${gs.pending}` : L("Pesca", "Draw")}</Button>
-          ) : (
+          ) : legal.canDraw && legal.playable.length === 0 ? (
+            <Micro>{gs.pending > 0 ? `${L("tocca il pozzo: pesca", "tap the pile: draw")} ${gs.pending}` : L("tocca il pozzo per pescare", "tap the pile to draw")}</Micro>
+          ) : legal.playable.length ? (
             <Micro>{L("gioca una carta", "play a card")}</Micro>
+          ) : (
+            <Micro />
           )}
         </div>
         <div style={{ flexShrink: 0, width: 40 }} aria-hidden="true" />
