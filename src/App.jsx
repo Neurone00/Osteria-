@@ -5647,7 +5647,11 @@ input{font-family:inherit}
 .azglow{animation:azglow 900ms ease-out}
 @keyframes azrise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 .azrise{animation:azrise 260ms ease-out both}
-@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL,.tumble,.settle,.critshake,.hexpulse,.bristuck,.azpop,.azglow,.azrise{animation:none!important}.deckcard{transition:none}}
+@keyframes aspop{0%{transform:translateY(120%)}70%{transform:translateY(22%)}100%{transform:translateY(34%)}}
+.aspop{animation:aspop 340ms cubic-bezier(.2,1.3,.4,1)}
+@keyframes asshake{0%,100%{transform:translate(0,0) rotate(0)}10%{transform:translate(-7px,3px) rotate(-1.6deg)}25%{transform:translate(8px,-3px) rotate(1.6deg)}40%{transform:translate(-6px,2px) rotate(-1.2deg)}55%{transform:translate(6px,-2px) rotate(1deg)}70%{transform:translate(-4px,1px) rotate(-.7deg)}85%{transform:translate(3px,-1px) rotate(.5deg)}}
+.asshake{animation:asshake 620ms ease-in-out}
+@media (prefers-reduced-motion:reduce){.slam,.jolt,.fade,.deal,.turn,.swap,.pop,.confetti,.flipy,.floaty,.dieroll,.recdot,.deckbob,.scopaflash,.flypR,.flypL,.tumble,.settle,.critshake,.hexpulse,.bristuck,.azpop,.azglow,.azrise,.aspop,.asshake{animation:none!important}.deckcard{transition:none}}
 `;
 
 /* ═══════════════════════════ app ═══════════════════════════ */
@@ -7787,6 +7791,15 @@ function GameArt({ game, size = 88 }) {
       );
       break;
     }
+    case "assolo":
+      // a single card carrying a red A — the "Assolo!" mark
+      art = (
+        <g>
+          {card(50, 50, 0, 42, 56)}
+          <text x="50" y="50" fontFamily={BRAND} fontSize="30" fontWeight="800" fill={red} textAnchor="middle" dominantBaseline="central" transform="rotate(-8 50 50)">A</text>
+        </g>
+      );
+      break;
     default:
       art = card(50, 50, 0);
   }
@@ -9921,6 +9934,16 @@ function Assolo({ room, gs, seat, mine, commit }) {
     return () => clearTimeout(t);
   }, [owner, seat, gs.done]);
 
+  // When the call button pops, jolt + buzz the whole screen like the Bump ritual.
+  const [shake, setShake] = useState(false);
+  useEffect(() => {
+    if (!(owner && armed && !gs.done)) return;
+    setShake(true);
+    try { navigator.vibrate?.([25, 35, 25, 35, 70]); } catch {}
+    const t = setTimeout(() => setShake(false), 640);
+    return () => clearTimeout(t);
+  }, [armed, owner, gs.done]);
+
   const playCard = (card) => {
     if (!mine || !playable.has(card.id)) return;
     if (card.c === "w") { setWildPick(card.id); return; } // pick a colour first
@@ -9945,7 +9968,7 @@ function Assolo({ room, gs, seat, mine, commit }) {
     : L("Gioca una carta o pesca", "Play a card or draw");
 
   return (
-    <div style={{ paddingBottom: 118 }}>
+    <div className={shake ? "asshake" : undefined} style={{ paddingBottom: 118 }}>
       {flash && (
         <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
           <div key={flash.id} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: flash.call === "caught" ? "clamp(34px, 11vw, 76px)" : "clamp(52px, 18vw, 128px)", color: flash.call === "caught" ? "#B23A2E" : "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap", textAlign: "center" }}>
@@ -9954,25 +9977,29 @@ function Assolo({ room, gs, seat, mine, commit }) {
         </div>
       )}
 
-      {/* the call button — pops on every screen when a player reaches one card */}
+      {/* the call button — pops up from the bottom of the screen (slightly cropped by
+          the edge, jutting up) on every screen when a player reaches one card */}
       {owner && armed && !gs.done && (
-        <div style={{ position: "fixed", left: 0, right: 0, top: "38%", zIndex: 65, display: "grid", placeItems: "center", pointerEvents: "none" }}>
-          <button
-            onClick={() => commit(assoloCall(gs, seat))}
-            style={{
-              pointerEvents: "auto",
-              fontFamily: BRAND, fontWeight: 800, fontSize: 30, letterSpacing: "0.04em",
-              color: "#fff", background: owner === seat ? "#B8862B" : "#B23A2E",
-              border: "3px solid #fff", borderRadius: 999, padding: "16px 40px",
-              boxShadow: "0 12px 30px rgba(18,18,18,0.4)", cursor: "pointer",
-              WebkitTapHighlightColor: "transparent", animation: "azpop 320ms ease",
-            }}
-          >
-            ASSOLO!
-          </button>
-          <div style={{ marginTop: 10, fontFamily: MONO, fontSize: 11, letterSpacing: "0.08em", color: T.ink60, background: T.bg, padding: "2px 8px", borderRadius: 6 }}>
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 65, display: "flex", flexDirection: "column", alignItems: "center", pointerEvents: "none" }}>
+          <div style={{ marginBottom: 12, fontFamily: MONO, fontSize: 11, letterSpacing: "0.08em", color: T.ink60, background: T.bg, padding: "2px 8px", borderRadius: 6 }}>
             {owner === seat ? L("chiama prima di essere scoperto!", "call it before you're caught!") : L("scoprilo se non chiama!", "catch them if they don't call!")}
           </div>
+          <button
+            className="aspop"
+            onClick={() => commit(assoloCall(gs, seat))}
+            aria-label="Assolo"
+            style={{
+              pointerEvents: "auto",
+              transform: "translateY(34%)", // juts past the bottom edge — slightly cropped
+              width: 116, height: 116, borderRadius: "50%",
+              display: "grid", placeItems: "center", padding: 0,
+              color: "#fff", background: "#B23A2E", border: "4px solid #fff",
+              boxShadow: "0 -8px 34px rgba(178,58,46,0.5)", cursor: "pointer",
+              WebkitTapHighlightColor: "transparent",
+            }}
+          >
+            <span style={{ fontFamily: BRAND, fontWeight: 800, fontSize: 56, lineHeight: 1, transform: "rotate(-10deg)" }}>A</span>
+          </button>
         </div>
       )}
 
