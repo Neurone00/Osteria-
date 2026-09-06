@@ -5788,6 +5788,19 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const receive = useCallback((r) => {
     if (!r || !r.code) return;
     const cur = roomRef.current;
+    // Assolo call collision: a declare and a catch computed from the same version can
+    // land together. The declaring player ALWAYS wins the tie — a call made at the
+    // same moment is never overridden by a silent catch. Both devices resolve the same
+    // way regardless of which message arrives last, so they can't diverge.
+    if (cur && cur.game === "assolo" && r.game === "assolo" && r.v === cur.v && r.gs && cur.gs) {
+      const owy = (x) => (x && x.call === "declared" ? x.seat : x && x.who);
+      const rc = r.gs.last, cc = cur.gs.last;
+      if (rc && cc && rc.call && cc.call && rc.call !== cc.call && owy(rc) === owy(cc)) {
+        const winner = cc.call === "declared" ? cur : r;
+        if (winner !== cur) { roomRef.current = winner; setRoom(winner); setPick(null); setLink("live"); }
+        return;
+      }
+    }
     // Higher version wins. Turn-free Condottieri (and flotta2's simultaneous deploy)
     // mean two moves can land on the same version at once; break that tie by
     // timestamp so both devices converge on the later write.
@@ -10020,9 +10033,10 @@ function Assolo({ room, gs, seat, mine, commit }) {
       </div>
       <p style={{ textAlign: "center", color: T.ink60, fontSize: 13, margin: "6px 0 0", minHeight: 16 }}>{statusText}</p>
 
-      {/* your hand — auto-sorted by colour and wrapped over rows, so every card is
-          visible at once (no side-scrolling). Cards shrink a touch as the hand grows. */}
-      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "flex-end", gap: 5, padding: "16px 2px 8px" }}>
+      {/* your hand — auto-sorted by colour and wrapped over rows (never side-scrolls).
+          Only THIS area scrolls, vertically, so the deck and discard stay pinned above
+          it however big the hand gets. Cards shrink a touch as the hand grows. */}
+      <div style={{ maxHeight: "calc(100vh - 360px)", overflowY: "auto", WebkitOverflowScrolling: "touch", display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "flex-start", alignContent: "flex-start", gap: 5, padding: "16px 2px 8px" }}>
         {[...myHand].sort(asHandSort).map((card) => {
           const ok = mine && playable.has(card.id);
           const w = myHand.length > 16 ? 40 : myHand.length > 11 ? 46 : 52;
