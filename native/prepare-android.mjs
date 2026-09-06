@@ -14,6 +14,7 @@ import { build } from "esbuild";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fontFaceCss } from "../scripts/fonts.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, "standalone");
@@ -53,6 +54,7 @@ writeFileSync(join(dst, "native-bridge.js"), bridgeJs);
 
 const template = readFileSync(join(root, "scripts/standalone.template.html"), "utf8");
 const html = template
+  .replace("/*FONTS*/", () => fontFaceCss())
   .replace("/*BUNDLE*/", () => appJs)
   // Load the bridge before the inlined app bundle so the global is ready at first render.
   .replace('<div id="root"></div>', '<div id="root"></div>\n    <script src="native-bridge.js"></script>');

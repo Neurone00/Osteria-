@@ -9,6 +9,7 @@ import { build } from "esbuild";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { fontFaceCss } from "./fonts.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -27,7 +28,7 @@ const result = await build({
 
 const js = result.outputFiles[0].text;
 const template = readFileSync(join(root, "scripts/standalone.template.html"), "utf8");
-const html = template.replace("/*BUNDLE*/", () => js);
+const html = template.replace("/*FONTS*/", () => fontFaceCss()).replace("/*BUNDLE*/", () => js);
 const out = join(root, "standalone/index.html");
 writeFileSync(out, html);
 console.log(`standalone/index.html — ${Math.round(html.length / 1024)} KB`);
