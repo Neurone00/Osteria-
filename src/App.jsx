@@ -9967,42 +9967,42 @@ function Assolo({ room, gs, seat, mine, commit }) {
     ? L("Niente da giocare — pesca", "Nothing to play — draw")
     : L("Gioca una carta o pesca", "Play a card or draw");
 
+  // Overlays live OUTSIDE the shaking wrapper below, so the screen jolts but the
+  // call button and flash stay put (they only do their own pop) instead of jittering.
+  const flashOverlay = flash ? (
+    <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
+      <div key={flash.id} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: flash.call === "caught" ? "clamp(34px, 11vw, 76px)" : "clamp(52px, 18vw, 128px)", color: flash.call === "caught" ? "#B23A2E" : "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap", textAlign: "center" }}>
+        {flash.call === "caught" ? L("Contestato! +2", "Caught! +2") : "Assolo!"}
+      </div>
+    </div>
+  ) : null;
+  const callOverlay = owner && armed && !gs.done ? (
+    <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 65, display: "flex", flexDirection: "column", alignItems: "center", pointerEvents: "none" }}>
+      <div style={{ marginBottom: 12, fontFamily: MONO, fontSize: 11, letterSpacing: "0.08em", color: T.ink60, background: T.bg, padding: "2px 8px", borderRadius: 6 }}>
+        {owner === seat ? L("chiama prima di essere scoperto!", "call it before you're caught!") : L("scoprilo se non chiama!", "catch them if they don't call!")}
+      </div>
+      <button
+        className="aspop"
+        onClick={() => commit(assoloCall(gs, seat))}
+        aria-label="Assolo"
+        style={{
+          pointerEvents: "auto",
+          transform: "translateY(20%)", // juts past the bottom edge — a little cropped
+          width: 116, height: 116, borderRadius: "50%",
+          display: "grid", placeItems: "center", padding: 0,
+          color: "#fff", background: "#B23A2E", border: "4px solid #fff",
+          boxShadow: "0 -8px 34px rgba(178,58,46,0.5)", cursor: "pointer",
+          WebkitTapHighlightColor: "transparent",
+        }}
+      >
+        <span style={{ fontFamily: BRAND, fontWeight: 700, letterSpacing: "-0.01em", fontSize: 58, lineHeight: 1, transform: "rotate(-10deg)" }}>A</span>
+      </button>
+    </div>
+  ) : null;
+
   return (
+    <>
     <div className={shake ? "asshake" : undefined} style={{ paddingBottom: 118 }}>
-      {flash && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 55, display: "grid", placeItems: "center", pointerEvents: "none" }}>
-          <div key={flash.id} className="scopaflash" style={{ fontFamily: BRAND, fontWeight: 700, fontSize: flash.call === "caught" ? "clamp(34px, 11vw, 76px)" : "clamp(52px, 18vw, 128px)", color: flash.call === "caught" ? "#B23A2E" : "#B8862B", letterSpacing: "-0.03em", textShadow: "0 6px 0 rgba(18,18,18,0.1)", whiteSpace: "nowrap", textAlign: "center" }}>
-            {flash.call === "caught" ? L("Contestato! +2", "Caught! +2") : "Assolo!"}
-          </div>
-        </div>
-      )}
-
-      {/* the call button — pops up from the bottom of the screen (slightly cropped by
-          the edge, jutting up) on every screen when a player reaches one card */}
-      {owner && armed && !gs.done && (
-        <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 65, display: "flex", flexDirection: "column", alignItems: "center", pointerEvents: "none" }}>
-          <div style={{ marginBottom: 12, fontFamily: MONO, fontSize: 11, letterSpacing: "0.08em", color: T.ink60, background: T.bg, padding: "2px 8px", borderRadius: 6 }}>
-            {owner === seat ? L("chiama prima di essere scoperto!", "call it before you're caught!") : L("scoprilo se non chiama!", "catch them if they don't call!")}
-          </div>
-          <button
-            className="aspop"
-            onClick={() => commit(assoloCall(gs, seat))}
-            aria-label="Assolo"
-            style={{
-              pointerEvents: "auto",
-              transform: "translateY(20%)", // juts past the bottom edge — a little cropped
-              width: 116, height: 116, borderRadius: "50%",
-              display: "grid", placeItems: "center", padding: 0,
-              color: "#fff", background: "#B23A2E", border: "4px solid #fff",
-              boxShadow: "0 -8px 34px rgba(178,58,46,0.5)", cursor: "pointer",
-              WebkitTapHighlightColor: "transparent",
-            }}
-          >
-            <span style={{ fontFamily: BRAND, fontWeight: 700, letterSpacing: "-0.01em", fontSize: 58, lineHeight: 1, transform: "rotate(-10deg)" }}>A</span>
-          </button>
-        </div>
-      )}
-
       {/* opponent — face-down hand + count */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
         <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>
@@ -10141,6 +10141,9 @@ function Assolo({ room, gs, seat, mine, commit }) {
         <div style={{ flexShrink: 0, width: 40 }} aria-hidden="true" />
       </div>
     </div>
+    {flashOverlay}
+    {callOverlay}
+    </>
   );
 }
 
