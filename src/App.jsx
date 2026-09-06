@@ -5647,7 +5647,7 @@ input{font-family:inherit}
 .azglow{animation:azglow 900ms ease-out}
 @keyframes azrise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 .azrise{animation:azrise 260ms ease-out both}
-@keyframes aspop{0%{transform:translateY(120%)}70%{transform:translateY(22%)}100%{transform:translateY(34%)}}
+@keyframes aspop{0%{transform:translateY(120%)}70%{transform:translateY(8%)}100%{transform:translateY(20%)}}
 .aspop{animation:aspop 340ms cubic-bezier(.2,1.3,.4,1)}
 @keyframes asshake{0%,100%{transform:translate(0,0) rotate(0)}10%{transform:translate(-7px,3px) rotate(-1.6deg)}25%{transform:translate(8px,-3px) rotate(1.6deg)}40%{transform:translate(-6px,2px) rotate(-1.2deg)}55%{transform:translate(6px,-2px) rotate(1deg)}70%{transform:translate(-4px,1px) rotate(-.7deg)}85%{transform:translate(3px,-1px) rotate(.5deg)}}
 .asshake{animation:asshake 620ms ease-in-out}
@@ -7796,7 +7796,7 @@ function GameArt({ game, size = 88 }) {
       art = (
         <g>
           {card(50, 50, 0, 42, 56)}
-          <text x="50" y="50" fontFamily={BRAND} fontSize="30" fontWeight="800" fill={red} textAnchor="middle" dominantBaseline="central" transform="rotate(-8 50 50)">A</text>
+          <text x="50" y="50" fontFamily={BRAND} fontSize="30" fontWeight="800" fill={red} textAnchor="middle" dominantBaseline="central" transform="rotate(-10 50 50)">A</text>
         </g>
       );
       break;
@@ -9892,7 +9892,7 @@ function AsBack({ w = 30, style }) {
   const h = Math.round(w * 1.5);
   return (
     <div style={{ width: w, height: h, borderRadius: Math.round(w * 0.18), background: T.ink, border: "2px solid rgba(255,255,255,0.85)", display: "grid", placeItems: "center", flexShrink: 0, boxShadow: "0 2px 5px rgba(18,18,18,0.18)", ...style }}>
-      <span style={{ fontFamily: BRAND, fontWeight: 800, fontSize: Math.round(w * 0.42), color: T.bg, transform: "rotate(-20deg)" }}>A</span>
+      <span style={{ fontFamily: BRAND, fontWeight: 800, fontSize: Math.round(w * 0.42), color: T.bg, transform: "rotate(-10deg)" }}>A</span>
     </div>
   );
 }
@@ -9990,7 +9990,7 @@ function Assolo({ room, gs, seat, mine, commit }) {
             aria-label="Assolo"
             style={{
               pointerEvents: "auto",
-              transform: "translateY(34%)", // juts past the bottom edge — slightly cropped
+              transform: "translateY(20%)", // juts past the bottom edge — a little cropped
               width: 116, height: 116, borderRadius: "50%",
               display: "grid", placeItems: "center", padding: 0,
               color: "#fff", background: "#B23A2E", border: "4px solid #fff",
