@@ -9790,6 +9790,16 @@ const stepBtn = {
 /* ── assolo (uno) UI ── */
 const AS_HEX = { r: "#c0392b", y: "#c79a12", g: "#2e8b57", b: "#2f5fa6" };
 const AS_CNAME = { r: { it: "rosso", en: "red" }, y: { it: "giallo", en: "yellow" }, g: { it: "verde", en: "green" }, b: { it: "blu", en: "blue" } };
+// Auto-arrange the hand: grouped by colour (red, yellow, green, blue, then jollies),
+// and within a colour by number then action — so it reads like a tidied fan and never
+// needs horizontal scrolling.
+const AS_CORDER = { r: 0, y: 1, g: 2, b: 3, w: 4 };
+const AS_KORDER = { n: 0, skip: 1, rev: 2, d2: 3, wild: 4, wd4: 5 };
+function asHandSort(a, b) {
+  if (AS_CORDER[a.c] !== AS_CORDER[b.c]) return AS_CORDER[a.c] - AS_CORDER[b.c];
+  if (AS_KORDER[a.k] !== AS_KORDER[b.k]) return AS_KORDER[a.k] - AS_KORDER[b.k];
+  return (a.n ?? 0) - (b.n ?? 0);
+}
 function asGlyph(card) {
   if (card.k === "n") return String(card.n);
   if (card.k === "skip") return "⊘"; // ⊘ salta
@@ -9939,11 +9949,13 @@ function Assolo({ room, gs, seat, mine, commit }) {
       </div>
       <p style={{ textAlign: "center", color: T.ink60, fontSize: 13, margin: "6px 0 0", minHeight: 16 }}>{statusText}</p>
 
-      {/* your hand */}
-      <div style={{ display: "flex", gap: 5, overflowX: "auto", padding: "16px 2px 8px", alignItems: "flex-end", WebkitOverflowScrolling: "touch" }}>
-        {myHand.map((card) => {
+      {/* your hand — auto-sorted by colour and wrapped over rows, so every card is
+          visible at once (no side-scrolling). Cards shrink a touch as the hand grows. */}
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", alignItems: "flex-end", gap: 5, padding: "16px 2px 8px" }}>
+        {[...myHand].sort(asHandSort).map((card) => {
           const ok = mine && playable.has(card.id);
-          return <AsCard key={card.id} card={card} w={52} sel={ok} dim={mine && !ok} onClick={ok ? () => playCard(card) : undefined} />;
+          const w = myHand.length > 16 ? 40 : myHand.length > 11 ? 46 : 52;
+          return <AsCard key={card.id} card={card} w={w} sel={ok} dim={mine && !ok} onClick={ok ? () => playCard(card) : undefined} />;
         })}
       </div>
 
