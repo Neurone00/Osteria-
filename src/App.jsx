@@ -7796,7 +7796,7 @@ function GameArt({ game, size = 88 }) {
       art = (
         <g>
           {card(50, 50, 0, 42, 56)}
-          <text x="50" y="50" fontFamily={BRAND} fontSize="30" fontWeight="800" fill={red} textAnchor="middle" dominantBaseline="central" transform="rotate(-10 50 50)">A</text>
+          <text x="50" y="50" fontFamily={BRAND} fontSize="32" fontWeight="700" letterSpacing="-0.01em" fill={red} textAnchor="middle" dominantBaseline="central" transform="rotate(-10 50 50)">A</text>
         </g>
       );
       break;
@@ -9892,7 +9892,7 @@ function AsBack({ w = 30, style }) {
   const h = Math.round(w * 1.5);
   return (
     <div style={{ width: w, height: h, borderRadius: Math.round(w * 0.18), background: T.ink, border: "2px solid rgba(255,255,255,0.85)", display: "grid", placeItems: "center", flexShrink: 0, boxShadow: "0 2px 5px rgba(18,18,18,0.18)", ...style }}>
-      <span style={{ fontFamily: BRAND, fontWeight: 800, fontSize: Math.round(w * 0.42), color: T.bg, transform: "rotate(-10deg)" }}>A</span>
+      <span style={{ fontFamily: BRAND, fontWeight: 700, letterSpacing: "-0.01em", fontSize: Math.round(w * 0.44), color: T.bg, transform: "rotate(-10deg)" }}>A</span>
     </div>
   );
 }
@@ -9998,7 +9998,7 @@ function Assolo({ room, gs, seat, mine, commit }) {
               WebkitTapHighlightColor: "transparent",
             }}
           >
-            <span style={{ fontFamily: BRAND, fontWeight: 800, fontSize: 56, lineHeight: 1, transform: "rotate(-10deg)" }}>A</span>
+            <span style={{ fontFamily: BRAND, fontWeight: 700, letterSpacing: "-0.01em", fontSize: 58, lineHeight: 1, transform: "rotate(-10deg)" }}>A</span>
           </button>
         </div>
       )}
