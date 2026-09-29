@@ -331,25 +331,22 @@ async function checkUpdate() {
   };
 }
 
-function blobToB64(blob) {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onerror = () => reject(new Error("lettura file non riuscita"));
-    fr.onload = () => resolve(String(fr.result).split(",")[1] || "");
-    fr.readAsDataURL(blob);
-  });
-}
-
 // Download the APK to the app cache and hand it to the system package installer.
-// Android shows its own install screen (unavoidable for a sideloaded app); this just
-// removes the browser download + find-the-file dance.
+// The download MUST go through Filesystem.downloadFile (a native request), not fetch():
+// a GitHub release asset 302-redirects to objects.githubusercontent.com, which sends no
+// CORS headers, so a plain fetch() from the WebView origin is blocked and the update
+// silently fails. The native download bypasses CORS entirely. Android still shows its
+// own install screen (unavoidable for a sideloaded app); this removes the browser dance.
 async function installUpdate(url, name) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error("download non riuscito");
-  const b64 = await blobToB64(await res.blob());
   const path = name || "Osteria-update.apk";
-  await Filesystem.writeFile({ path, data: b64, directory: Directory.Cache });
-  const { uri } = await Filesystem.getUri({ path, directory: Directory.Cache });
+  let uri;
+  try {
+    try { await Filesystem.deleteFile({ path, directory: Directory.Cache }); } catch {}
+    await Filesystem.downloadFile({ url, path, directory: Directory.Cache, recursive: true });
+    uri = (await Filesystem.getUri({ path, directory: Directory.Cache })).uri;
+  } catch (e) {
+    throw new Error("download non riuscito — " + errText(e));
+  }
   const opener = typeof window !== "undefined" && window.cordova && window.cordova.plugins && window.cordova.plugins.fileOpener2;
   if (!opener || !opener.open) throw new Error("installer non disponibile");
   await new Promise((resolve, reject) => {
