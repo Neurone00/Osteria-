@@ -11827,7 +11827,13 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
     if (!draft || !selShip) return;
     const order = { ship: sel, ...draft };
     const r = flotta2Order(gs, seat, order);
-    if (r) { mineRef.current = order; commit(r); }
+    // If the engine refuses the order (e.g. a pirate broadside from a ship whose guns
+    // are still recharging), DON'T clear as if it were placed — that left the round with
+    // no order for this seat and no way to re-send, so it could never resolve (stuck).
+    // Keep the ship selected and drop back to its menu so a legal action can be chosen.
+    if (!r) { setMode("menu"); setDraft(null); return; }
+    mineRef.current = order;
+    commit(r);
     setSel(null); setMode(null); setDraft(null);
   };
   const submitDeploy = () => {
@@ -12354,7 +12360,9 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
               <>
                 <Fl2Btn icon="compass" label={L("Muovi", "Move")} tone={TH.green} bg={TH.sea} onTap={() => (setMode("move"), setDraft(null))} />
                 {gs.pirate
-                  ? <Fl2Btn icon="target" label={L("Bordata", "Broadside")} tone={TH.foe} bg={TH.sea} onTap={() => (setMode("fire"), setDraft({ kind: "fire" }))} />
+                  ? ((selShip.cd || 0) === 0
+                    ? <Fl2Btn icon="target" label={L("Bordata", "Broadside")} tone={TH.foe} bg={TH.sea} onTap={() => (setMode("fire"), setDraft({ kind: "fire" }))} />
+                    : <Fl2Btn icon="target" label={L(`Ricarica · ${selShip.cd}`, `Recharging · ${selShip.cd}`)} tone={TH.faint} bg={TH.sea} />)
                   : (
                     <>
                       <Fl2Btn icon="target" label={selShip.type === "recon" ? L("Colpisci", "Strike") : L("Spara", "Fire")} tone={TH.foe} bg={TH.sea} onTap={() => setMode(selShip.type === "recon" ? "strike" : "fire")} />
