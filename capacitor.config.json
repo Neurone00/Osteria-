@@ -1,0 +1,8 @@
+{
+  "appId": "it.moskitodesign.osteria",
+  "appName": "Osteria!",
+  "webDir": "android-www",
+  "android": {
+    "backgroundColor": "#E7E5E0"
+  }
+}
