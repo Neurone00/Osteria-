@@ -50,7 +50,7 @@ const EXPORTS = [
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
   "mergeSimSlots", "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "fl2Sectors", "fl2SectorOf", "FL2_QUAD", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision", "FL2_PIRATE_SPEED", "fl2Speed", "flotta2Mines", "flotta2MinesReady", "flotta2StartPlay", "flotta2BotMines", "FL2_MINES", "FL2_MINE_DMG", "FL2_MINE_R",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
-  "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40Discard",
+  "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40SubJoker", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
 const modPath = join(dir, "rules.mjs");
@@ -1280,6 +1280,39 @@ function s40MeldTests() {
   // once opened: forming a fresh meld with two hand cards is also enough
   const gOpenedRun = { opened: { A: true, B: false }, melds: [], discard: [D("d", "H", 7)], hands: { A: [D("a", "H", 5), D("b", "H", 6), D("c", "S", 2)], B: [] } };
   if (!R.s40CanUseDiscard(gOpenedRun, "A")) fail("scala discard gate", "once opened, 7H+5H,6H (a fresh run) must be takeable");
+
+  // joker substitution: give the exact card the joker stands for, get the joker back
+  const JD = (id, s, v) => ({ id, joker: true, rep: { s, v } });
+  const base = () => ({ phase: "meld", turn: "A", done: false, opened: { A: true, B: true },
+    melds: [{ id: "m0A", kind: "run", owner: "A", cards: [D("x", "H", 4), JD("j", "H", 5), D("z", "H", 6)] }],
+    hands: { A: [D("a", "H", 5), D("b", "S", 9)], B: [] } });
+  // valid: 5H replaces the joker pinned to 5H; joker returns to hand, hand size unchanged
+  {
+    const g = base();
+    const r = R.s40SubJoker(g, "A", "m0A", "a");
+    if (!r) fail("scala joker swap", "5H should reclaim the joker it stands for");
+    else {
+      const m = r.g.melds[0];
+      if (m.cards.some((c) => c.joker)) fail("scala joker swap", "joker should be gone from the meld");
+      if (!R.analyzeMeld(m.cards).ok) fail("scala joker swap", "meld must stay valid after the swap");
+      const back = r.g.hands.A.find((c) => c.joker);
+      if (!back) fail("scala joker swap", "the freed joker should be back in hand");
+      else if (back.rep) fail("scala joker swap", "the reclaimed joker must be unpinned");
+      if (r.g.hands.A.length !== 2) fail("scala joker swap", "hand size unchanged (gave a card, took the joker)");
+    }
+  }
+  // invalid: a wrong-suit card can't take the joker's place in a run
+  {
+    const g = base();
+    if (R.s40SubJoker(g, "A", "m0A", "b") !== null) fail("scala joker swap", "9S must not fit the 5H slot");
+  }
+  // invalid: no joker in the meld
+  {
+    const g = { phase: "meld", turn: "A", done: false, opened: { A: true, B: true },
+      melds: [{ id: "m0A", kind: "run", owner: "A", cards: [D("x", "H", 4), D("y", "H", 5), D("z", "H", 6)] }],
+      hands: { A: [D("a", "H", 7)], B: [] } };
+    if (R.s40SubJoker(g, "A", "m0A", "a") !== null) fail("scala joker swap", "nothing to reclaim from a joker-free meld");
+  }
 }
 
 /* ── prepared deck (shuffle + cut ritual) ───────────────────── */

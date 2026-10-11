@@ -3106,6 +3106,29 @@ function s40LayOff(gs, seat, cardId, meldId, rep) {
   s40CheckOut(g, seat);
   return { g, kind: "take", ev: { t: "layoff" } };
 }
+// Reclaim a joker from a meld (yours or the opponent's) by putting the exact natural
+// card it stands for in its place. The freed joker returns to your hand (unpinned) to
+// use again. Only in your meld phase, once opened; the swap must keep the meld valid.
+function s40SubJoker(gs, seat, meldId, cardId) {
+  const g = clone(gs);
+  if (g.phase !== "meld" || g.turn !== seat || !g.opened[seat] || g.done) return null;
+  const meld = g.melds.find((m) => m.id === meldId);
+  if (!meld) return null;
+  const ji = meld.cards.findIndex((c) => c.joker);
+  if (ji < 0) return null; // no joker in this meld to reclaim
+  const card = g.hands[seat].find((c) => c.id === cardId);
+  if (!card || card.joker) return null; // must offer a natural card
+  const next = meld.cards.slice();
+  next[ji] = card; // the natural card takes the joker's slot…
+  const a = analyzeMeld(next);
+  if (!a.ok) return null; // …and must actually fit where the joker stood
+  const freed = { ...meld.cards[ji] };
+  delete freed.rep; // joker comes back unpinned, free to represent anything again
+  meld.cards = next;
+  meld.kind = a.kind;
+  g.hands[seat] = g.hands[seat].filter((c) => c.id !== cardId).concat(freed);
+  return { g, kind: "take", ev: { t: "subjoker" } };
+}
 function s40Discard(gs, seat, cardId) {
   const g = clone(gs);
   if (g.phase !== "meld" || g.turn !== seat || g.done) return null;
@@ -13054,6 +13077,19 @@ function Scala({ room, gs, seat, mine, commit }) {
     }
     commit(s40LayOff(gs, seat, sel[0], meldId));
   };
+  // Reclaim a joker from a table meld: select the natural card it stands for, then tap
+  // the joker's ⇄ badge. The freed joker returns to your hand.
+  const subJoker = (meldId) => {
+    if (!(opened && gs.phase === "meld" && mine)) return;
+    if (sel.length !== 1) return setHint(L("Scegli la carta naturale al posto del jolly, poi tocca ⇄.", "Pick the natural card for the joker's place, then tap ⇄."));
+    const card = hand.find((c) => c.id === sel[0]);
+    if (!card || card.joker) return setHint(L("Serve una carta naturale, non un jolly.", "You need a natural card, not a joker."));
+    const r = s40SubJoker(gs, seat, meldId, sel[0]);
+    if (!r) return setHint(L("Quella carta non va al posto del jolly.", "That card doesn't fit where the joker stands."));
+    setSel([]);
+    setHint("");
+    commit(r);
+  };
 
   // ── local hand order ──────────────────────────────────────────────
   // How the cards are arranged is a per-device preference: it never leaves
@@ -13206,7 +13242,11 @@ function Scala({ room, gs, seat, mine, commit }) {
         <div key={c.id} style={{ marginLeft: i ? -14 : 0, position: "relative", borderRadius: 6, boxShadow: c.joker ? "0 0 0 2px #B8862B" : "none" }}>
           <S40Card card={c} w={30} h={44} />
           {c.joker && (
-            <span title={L("jolly — sostituibile con la carta che rappresenta","joker — swappable for the card it stands for")} style={{ position: "absolute", top: -6, right: -6, width: 15, height: 15, borderRadius: "50%", background: "#B8862B", color: "#fff", fontSize: 10, fontWeight: 800, lineHeight: "15px", textAlign: "center", boxShadow: "0 1px 2px rgba(18,18,18,0.35)" }}>⇄</span>
+            <span
+              onClick={opened && gs.phase === "meld" && mine ? (e) => { e.stopPropagation(); subJoker(m.id); } : undefined}
+              title={L("jolly — tocca con la carta naturale selezionata per riprenderlo", "joker — tap with the natural card selected to reclaim it")}
+              style={{ position: "absolute", top: -6, right: -6, width: 15, height: 15, borderRadius: "50%", background: "#B8862B", color: "#fff", fontSize: 10, fontWeight: 800, lineHeight: "15px", textAlign: "center", boxShadow: "0 1px 2px rgba(18,18,18,0.35)", cursor: opened && gs.phase === "meld" && mine ? "pointer" : "default" }}
+            >⇄</span>
           )}
         </div>
       ))}
