@@ -50,7 +50,7 @@ const EXPORTS = [
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
   "mergeSimSlots", "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "fl2Sectors", "fl2SectorOf", "FL2_QUAD", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision", "FL2_PIRATE_SPEED", "fl2Speed", "flotta2Mines", "flotta2MinesReady", "flotta2StartPlay", "flotta2BotMines", "FL2_MINES", "FL2_MINE_DMG", "FL2_MINE_R",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
-  "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40SubJoker", "s40Discard",
+  "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "s40CanAttach", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40SubJoker", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
 const modPath = join(dir, "rules.mjs");
@@ -1210,12 +1210,33 @@ function playScala() {
     }
     scalaCensus(g, "scala after meld");
     if (g.done) break;
-    const h = g.hands[seat];
-    if (!h.length) break;
-    const worst = h.slice().sort((a, b) => (b.joker ? 30 : b.v) - (a.joker ? 30 : a.v))[0];
-    const d = R.s40Discard(g, seat, worst.id);
-    if (!d) return fail("scala", "discard refused");
-    g = d.g;
+    if (!g.hands[seat].length) break;
+    // A card that attacks a table meld can't be shed — shed a card that doesn't.
+    // If every card attacks, lay them off until one is sheddable or the hand empties.
+    let guard = 0;
+    while (!g.done && g.hands[seat].length && guard++ < 40) {
+      const hand = g.hands[seat];
+      const shed = hand
+        .slice()
+        .sort((a, b) => (b.joker ? 30 : b.v) - (a.joker ? 30 : a.v))
+        .find((c) => !R.s40CanAttach(g, seat, c));
+      if (shed) {
+        const d = R.s40Discard(g, seat, shed.id);
+        if (!d) return fail("scala", "discard refused");
+        g = d.g;
+        break;
+      }
+      // all cards attack — lay one off
+      let laid = false;
+      for (const c of hand.slice()) {
+        for (const m of g.melds) {
+          const lo = R.s40LayOff(g, seat, c.id, m.id);
+          if (lo) { g = lo.g; laid = true; break; }
+        }
+        if (laid) break;
+      }
+      if (!laid) return fail("scala", "no sheddable card and no lay-off available");
+    }
     scalaCensus(g, "scala after discard");
   }
   if (g.done && (g.win == null || g.penalty == null)) fail("scala", "winner/penalty missing at end");
@@ -1280,6 +1301,23 @@ function s40MeldTests() {
   // once opened: forming a fresh meld with two hand cards is also enough
   const gOpenedRun = { opened: { A: true, B: false }, melds: [], discard: [D("d", "H", 7)], hands: { A: [D("a", "H", 5), D("b", "H", 6), D("c", "S", 2)], B: [] } };
   if (!R.s40CanUseDiscard(gOpenedRun, "A")) fail("scala discard gate", "once opened, 7H+5H,6H (a fresh run) must be takeable");
+
+  // "attacca" rule: a card that fits a table meld can't be discarded — it must be laid off.
+  const atkState = () => ({ phase: "meld", turn: "A", done: false, opened: { A: true, B: false },
+    melds: [{ id: "m", kind: "run", owner: "A", cards: [D("x", "H", 4), D("y", "H", 5), D("z", "H", 6)] }],
+    discard: [], deck: [], tally: { A: 0, B: 0 }, penalty: null, win: null, matchDone: false,
+    hands: { A: [D("a", "H", 7), D("b", "S", 2)], B: [D("o", "D", 9)] } });
+  if (R.s40CanAttach(atkState(), "A", D("a", "H", 7)) !== true) fail("scala attacca rule", "7H extends 4-5-6H, so it attacks");
+  if (R.s40CanAttach(atkState(), "A", D("b", "S", 2)) !== false) fail("scala attacca rule", "2S fits nothing on the table");
+  if (R.s40Discard(atkState(), "A", "a") !== null) fail("scala attacca rule", "7H attacks the run — discard must be refused");
+  if (R.s40Discard(atkState(), "A", "b") === null) fail("scala attacca rule", "2S attacks nothing — discard must be allowed");
+  // before opening, nothing can be attached, so even a fitting card discards freely
+  const preOpen = { ...atkState(), opened: { A: false, B: false } };
+  if (R.s40CanAttach(preOpen, "A", D("a", "H", 7)) !== false) fail("scala attacca rule", "before opening you can't attach, so 7H is shed-able");
+  if (R.s40Discard(preOpen, "A", "a") === null) fail("scala attacca rule", "before opening, 7H discard must be allowed");
+  // a joker is exempt from the rule
+  const jokerHand = { ...atkState(), hands: { A: [{ id: "a", joker: true }, D("b", "S", 2)], B: [] } };
+  if (R.s40CanAttach(jokerHand, "A", jokerHand.hands.A[0]) !== false) fail("scala attacca rule", "a joker is never forced off the hand");
 
   // joker substitution: give the exact card the joker stands for, get the joker back
   const JD = (id, s, v) => ({ id, joker: true, rep: { s, v } });

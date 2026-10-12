@@ -3129,11 +3129,22 @@ function s40SubJoker(gs, seat, meldId, cardId) {
   g.hands[seat] = g.hands[seat].filter((c) => c.id !== cardId).concat(freed);
   return { g, kind: "take", ev: { t: "subjoker" } };
 }
+// A natural card that would attach ("attaccare") to a meld already on the table
+// may NOT be discarded — you have to lay it off. Only bites once you've opened
+// (before that nothing can be attached). Jokers are exempt: a joker is never forced
+// out of the hand. Mirrors s40LayOff's legality exactly, so "can be laid off" and
+// "can't be discarded" are the same test.
+function s40CanAttach(gs, seat, card) {
+  if (!gs.opened[seat] || !card || card.joker) return false;
+  for (const m of gs.melds) if (analyzeMeld([...m.cards, card]).ok) return true;
+  return false;
+}
 function s40Discard(gs, seat, cardId) {
   const g = clone(gs);
   if (g.phase !== "meld" || g.turn !== seat || g.done) return null;
   const card = g.hands[seat].find((c) => c.id === cardId);
   if (!card) return null;
+  if (s40CanAttach(g, seat, card)) return null; // it attacks a meld — must be laid off, not discarded
   g.hands[seat] = g.hands[seat].filter((c) => c.id !== cardId);
   g.discard.push(card);
   if (g.hands[seat].length === 0) s40CheckOut(g, seat);
@@ -13056,6 +13067,20 @@ function Scala({ room, gs, seat, mine, commit }) {
   const opened = gs.opened[seat];
   const stagedTotal = staged.reduce((s, m) => s + m.value, 0);
 
+  // The single selected card and where it could attach. A natural card that fits a
+  // meld on the table MUST be laid off — the rule forbids discarding it — so its
+  // action button turns into "Attacca". If it fits more than one meld, the player
+  // picks which. A joker may still go anywhere (and is never forced off the hand).
+  const selOne = sel.length === 1 ? hand.find((c) => c.id === sel[0]) : null;
+  const attachTargets =
+    selOne && opened && gs.phase === "meld" && !selOne.joker
+      ? gs.melds.filter((m) => analyzeMeld([...m.cards, selOne]).ok).map((m) => m.id)
+      : [];
+  const mustAttach = attachTargets.length > 0; // selected card attacks → can't be discarded
+  const layTargetSet = new Set(
+    selOne && opened && gs.phase === "meld" ? (selOne.joker ? gs.melds.map((m) => m.id) : attachTargets) : []
+  );
+
   const toggle = (id) => {
     if (stagedIds.has(id)) return;
     setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -13220,14 +13245,22 @@ function Scala({ room, gs, seat, mine, commit }) {
     stageMeld(opts.length === 1 ? { [jid]: { s: opts[0].suit, v: opts[0].rank } } : undefined);
   };
   const doApri = () => (stagedTotal >= 40 ? commit(s40Open(gs, seat, staged)) : setHint(`${L("Ti servono 40 punti per aprire — sei a","You need 40 points to open — you're at")} ${stagedTotal}.`));
-  const doScarta = () =>
-    sel.length === 1 ? commit(s40Discard(gs, seat, sel[0])) : setHint(sel.length === 0 ? L("Tocca una carta, poi Scarta per finire il turno.","Tap a card, then Discard to end your turn.") : L("Per scartare seleziona una sola carta.","Select just one card to discard."));
+  // A card that attacks must be laid off — it can't be shed. If it fits exactly one
+  // meld, "Attacca" lays it there at once; if it fits several, pick which sequence.
+  const doAttacca = () => {
+    if (!mustAttach) return;
+    if (attachTargets.length === 1) return layOff(attachTargets[0]);
+    setHint(L("Attacca a più sequenze — tocca quella giusta.","It fits more than one meld — tap the one to lay it on."));
+  };
+  const doScarta = () => {
+    if (sel.length !== 1) return setHint(sel.length === 0 ? L("Tocca una carta, poi Scarta per finire il turno.","Tap a card, then Discard to end your turn.") : L("Per scartare seleziona una sola carta.","Select just one card to discard."));
+    if (mustAttach) return doAttacca(); // this card attacks a meld — it can only be laid off
+    commit(s40Discard(gs, seat, sel[0]));
+  };
 
-  const target = opened && sel.length === 1 && gs.phase === "meld";
-  // A selected card can always go straight onto the scarti — tap the pile to end the
-  // turn with it, even a card that could also attach to a meld. The lay-off is an
-  // offer, never a trap: you're never forced to attaccare a card you'd rather discard.
-  const placeDiscard = mine && gs.phase === "meld" && sel.length === 1;
+  // Tap the scarti to shed the selected card — but only a card that doesn't attack a
+  // meld (a card that attacca must be laid off, not discarded).
+  const placeDiscard = mine && gs.phase === "meld" && sel.length === 1 && !mustAttach;
   const acting = mine && !gs.done;
   // room for the floating action bar so the last cards never hide behind it
   const padBottom = gs.done ? 8 : acting && gs.phase === "meld" ? 168 : 96;
@@ -13236,11 +13269,13 @@ function Scala({ room, gs, seat, mine, commit }) {
   // it, yours below — and wrap down the page rather than scrolling sideways.
   const myMelds = gs.melds.filter((m) => m.owner === seat);
   const oppMelds = gs.melds.filter((m) => m.owner === opp);
-  const meldGroup = (m) => (
+  const meldGroup = (m) => {
+    const lay = layTargetSet.has(m.id);
+    return (
     <div
       key={m.id}
-      onClick={target ? () => layOff(m.id) : undefined}
-      style={{ display: "flex", padding: 4, borderRadius: 8, border: `1px solid ${target ? T.ink : "transparent"}`, cursor: target ? "pointer" : "default" }}
+      onClick={lay ? () => layOff(m.id) : undefined}
+      style={{ display: "flex", padding: 4, borderRadius: 8, border: `1px solid ${lay ? T.ink : "transparent"}`, cursor: lay ? "pointer" : "default" }}
     >
       {s40SortMeld(m.cards).map((c, i) => (
         <div key={c.id} style={{ marginLeft: i ? -14 : 0, position: "relative", borderRadius: 6, boxShadow: c.joker ? "0 0 0 2px #B8862B" : "none" }}>
@@ -13255,7 +13290,8 @@ function Scala({ room, gs, seat, mine, commit }) {
         </div>
       ))}
     </div>
-  );
+    );
+  };
   const meldArea = (melds, empty) => (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 12, rowGap: 10, padding: "6px 2px", minHeight: 54, alignItems: "center", justifyContent: melds.length ? "flex-start" : "center" }}>
       {melds.length ? melds.map(meldGroup) : <Micro style={{ padding: "12px 0" }}>{empty}</Micro>}
@@ -13295,7 +13331,7 @@ function Scala({ room, gs, seat, mine, commit }) {
       {/* your melds — your side of the deck */}
       {(myMelds.length > 0 || opened) && (
         <div style={{ borderTop: `1px solid ${T.line}`, paddingTop: 4 }}>
-          <Micro>{L("Le tue combinazioni","Your melds")}{target ? L(" · tocca per attaccare"," · tap to lay off") : ""}</Micro>
+          <Micro>{L("Le tue combinazioni","Your melds")}{layTargetSet.size ? L(" · tocca per attaccare"," · tap to lay off") : ""}</Micro>
           {meldArea(myMelds, "niente ancora")}
         </div>
       )}
@@ -13388,8 +13424,12 @@ function Scala({ room, gs, seat, mine, commit }) {
                     ? `${selMeld.kind === "set" ? L("tris","set") : L("scala","run")} ${L("valida ·","valid ·")} ${selMeld.value} ${L("punti","pts")}`
                     : !opened && staged.length > 0
                     ? `${L("apertura","opening")} ${stagedTotal}/40${stagedTotal < 40 ? L(" — aggiungi combinazioni"," — add more melds") : L(" — puoi aprire"," — you can open")}`
+                    : opened && mustAttach
+                    ? (attachTargets.length > 1
+                        ? L("Attacca a più sequenze — scegli quale","It fits more than one meld — pick which")
+                        : L("Questa carta attacca: va calata, non scartata","This card fits a meld: lay it off, you can't discard it"))
                     : opened && sel.length === 1
-                    ? L("tocca gli scarti per scartarla, o una combinazione per attaccarla","tap the discard pile to shed it, or a meld to lay it off")
+                    ? L("tocca gli scarti per scartarla, o cala una combinazione","tap the discard pile to shed it, or lay a meld")
                     : opened
                     ? L("cala una combinazione, o scarta una carta","lay a meld, or discard a card")
                     : L("componi almeno 40 punti per aprire","build at least 40 points to open")}
@@ -13412,8 +13452,8 @@ function Scala({ room, gs, seat, mine, commit }) {
                 )}
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", justifyContent: "space-between" }}>
-                <Button kind="line" full soft={sel.length !== 1} onClick={doScarta}>
-                  {L("Scarta","Discard")}
+                <Button kind="line" full soft={sel.length !== 1} onClick={mustAttach ? doAttacca : doScarta}>
+                  {mustAttach ? L("Attacca","Lay off") : L("Scarta","Discard")}
                 </Button>
                 {(sel.length > 0 || staged.length > 0) && (
                   <button
