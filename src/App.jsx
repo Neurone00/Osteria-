@@ -13224,6 +13224,10 @@ function Scala({ room, gs, seat, mine, commit }) {
     sel.length === 1 ? commit(s40Discard(gs, seat, sel[0])) : setHint(sel.length === 0 ? L("Tocca una carta, poi Scarta per finire il turno.","Tap a card, then Discard to end your turn.") : L("Per scartare seleziona una sola carta.","Select just one card to discard."));
 
   const target = opened && sel.length === 1 && gs.phase === "meld";
+  // A selected card can always go straight onto the scarti — tap the pile to end the
+  // turn with it, even a card that could also attach to a meld. The lay-off is an
+  // offer, never a trap: you're never forced to attaccare a card you'd rather discard.
+  const placeDiscard = mine && gs.phase === "meld" && sel.length === 1;
   const acting = mine && !gs.done;
   // room for the floating action bar so the last cards never hide behind it
   const padBottom = gs.done ? 8 : acting && gs.phase === "meld" ? 168 : 96;
@@ -13279,12 +13283,12 @@ function Scala({ room, gs, seat, mine, commit }) {
         </div>
         <div style={{ textAlign: "center" }}>
           <div
-            onClick={() => draw("discard")}
-            style={{ cursor: canTakeDiscard ? "pointer" : "default", display: "inline-block", outline: canTakeDiscard ? `2px solid ${T.ink}` : "none", outlineOffset: 3, borderRadius: 7, opacity: mine && gs.phase === "draw" && !canTakeDiscard ? 0.5 : 1 }}
+            onClick={placeDiscard ? doScarta : () => draw("discard")}
+            style={{ cursor: placeDiscard || canTakeDiscard ? "pointer" : "default", display: "inline-block", outline: placeDiscard || canTakeDiscard ? `2px solid ${T.ink}` : "none", outlineOffset: 3, borderRadius: 7, opacity: mine && gs.phase === "draw" && !canTakeDiscard ? 0.5 : 1 }}
           >
             {gs.discard.length ? <S40Card card={gs.discard[gs.discard.length - 1]} w={54} h={76} /> : <Ghost size="md" />}
           </div>
-          <Micro style={{ marginTop: 6 }}>scarti</Micro>
+          <Micro style={{ marginTop: 6 }}>{placeDiscard ? L("scarta qui","discard here") : "scarti"}</Micro>
         </div>
       </div>
 
@@ -13385,7 +13389,7 @@ function Scala({ room, gs, seat, mine, commit }) {
                     : !opened && staged.length > 0
                     ? `${L("apertura","opening")} ${stagedTotal}/40${stagedTotal < 40 ? L(" — aggiungi combinazioni"," — add more melds") : L(" — puoi aprire"," — you can open")}`
                     : opened && sel.length === 1
-                    ? L("scarta, o tocca una combinazione per attaccare","discard, or tap a meld to lay off")
+                    ? L("tocca gli scarti per scartarla, o una combinazione per attaccarla","tap the discard pile to shed it, or a meld to lay it off")
                     : opened
                     ? L("cala una combinazione, o scarta una carta","lay a meld, or discard a card")
                     : L("componi almeno 40 punti per aprire","build at least 40 points to open")}
