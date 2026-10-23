@@ -11607,10 +11607,18 @@ function Flotta2({ room, gs, seat, mine, commit, onExit, onAgain, solo, onFlip, 
   const minesSeen = gs.bombe && gs.mines[foeSeat] && !laying ? gs.mines[foeSeat].filter((m) => (gs.done ? true : myShips.some((s) => fl2Dist(s, m) <= FL2_MINE_DETECT))) : [];
 
   useEffect(() => {
-    const measure = () => { const el = wrapRef.current; if (el) setBox({ w: el.clientWidth, h: el.clientHeight }); };
+    const el = wrapRef.current;
+    if (!el) return;
+    // Measure the scope wrapper itself, not just the window: its height changes on
+    // its own (menu opening, banners, the mobile URL bar) without a window resize,
+    // and if the canvas buffer lags that, the round sea renders oval. A ResizeObserver
+    // keeps box — and so the pixel buffer — square with the element at all times.
+    const measure = () => setBox({ w: el.clientWidth, h: el.clientHeight });
     measure();
+    let ro;
+    if (typeof ResizeObserver !== "undefined") { ro = new ResizeObserver(measure); ro.observe(el); }
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
+    return () => { if (ro) ro.disconnect(); window.removeEventListener("resize", measure); };
   }, []);
 
   // auto-layout ships across a sector's ring (octant on modern, quadrant on pirate)
