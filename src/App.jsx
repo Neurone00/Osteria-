@@ -7144,29 +7144,27 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     return (
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={L("Al tavolo", "At the table")} lang={lang} setLang={setLang} />
+        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={L("Al tavolo", "At the table")} lang={lang} setLang={setLang} onShare={() => share(room.code)} />
         {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
         <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
         <div className="fade">
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-            <div>
-              <Micro>{L("Codice tavolo", "Table code")}</Micro>
-              <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
+            {/* the code tiles are the share control — tap them to send the link */}
+            <button onClick={() => share(room.code)} style={{ ...plain, textAlign: "left", cursor: "pointer" }}>
+              <Micro>{L("Codice · tocca per condividere", "Code · tap to share")}</Micro>
+              <div style={{ display: "flex", gap: 5, marginTop: 6, alignItems: "center" }}>
                 {room.code.split("").map((ch, i) => (
                   <div key={i} style={{ ...codeTile, width: 34, height: 44, fontSize: 19 }}>
                     {ch}
                   </div>
                 ))}
+                <Ico n="share" s={15} c={T.ink30} style={{ marginLeft: 5 }} />
               </div>
-            </div>
-            {seated ? (
-              <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6 }}>
+            </button>
+            {seated && (
+              <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6, alignSelf: "center" }}>
                 {room.names.B} {L("è al tavolo", "is at the table")}
               </Micro>
-            ) : (
-              <button onClick={() => share(room.code)} style={{ ...sharePill, alignSelf: "center" }}>
-                {L("Condividi link", "Share link")}
-              </button>
             )}
           </div>
 
@@ -7223,7 +7221,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     return (
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={L("Prepara il mazzo", "Prepare the deck")} />
+        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={L("Prepara il mazzo", "Prepare the deck")} onShare={() => share(room.code)} />
         {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
         <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
         <Prepare
@@ -7246,7 +7244,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     <Frame jolt={jolt}>
       <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
       {/* Flotta 2 is a full-screen sonar console with its own chrome — skip the standard header/solo bar */}
-      {room.game !== "flotta2" && <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} />}
+      {room.game !== "flotta2" && <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} onShare={() => share(room.code)} />}
       {solo && room.game !== "flotta2" && room.opts.mode !== "1p" && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
       <EndGameOverlay room={room} seat={seat} onAgree={agreeEnd} onDecline={declineEnd} onCancel={declineEnd} />
       <FinaleModal show={gs.done && room.game !== "flotta2" && !finaleHold} decided={decided} outcome={outcome} room={room} gs={gs} seat={seat} onAgain={again} onExit={toGames} />
@@ -7339,36 +7337,45 @@ function Frame({ children, jolt }) {
   );
 }
 
-function Head({ room, link, onLeave, onReconnect, title, sound, setSound, lang, setLang }) {
+function Head({ room, link, onLeave, onReconnect, title, sound, setSound, lang, setLang, onShare }) {
+  // status is a colour dot, not a word; the four-letter code tucks under the title
+  // and is itself the share control (tap to send the link). Sound and exit are icons.
+  const dotC = link === "live" ? "#3A7D4A" : link === "waiting" ? "#B8862B" : T.ink30;
+  const dotT = link === "live" ? L("connesso", "connected") : link === "waiting" ? L("in attesa", "waiting") : L("disconnesso", "offline");
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
+        gap: 12,
         paddingBottom: 12,
         borderBottom: `1px solid ${T.line}`,
         marginBottom: 16,
       }}
     >
-      <div>
-        <Micro>
-          {room.code} · {link === "live" ? L("connesso", "connected") : link === "waiting" ? L("in attesa", "waiting") : L("disconnesso", "offline")}
-        </Micro>
-        <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em", marginTop: 2, fontFamily: BRAND }}>{title}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+        <span title={dotT} style={{ width: 8, height: 8, borderRadius: "50%", background: dotC, flexShrink: 0 }} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em", fontFamily: BRAND, lineHeight: 1.05, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
+          <button onClick={onShare} disabled={!onShare} style={{ ...plain, marginTop: 2, display: "inline-flex", alignItems: "center", gap: 5, cursor: onShare ? "pointer" : "default" }}>
+            <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.08em", color: T.ink60 }}>{room.code}</span>
+            {onShare && <Ico n="share" s={12} c={T.ink30} />}
+          </button>
+        </div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
         {link === "lost" && (
           <button onClick={() => (onReconnect ? onReconnect() : window.location.reload())} style={{ ...plain, color: T.ink, fontWeight: 700 }}>
             {L("Riconnetti", "Reconnect")}
           </button>
         )}
         {setLang && <LangPill lang={lang} setLang={setLang} />}
-        <button onClick={() => setSound(!sound)} style={plain}>
-          {sound ? L("Audio on", "Sound on") : L("Audio off", "Sound off")}
+        <button onClick={() => setSound(!sound)} aria-label={sound ? L("Audio acceso", "Sound on") : L("Audio spento", "Sound off")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}>
+          <Ico n={sound ? "sound" : "mute"} s={18} />
         </button>
-        <button onClick={onLeave} style={plain}>
-          {L("Esci", "Exit")}
+        <button onClick={onLeave} aria-label={L("Esci", "Exit")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}>
+          <Ico n="exit" s={18} />
         </button>
       </div>
     </div>
