@@ -10057,7 +10057,10 @@ function Assolo({ room, gs, seat, mine, commit }) {
           {who(room, opp)}
           {oppCount === 1 && <span style={{ marginLeft: 8, fontFamily: MONO, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#B8862B", border: "1px solid #B8862B", borderRadius: 999, padding: "1px 7px" }}>Assolo!</span>}
         </div>
-        <Micro>{oppCount} {oppCount === 1 ? L("carta", "card") : L("carte", "cards")}</Micro>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Micro>{oppCount} {oppCount === 1 ? L("carta", "card") : L("carte", "cards")}</Micro>
+          <button onClick={() => setShowHelp(true)} aria-label={L("Come si gioca", "How to play")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}><Ico n="help" s={17} /></button>
+        </div>
       </div>
       <div style={{ display: "flex", gap: 3, marginTop: 6, minHeight: 30, overflow: "hidden" }}>
         {Array.from({ length: Math.min(oppCount, 12) }).map((_, i) => <AsBack key={i} w={20} />)}
@@ -10101,12 +10104,7 @@ function Assolo({ room, gs, seat, mine, commit }) {
         </div>
       </div>
 
-      <div style={{ textAlign: "center", minHeight: 18 }}>
-        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-          <Ico n="help" s={14} /> {L("come si gioca", "how to play")}
-        </button>
-      </div>
-      <p style={{ textAlign: "center", color: T.ink60, fontSize: 13, margin: "6px 0 0", minHeight: 16 }}>{statusText}</p>
+      <p style={{ textAlign: "center", color: T.ink60, fontSize: 13, margin: "10px 0 0", minHeight: 16 }}>{statusText}</p>
 
       {/* your hand — auto-sorted by colour and wrapped over rows (never side-scrolls).
           Only THIS area scrolls, vertically, so the deck and discard stay pinned above
@@ -10166,28 +10164,14 @@ function Assolo({ room, gs, seat, mine, commit }) {
         </Sheet>
       )}
 
-      {/* fixed action bar — draw / pass, out of the way of the hand */}
-      <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 60, display: "flex", alignItems: "center", gap: 10, padding: "10px 16px calc(12px + env(safe-area-inset-bottom))", background: `linear-gradient(to top, ${T.bg} 62%, rgba(231,229,224,0))` }}>
-        <button onClick={() => setShowHelp(true)} aria-label={L("Aiuto", "Help")} style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center", background: T.paper, color: T.ink, border: `1px solid ${T.line}`, borderRadius: 999, width: 40, height: 40, boxShadow: "0 6px 18px rgba(18,18,18,0.12)", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
-          <Ico n="help" s={16} />
-        </button>
-        <div style={{ flex: 1, display: "flex", justifyContent: "center", minWidth: 0 }}>
-          {gs.done ? (
-            <Micro>{gs.win === seat ? L("Hai vinto", "You won") : L("Ha vinto", "Winner:") + " " + who(room, gs.win)}</Micro>
-          ) : !mine ? (
-            <Micro>{L("tocca a", "waiting for")} {who(room, opp)}</Micro>
-          ) : legal.canPass ? (
-            <Button onClick={() => commit(assoloPass(gs, seat))}>{L("Passa", "Pass")}</Button>
-          ) : legal.canDraw && legal.playable.length === 0 ? (
-            <Micro>{gs.pending > 0 ? `${L("tocca il pozzo: pesca", "tap the pile: draw")} ${gs.pending}` : L("tocca il pozzo per pescare", "tap the pile to draw")}</Micro>
-          ) : legal.playable.length ? (
-            <Micro>{L("gioca una carta", "play a card")}</Micro>
-          ) : (
-            <Micro />
-          )}
+      {/* the bar appears only to hold a real action — Passa, after you draw a playable
+          card. Everything the old bar repeated (status, the draw hint, the help icon)
+          lives once now: the status line above, the glowing pile, the ? by the opponent. */}
+      {mine && !gs.done && legal.canPass && (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 60, display: "flex", justifyContent: "center", padding: "10px 16px calc(12px + env(safe-area-inset-bottom))", background: `linear-gradient(to top, ${T.bg} 62%, rgba(231,229,224,0))` }}>
+          <Button onClick={() => commit(assoloPass(gs, seat))}>{L("Passa", "Pass")}</Button>
         </div>
-        <div style={{ flexShrink: 0, width: 40 }} aria-hidden="true" />
-      </div>
+      )}
     </div>
     {flashOverlay}
     {callOverlay}
