@@ -9747,6 +9747,7 @@ function Perudo({ room, gs, seat, mine, commit }) {
   const opp = other(seat);
   const [bidQty, setBidQty] = useState(1);
   const [bidFace, setBidFace] = useState(2);
+  const [showHelp, setShowHelp] = useState(false);
   const rolled = gs.rolled[seat];
   const canRoll = gs.phase === "roll" && mine && !rolled;
   const tapRoll = (seed) => {
@@ -9766,9 +9767,30 @@ function Perudo({ room, gs, seat, mine, commit }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink }}>
+            {[
+              [L("Punta", "Bid"), L("dichiari quante facce di un numero ci sono in tutto — tutti i dadi, anche i coperti", "call how many of a face there are in total — every die, the hidden ones too")],
+              [L("Gli 1", "The 1s"), L("sono jolly: contano per qualsiasi numero", "are wild: they count as any face")],
+              [L("Rilancia", "Raise"), L("alza la quantità, o la stessa quantità su una faccia più alta", "raise the quantity, or the same quantity on a higher face")],
+              [L("Dubito!", "Liar!"), L("se non ci credi si scopre tutto: se la puntata regge perdi un dado, se no lo perde chi puntava", "if you don't buy it all dice show: if the bid holds you lose a die, otherwise the bidder does")],
+              [L("Vinci", "Win"), L("resti l'ultimo con dei dadi", "be the last player with any dice")],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0" }}>
+                <span style={{ fontWeight: 700, minWidth: 78, color: T.ink }}>{k}</span>
+                <span style={{ color: T.ink60 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Sheet>
+      )}
       {/* opponent packet */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
+          <button onClick={() => setShowHelp(true)} aria-label={L("Come si gioca", "How to play")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}><Ico n="help" s={16} /></button>
+        </div>
         <div style={{ display: "flex", gap: 4 }}>
           {Array.from({ length: gs.counts[opp] }).map((_, i) => (
             <Die key={i} hidden size={26} />
@@ -9852,12 +9874,10 @@ function Perudo({ room, gs, seat, mine, commit }) {
                 <button onClick={() => setBidQty((q) => Math.min(total, q + 1))} style={stepBtn}>
                   +
                 </button>
-                <span style={{ color: T.ink60 }}>×</span>
-                <Die v={bidFace} size={34} />
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <Button full disabled={!legal} onClick={() => commit(perudoBid(gs, seat, bidQty, bidFace))}>
-                  {L("Rilancia","Raise")}
+                  {L("Rilancia","Raise")} · {bidQty}×{bidFace}
                 </Button>
                 {gs.bid && (
                   <Button kind="line" onClick={() => commit(perudoDoubt(gs, seat))}>
