@@ -9368,6 +9368,17 @@ function Tactics({ room, gs, seat, commit }) {
       {/* status + actions */}
       <div style={{ marginTop: 10, textAlign: "center", minHeight: 22 }}>
         <div key={status} className="swap" style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15 }}>{status}</div>
+        {/* the selected unit's reach, kept in view while you move it: move (compass) + hit range (target) */}
+        {gs.phase === "battle" && unit && (() => {
+          const sp = TACT.units[unit.type];
+          return (
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 13, marginTop: 7, padding: "3px 12px", borderRadius: 999, border: `1px solid ${T.line}`, background: T.paper }}>
+              <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 12.5, color: me }}>{sp.name}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: BRAND, fontWeight: 700, fontSize: 12.5 }} title={L("mosse", "move")}><Ico n="compass" s={13} /> {sp.move}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: BRAND, fontWeight: 700, fontSize: 12.5 }} title={L("colpo", "hit")}><Ico n="target" s={13} /> {sp.min === sp.rng ? sp.rng : `${sp.min}–${sp.rng}`}</span>
+            </div>
+          );
+        })()}
       </div>
 
       {/* tap any element for info: a unit's card, or what a keep/fountain/flag does */}
