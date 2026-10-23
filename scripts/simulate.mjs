@@ -50,7 +50,7 @@ const EXPORTS = [
   "dealFlotta2", "flotta2Order", "flotta2Resolve", "flotta2Ready", "flotta2Seen", "FL2_UNITS", "FL2_FLEET", "FL2_R", "FL2_RADAR_EVERY",
   "mergeSimSlots", "flotta2Deploy", "flotta2DeployReady", "flotta2Begin", "fl2InZone", "FL2_ZONES", "FL2_NODEPLOY", "FL2_MAX_TURNS", "FL2_WEAPON", "FL2_SCAN_LEN", "FL2_SCAN_W", "fl2ScanEnd", "fl2SegDist", "fl2Spawn", "flotta2Bot", "flotta2BotDeploy", "FL2_ZONES_PIRATE", "fl2ZonesFor", "fl2Sectors", "fl2SectorOf", "FL2_QUAD", "FL2_WIND_EVERY", "fl2WindFactor", "FL2_PIRATE_SIGHT", "fl2Vision", "FL2_PIRATE_SPEED", "fl2Speed", "flotta2Mines", "flotta2MinesReady", "flotta2StartPlay", "flotta2BotMines", "FL2_MINES", "FL2_MINE_DMG", "FL2_MINE_R",
   "dealParoliere", "parolReady", "parolShake", "parolSubmit", "parolTrace", "parolBoard", "parolBoardSeeded", "parolPoints", "PAROL_N", "PAROL_SHAKES",
-  "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "s40CanAttach", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40SubJoker", "s40Discard",
+  "makeS40Deck", "analyzeMeld", "s40JokerRuns", "s40CanUseDiscard", "s40CanAttach", "s40Stranded", "dealScala", "s40Draw", "s40Open", "s40Meld", "s40LayOff", "s40SubJoker", "s40Discard",
 ];
 const dir = mkdtempSync(join(tmpdir(), "osteria-"));
 const modPath = join(dir, "rules.mjs");
@@ -1211,32 +1211,15 @@ function playScala() {
     scalaCensus(g, "scala after meld");
     if (g.done) break;
     if (!g.hands[seat].length) break;
-    // A card that attacks a table meld can't be shed — shed a card that doesn't.
-    // If every card attacks, lay them off until one is sheddable or the hand empties.
-    let guard = 0;
-    while (!g.done && g.hands[seat].length && guard++ < 40) {
-      const hand = g.hands[seat];
-      const shed = hand
-        .slice()
-        .sort((a, b) => (b.joker ? 30 : b.v) - (a.joker ? 30 : a.v))
-        .find((c) => !R.s40CanAttach(g, seat, c));
-      if (shed) {
-        const d = R.s40Discard(g, seat, shed.id);
-        if (!d) return fail("scala", "discard refused");
-        g = d.g;
-        break;
-      }
-      // all cards attack — lay one off
-      let laid = false;
-      for (const c of hand.slice()) {
-        for (const m of g.melds) {
-          const lo = R.s40LayOff(g, seat, c.id, m.id);
-          if (lo) { g = lo.g; laid = true; break; }
-        }
-        if (laid) break;
-      }
-      if (!laid) return fail("scala", "no sheddable card and no lay-off available");
-    }
+    // End on a discard. A card that attacks a table meld can't normally be shed, so
+    // prefer a non-attacking card; if the whole hand attacks (a stranded hand), the
+    // engine lets you shed one anyway to close — so a worst-card fallback always works.
+    const byWorst = (a, b) => (b.joker ? 30 : b.v) - (a.joker ? 30 : a.v);
+    const sorted = g.hands[seat].slice().sort(byWorst);
+    const shed = sorted.find((c) => !R.s40CanAttach(g, seat, c)) || sorted[0];
+    const d = R.s40Discard(g, seat, shed.id);
+    if (!d) return fail("scala", "discard refused");
+    g = d.g;
     scalaCensus(g, "scala after discard");
   }
   if (g.done && (g.win == null || g.penalty == null)) fail("scala", "winner/penalty missing at end");
@@ -1318,6 +1301,22 @@ function s40MeldTests() {
   // a joker is exempt from the rule
   const jokerHand = { ...atkState(), hands: { A: [{ id: "a", joker: true }, D("b", "S", 2)], B: [] } };
   if (R.s40CanAttach(jokerHand, "A", jokerHand.hands.A[0]) !== false) fail("scala attacca rule", "a joker is never forced off the hand");
+
+  // keep-a-discard guard: a cala / lay-off that would leave only attacca-cards is refused.
+  // Hand: three kings (a tris to cala) + a lone 7H that attacks 4-5-6H. Calare the kings
+  // would strand the 7H with no card to discard → the meld must be refused.
+  const strandState = () => ({ phase: "meld", turn: "A", done: false, opened: { A: true, B: false },
+    melds: [{ id: "m", kind: "run", owner: "A", cards: [D("x", "H", 4), D("y", "H", 5), D("z", "H", 6)] }],
+    discard: [], deck: [], tally: { A: 0, B: 0 }, penalty: null, win: null, matchDone: false,
+    hands: { A: [D("ka", "H", 13), D("kb", "S", 13), D("kc", "C", 13), D("a", "H", 7)], B: [D("o", "D", 9)] } });
+  if (R.s40Meld(strandState(), "A", ["ka", "kb", "kc"]) !== null) fail("scala keep-a-discard", "calare the kings strands the 7H — must be refused");
+  // but if the 7H weren't there (a spare 2S to discard), the same cala is fine
+  const okState = { ...strandState(), hands: { A: [D("ka", "H", 13), D("kb", "S", 13), D("kc", "C", 13), D("a", "S", 2)], B: [] } };
+  if (R.s40Meld(okState, "A", ["ka", "kb", "kc"]) === null) fail("scala keep-a-discard", "with a 2S to spare, calare the kings is allowed");
+  // last resort: if the WHOLE hand attacks, you may shed one to close (never deadlock)
+  const allAtk = { ...atkState(), hands: { A: [D("a", "H", 7), D("c", "H", 3)], B: [] } };
+  if (R.s40Stranded(allAtk, "A") !== true) fail("scala keep-a-discard", "7H and 3H both extend 4-5-6H — the hand is stranded");
+  if (R.s40Discard(allAtk, "A", "a") === null) fail("scala keep-a-discard", "a stranded hand may shed a card to close");
 
   // joker substitution: give the exact card the joker stands for, get the joker back
   const JD = (id, s, v) => ({ id, joker: true, rep: { s, v } });

@@ -3069,6 +3069,7 @@ function s40Open(gs, seat, melds) {
   for (const l of laid) g.melds.push({ id: "m" + g.melds.length + seat, cards: l.cards, kind: l.kind, owner: seat });
   g.opened[seat] = true;
   s40CheckOut(g, seat);
+  if (!g.done && s40Stranded(g, seat)) return null; // opening can't leave you with only attacca-cards and no discard
   return { g, kind: "scopa", ev: { t: "open", value } };
 }
 // Pin the chosen value onto a joker before analysis, so the melded card
@@ -3089,6 +3090,7 @@ function s40Meld(gs, seat, ids, reps) {
   g.hands[seat] = g.hands[seat].filter((c) => !set.has(c.id));
   g.melds.push({ id: "m" + g.melds.length + seat, cards, kind: a.kind, owner: seat });
   s40CheckOut(g, seat);
+  if (!g.done && s40Stranded(g, seat)) return null; // can't cala into a corner with no card left to discard
   return { g, kind: "lay", ev: { t: "meld" } };
 }
 function s40LayOff(gs, seat, cardId, meldId, rep) {
@@ -3104,6 +3106,7 @@ function s40LayOff(gs, seat, cardId, meldId, rep) {
   meld.kind = a.kind;
   g.hands[seat] = g.hands[seat].filter((c) => c.id !== cardId);
   s40CheckOut(g, seat);
+  if (!g.done && s40Stranded(g, seat)) return null; // can't lay off into a corner with no card left to discard
   return { g, kind: "take", ev: { t: "layoff" } };
 }
 // Reclaim a joker from a meld (yours or the opponent's) by putting the exact natural
@@ -3139,12 +3142,21 @@ function s40CanAttach(gs, seat, card) {
   for (const m of gs.melds) if (analyzeMeld([...m.cards, card]).ok) return true;
   return false;
 }
+// Holding cards but none you may discard. Once opened, a card that attacks a meld
+// can't be shed (s40CanAttach), so if EVERY card left attacks there is no legal scarto
+// to end the turn. A cala / lay-off that would leave you here is refused — you must
+// keep a card to discard. The sole escape: when the whole hand already attacks (you
+// drew into it) you may shed one anyway to close, so the hand can never deadlock.
+function s40Stranded(g, seat) {
+  const hand = g.hands[seat];
+  return hand.length > 0 && hand.every((c) => s40CanAttach(g, seat, c));
+}
 function s40Discard(gs, seat, cardId) {
   const g = clone(gs);
   if (g.phase !== "meld" || g.turn !== seat || g.done) return null;
   const card = g.hands[seat].find((c) => c.id === cardId);
   if (!card) return null;
-  if (s40CanAttach(g, seat, card)) return null; // it attacks a meld — must be laid off, not discarded
+  if (s40CanAttach(g, seat, card) && !s40Stranded(g, seat)) return null; // attacks a meld — lay it off, not shed (unless the whole hand attacks, then shed to close)
   g.hands[seat] = g.hands[seat].filter((c) => c.id !== cardId);
   g.discard.push(card);
   if (g.hands[seat].length === 0) s40CheckOut(g, seat);
