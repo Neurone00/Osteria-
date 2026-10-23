@@ -4931,6 +4931,7 @@ function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
     ),
     plus: <path {...P} d="M12 5v14M5 12h14" />,
     minus: <path {...P} d="M5 12h14" />,
+    chev: <path {...P} d="M6 9l6 6 6-6" />,
     recenter: (
       <>
         <circle {...P} cx="12" cy="12" r="3" />
@@ -5741,6 +5742,7 @@ export default function App() {
 function Game({ french, setFrench, savedRules, setGameRules, name, setName, showScores, setShowScores, lang, setLang }) {
   const [screen, setScreen] = useState("home");
   const [codeIn, setCodeIn] = useState("");
+  const [showMore, setShowMore] = useState(false); // home: reveal the manual code / host paths tucked under Bump
   const [seat, setSeat] = useState("A");
   const [room, setRoom] = useState(null);
   const [msg, setMsg] = useState("");
@@ -6957,19 +6959,20 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                     </Button>
                   </div>
                   <Micro style={{ textAlign: "center", marginTop: 8 }}>{L("Vicini, offline — toccate Bump insieme, il primo ospita", "Nearby, offline — both tap Bump, the first one hosts")}</Micro>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
-                    <div style={{ flex: 1, height: 1, background: T.line }} />
-                    <Micro>{L("oppure a mano", "or by hand")}</Micro>
-                    <div style={{ flex: 1, height: 1, background: T.line }} />
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <Button kind="line" full onClick={openTableNative}>
-                      {L("Ospita", "Host")}
-                    </Button>
-                    <Button kind="line" full onClick={joinTableNative}>
-                      {L("Entra", "Join")}
-                    </Button>
-                  </div>
+                  {showMore ? (
+                    <div className="fade" style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                      <Button kind="line" full onClick={openTableNative}>
+                        {L("Ospita", "Host")}
+                      </Button>
+                      <Button kind="line" full onClick={joinTableNative}>
+                        {L("Entra", "Join")}
+                      </Button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setShowMore(true)} style={{ ...plain, display: "flex", width: "fit-content", alignItems: "center", gap: 6, margin: "14px auto 0", color: T.ink, fontWeight: 600, fontSize: 13 }}>
+                      {L("Oppure a mano", "Or by hand")} <Ico n="chev" s={14} c={T.ink30} />
+                    </button>
+                  )}
                 </>
               ) : (
                 <>
@@ -6982,25 +6985,29 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
                       </span>
                     </Button>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 2px" }}>
-                    <div style={{ flex: 1, height: 1, background: T.line }} />
-                    <Micro>{L("oppure", "or")}</Micro>
-                    <div style={{ flex: 1, height: 1, background: T.line }} />
-                  </div>
-                  <Button kind="line" full onClick={() => openTable()}>
-                    {L("Apri un tavolo", "Open a table")}
-                  </Button>
-                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                    <input
-                      value={codeIn}
-                      onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
-                      placeholder={L("CODICE", "CODE")}
-                      style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: MONO, fontSize: 18, minWidth: 0 }}
-                    />
-                    <Button kind="line" onClick={() => joinTable()}>
-                      {L("Entra", "Join")}
-                    </Button>
-                  </div>
+                  <Micro style={{ textAlign: "center", marginTop: 8 }}>{L("Avvicinate i telefoni e toccate Bump insieme", "Bring the phones close and tap Bump together")}</Micro>
+                  {showMore || codeIn ? (
+                    <div className="fade" style={{ marginTop: 14 }}>
+                      <Button kind="line" full onClick={() => openTable()}>
+                        {L("Apri un tavolo", "Open a table")}
+                      </Button>
+                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                        <input
+                          value={codeIn}
+                          onChange={(e) => setCodeIn(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4))}
+                          placeholder={L("CODICE", "CODE")}
+                          style={{ ...field, textAlign: "center", letterSpacing: "0.4em", fontFamily: MONO, fontSize: 18, minWidth: 0 }}
+                        />
+                        <Button kind="line" onClick={() => joinTable()}>
+                          {L("Entra", "Join")}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button onClick={() => setShowMore(true)} style={{ ...plain, display: "flex", width: "fit-content", alignItems: "center", gap: 6, margin: "14px auto 0", color: T.ink, fontWeight: 600, fontSize: 13 }}>
+                      {L("Usa un codice", "Use a code")} <Ico n="chev" s={14} c={T.ink30} />
+                    </button>
+                  )}
                 </>
               )
             ) : (
