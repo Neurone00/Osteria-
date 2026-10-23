@@ -7965,6 +7965,7 @@ function Die({ v, size = 46, hidden, hi, on, onClick, roll }) {
 function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showScores }) {
   const isScopa = scopaLike(room.game);
   const o = room.opts;
+  const [showHelp, setShowHelp] = useState(false);
 
   const play = (card) => {
     if (!mine) return;
@@ -7990,6 +7991,30 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
       {isScopa && <CaptureReveal room={room} seat={seat} />}
       {!isScopa && <RubatoFlash room={room} />}
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink }}>
+            {(isScopa
+              ? [
+                  [L("Presa", "Capture"), L("prendi una carta di pari valore, oppure una somma di carte", "take a card of equal value, or a sum of cards")],
+                  [L("Scopa", "Scopa"), L("svuoti il tavolo in una presa: +1 punto", "clear the table in one take: +1 point")],
+                  [L("Settebello", "Settebello"), L("il 7 di denari vale un punto", "the 7 of coins is worth a point")],
+                  [L("Fine mano", "End of hand"), L("un punto a chi ha più carte, più denari, più settanta (primiera)", "a point each for most cards, most coins, and the primiera")],
+                ]
+              : [
+                  [L("Prendi", "Take"), L("gioca una carta uguale a quella in cima alla pila per prenderla", "play a card matching the top of the pile to take it")],
+                  [L("Ruba il mazzo", "Steal the pile"), L("se la tua carta prende la cima della pila avversaria, rubi tutta la pila", "if your card takes the top of the other pile, you steal the whole pile")],
+                  [L("Vince", "Winner"), L("chi resta con più carte a fine mano", "whoever holds more cards at the end")],
+                ]
+            ).map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0" }}>
+                <span style={{ fontWeight: 700, minWidth: 92, color: T.ink }}>{k}</span>
+                <span style={{ color: T.ink60 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Sheet>
+      )}
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div>
@@ -8003,10 +8028,13 @@ function Board({ room, gs, seat, opp, mine, slamId, pick, setPick, commit, showS
             </Micro>
           )}
         </div>
-        <div style={{ display: "flex", gap: 3 }}>
-          {gs.hands[opp].map((c) => (
-            <Back key={c.id} size="xs" />
-          ))}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", gap: 3 }}>
+            {gs.hands[opp].map((c) => (
+              <Back key={c.id} size="xs" />
+            ))}
+          </div>
+          <button onClick={() => setShowHelp(true)} aria-label={L("Come si gioca", "How to play")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}><Ico n="help" s={16} /></button>
         </div>
       </div>
 
@@ -8290,6 +8318,7 @@ function PeppaHand({ cards, faceUp, mode, offerId, onReorder, onOffer, onDraw, s
 
 function Peppa({ room, gs, seat, mine, slamId, commit }) {
   const opp = other(seat);
+  const [showHelp, setShowHelp] = useState(false);
   const done = gs.done;
   const holder = other(gs.turn); // the player being drawn from this round
   const iAmDrawer = gs.turn === seat && !done;
@@ -8322,10 +8351,30 @@ function Peppa({ room, gs, seat, mine, slamId, commit }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink }}>
+            {[
+              [L("Coppie", "Pairs"), L("scarti subito ogni coppia di carte di pari valore", "shed every pair of equal-value cards straight away")],
+              [L("Pesca", "Draw"), L("a turno peschi una carta coperta dalla mano dell'altro", "take turns drawing a face-down card from the other's hand")],
+              [L("La Peppa", "The Peppa"), L("una carta resta sempre spaiata: è la Peppa", "one card is always left unpaired — the Peppa")],
+              [L("Perde", "Lose"), L("chi resta con la Peppa quando tutto il resto è scartato", "whoever holds the Peppa once everything else is gone")],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0" }}>
+                <span style={{ fontWeight: 700, minWidth: 80, color: T.ink }}>{k}</span>
+                <span style={{ color: T.ink60 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Sheet>
+      )}
       {/* opponent's hand (face-down): you draw from it on your beat, and watch it
           move as they arrange */}
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
+          <button onClick={() => setShowHelp(true)} aria-label={L("Come si gioca", "How to play")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}><Ico n="help" s={16} /></button>
+        </div>
         <Micro>{gs.hands[opp].length} in mano · {gs.shed[opp]} scartate</Micro>
       </div>
       <PeppaHand
@@ -9478,6 +9527,7 @@ function Tactics({ room, gs, seat, commit }) {
 /* ── straccia camicia ── */
 function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
   const opp = other(seat);
+  const [showHelp, setShowHelp] = useState(false);
   const shown = gs.center.slice(-5);
   const attack = room.opts.intl ? "A 4 · R 3 · C 2 · F 1" : L("A 1 · 2 due · 3 tre", "A 1 · 2 two · 3 three");
   const flip = () => {
@@ -9509,9 +9559,30 @@ function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100dvh - 132px)" }}>
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink }}>
+            {[
+              [L("Gira", "Flip"), L("a turno girate una carta dal vostro mazzo in mezzo", "take turns flipping a card from your deck to the middle")],
+              [L("Attacco", "Attack"), L("asso, due e tre fanno attaccare: l'altro paga 1, 2 o 3 carte", "ace, two and three attack: the other pays 1, 2 or 3 cards")],
+              [L("Paga", "Pay"), L("se tra le carte pagate esce un altro attacco, tocca all'altro pagare", "if another attack turns up while paying, the other player must pay")],
+              [L("Prendi", "Take"), L("chi finisce di pagare senza nuovi attacchi lascia tutto il mucchio a chi ha attaccato", "finish paying with no new attack and the attacker takes the whole pile")],
+              [L("Perde", "Lose"), L("chi resta senza carte", "whoever runs out of cards")],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0" }}>
+                <span style={{ fontWeight: 700, minWidth: 72, color: T.ink }}>{k}</span>
+                <span style={{ color: T.ink60 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Sheet>
+      )}
       {/* opponent packet */}
       <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
-        <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, fontFamily: BRAND }}>{who(room, opp)}</div>
+          <button onClick={() => setShowHelp(true)} aria-label={L("Come si gioca", "How to play")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}><Ico n="help" s={16} /></button>
+        </div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
           <Micro>{gs.decks[opp].length}</Micro>
           <DeckBox n={gs.decks[opp].length} size="sm" live={!mine && !gs.done} />
@@ -9606,6 +9677,7 @@ function Camicia({ room, gs, seat, mine, slamId, commit, showScores }) {
 /* ── briscola ── */
 function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
   const french = useContext(SuitCtx);
+  const [showHelp, setShowHelp] = useState(false);
   const play = (card) => {
     if (mine) commit(briscolaPlay(gs, seat, card.id));
   };
@@ -9659,9 +9731,29 @@ function Briscola({ room, gs, seat, opp, mine, slamId, commit, showScores }) {
           <Card card={gs.briscola} size="xl" rot={0} />
         </div>
       )}
+      {showHelp && (
+        <Sheet title={L("Come si gioca", "How to play")} onClose={() => setShowHelp(false)}>
+          <div style={{ fontSize: 13, lineHeight: 1.7, color: T.ink }}>
+            {[
+              [L("Briscola", "Trump"), L("il seme di briscola batte ogni altro seme", "the trump suit beats every other suit")],
+              [L("Presa", "Trick"), L("vince la carta più alta dello stesso seme — o una briscola", "the higher card of the led suit wins — or any trump")],
+              [L("Punti", "Points"), L("Asso 11, Tre 10, Re 4, Cavallo 3, Fante 2 — le altre 0", "Ace 11, Three 10, King 4, Knight 3, Jack 2 — the rest 0")],
+              [L("Vinci", "Win"), L("chi supera i 60 punti su 120", "pass 60 of the 120 points")],
+            ].map(([k, v]) => (
+              <div key={k} style={{ display: "flex", gap: 10, padding: "4px 0" }}>
+                <span style={{ fontWeight: 700, minWidth: 76, color: T.ink }}>{k}</span>
+                <span style={{ color: T.ink60 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </Sheet>
+      )}
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        {nameRow(opp, false)}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {nameRow(opp, false)}
+          <button onClick={() => setShowHelp(true)} aria-label={L("Come si gioca", "How to play")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}><Ico n="help" s={16} /></button>
+        </div>
         <div style={{ display: "flex", gap: 3 }}>
           {gs.hands[opp].map((c) => (
             <Back key={c.id} size="xs" />
