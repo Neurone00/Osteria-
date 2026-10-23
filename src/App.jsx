@@ -5462,22 +5462,28 @@ function BumpVeil({ show, onCancel }) {
 
 // A gentle "are you sure" before leaving a table — losing a hand to a stray
 // thumb is exactly what this game set out to prevent. Warm, osteria-flavoured.
-function LeaveDialog({ show, onStay, onGo }) {
+// Leaving the table. Two weights by the stakes: quiet when no hand is in play, and
+// the warm "oste" line (with the wine mark) when a live hand would be abandoned.
+function LeaveDialog({ show, onStay, onGo, midHand }) {
   if (!show) return null;
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 70, background: SCRIM, display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ background: T.bg, border: `1px solid ${T.line}`, borderRadius: 18, padding: "26px 22px 20px", maxWidth: 340, width: "100%", textAlign: "center", boxShadow: "0 20px 50px rgba(18,18,18,0.3)" }}>
-        <div><Ico n="wine" s={32} c={T.ink} sw={1.6} /></div>
-        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: 8 }}>{L("Già ti alzi dal tavolo?", "Leaving the table already?")}</div>
-        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "8px 0 20px" }}>
-          {L("La mano è ancora calda e il tuo posto è caldo pure lui. Se esci lasci le carte all’oste — e l’oste bara.", "The hand's still warm, and so is your seat. Leave and you hand your cards to the innkeeper — and the innkeeper cheats.")}
+        {midHand && <div><Ico n="wine" s={32} c={T.ink} sw={1.6} /></div>}
+        <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 22, color: T.ink, marginTop: midHand ? 8 : 0 }}>
+          {midHand ? L("Già ti alzi dal tavolo?", "Leaving the table already?") : L("Lasci il tavolo?", "Leave the table?")}
+        </div>
+        <p style={{ color: T.ink60, fontSize: 14, lineHeight: 1.55, margin: "10px 0 20px" }}>
+          {midHand
+            ? L("La mano è ancora calda e il tuo posto è caldo pure lui. Se esci lasci le carte all’oste — e l’oste bara.", "The hand's still warm, and so is your seat. Leave and you hand your cards to the innkeeper — and the innkeeper cheats.")
+            : L("Non è ancora stata distribuita nessuna mano.", "No hand's been dealt yet.")}
         </p>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <Button full onClick={onStay}>
-            {L("Resto a giocare", "Stay and play")}
+            {midHand ? L("Resto a giocare", "Stay and play") : L("Resta", "Stay")}
           </Button>
           <button onClick={onGo} style={{ ...plain, color: T.ink60, fontSize: 14, padding: "6px 0" }}>
-            {L("Esco lo stesso", "Leave anyway")}
+            {midHand ? L("Esco lo stesso", "Leave anyway") : L("Esci", "Leave")}
           </button>
         </div>
       </div>
@@ -5767,6 +5773,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [booting, setBooting] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
   const [askLeave, setAskLeave] = useState(false);
+  const [endHand, setEndHand] = useState(false); // solo: confirm before abandoning a live hand
   const [bumping, setBumping] = useState(false); // waiting in the bump lobby
   const [board, setBoard] = useState({}); // local head-to-head record between name pairs
   const [update, setUpdate] = useState(null); // installed app: a newer APK is on GitHub
@@ -6602,7 +6609,12 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   // Back to game selection, keeping the table and both players.
   const toGames = () => publish({ ...room, status: "lobby", gs: null, log: [], ev: null, endReq: null });
   // Esci mid-game: solo just returns to the lobby; online asks the other player.
-  const requestEnd = () => (solo || !room.names.B ? toGames() : publish({ ...room, endReq: { by: seat } }));
+  const requestEnd = () => {
+    if (!solo && room.names.B) return publish({ ...room, endReq: { by: seat } }); // 2 players: ask the other to agree
+    // solo, or the guest never came — confirm before abandoning a live hand, else just go
+    if (room.status === "play" && room.gs && !room.gs.done) return setEndHand(true);
+    toGames();
+  };
   const agreeEnd = () => toGames();
   const declineEnd = () => publish({ ...room, endReq: null });
 
@@ -7266,6 +7278,7 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
       {room.game !== "flotta2" && <Head room={room} link={link} onLeave={requestEnd} onReconnect={reconnect} sound={sound} setSound={setSound} title={conf.name} onShare={() => share(room.code)} />}
       {solo && room.game !== "flotta2" && room.opts.mode !== "1p" && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
       <EndGameOverlay room={room} seat={seat} onAgree={agreeEnd} onDecline={declineEnd} onCancel={declineEnd} />
+      <LeaveDialog show={endHand} midHand onStay={() => setEndHand(false)} onGo={() => { setEndHand(false); toGames(); }} />
       <FinaleModal show={gs.done && room.game !== "flotta2" && !finaleHold} decided={decided} outcome={outcome} room={room} gs={gs} seat={seat} onAgain={again} onExit={toGames} />
 
       {room.game === "camicia" ? (
