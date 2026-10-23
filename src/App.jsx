@@ -10389,7 +10389,10 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
       )}
       {/* opponent */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{who(room, opp)}</div>
+          <button onClick={() => setShowHelp(true)} aria-label={L("Come si conta", "How scoring works")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}><Ico n="help" s={16} /></button>
+        </div>
         <Micro>
           {oppTotal.total} punti · {Object.keys(oppScore).length}/13
         </Micro>
@@ -10402,11 +10405,6 @@ function Yahtzee({ room, gs, seat, mine, commit }) {
           </span>
         </div>
       )}
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 8 }}>
-        <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-          <Ico n="help" s={15} /> come si conta
-        </button>
-      </div>
 
       {showOpp && (
         <Sheet title={`Scheda di ${who(room, opp)}`} onClose={() => setShowOpp(false)}>
@@ -10611,12 +10609,13 @@ function Farkle({ room, gs, seat, mine, commit }) {
     ) : null;
   // a name + progress bar; the fill eases so score changes glide, and the active
   // player's name glows softly. Reconciled by position (plain call), so no remount.
-  const renderBar = (nm, score, p, color, delta, active) => (
+  const renderBar = (nm, score, p, color, delta, active, onHelp) => (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span className={active ? "turn" : ""} style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 14 }}>{nm}</span>
           {renderDelta(delta)}
+          {onHelp && <button onClick={onHelp} aria-label={L("Come si conta", "How scoring works")} style={{ ...plain, color: T.ink, display: "grid", placeItems: "center" }}><Ico n="help" s={16} /></button>}
         </div>
         <Micro>{score} / {gs.target}</Micro>
       </div>
@@ -10637,7 +10636,7 @@ function Farkle({ room, gs, seat, mine, commit }) {
       )}
 
       {/* opponent bar, at the top — with their last-turn swing and turn glow */}
-      {renderBar(who(room, opp), gs.scores[opp], oppPct, TSIDE[opp], gs.lastTurn && gs.lastTurn.seat === opp ? gs.lastTurn : null, gs.turn === opp && !gs.done)}
+      {renderBar(who(room, opp), gs.scores[opp], oppPct, TSIDE[opp], gs.lastTurn && gs.lastTurn.seat === opp ? gs.lastTurn : null, gs.turn === opp && !gs.done, () => setShowHelp(true))}
 
       {/* play area — grows and stays centred; fixed slots keep it from jumping */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 12 }}>
@@ -10726,11 +10725,6 @@ function Farkle({ room, gs, seat, mine, commit }) {
               </Micro>
             </>
           )}
-        </div>
-        <div style={{ textAlign: "center", marginTop: 6 }}>
-          <button onClick={() => setShowHelp(true)} style={{ ...plain, color: T.ink60, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-            <Ico n="help" s={13} /> {L("come si conta", "how scoring works")}
-          </button>
         </div>
       </div>
 
