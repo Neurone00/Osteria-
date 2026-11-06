@@ -333,9 +333,6 @@ const PLAYABLE = Object.keys(GAMES).filter((k) => !GAMES[k].disabled);
 const gtag = (g) => L(g.tag, g.en && g.en.tag);
 const gline = (g) => L(g.line, g.en && g.en.line);
 const isCard = (game) => !GAMES[game].dice;
-// Which shelf a game sits on, for the lobby filter pills. Explicit `cat` wins
-// (Paroliere is letter dice); otherwise derive from how it plays.
-const gameCat = (game) => GAMES[game].cat || (GAMES[game].dice ? "dadi" : GAMES[game].board ? "tavolo" : "carte");
 // The start button, kept short (the card already shows the game's name) and given
 // a little flavour per shelf: cards are dealt, dice get thrown, boards get set up.
 const dealCta = (gm) => {
@@ -343,11 +340,6 @@ const dealCta = (gm) => {
   const c = gm.cat || (gm.dice ? "dadi" : gm.board ? "tavolo" : "carte");
   return c === "dadi" ? L("Lancia!", "Roll!") : c === "tavolo" ? L("Schiera!", "Deploy!") : L("Distribuisci", "Deal");
 };
-const GAME_CATS = [
-  ["carte", "Carte", "Cards"],
-  ["dadi", "Dadi", "Dice"],
-  ["tavolo", "Tavolo", "Board"],
-];
 // The shuffle-and-cut "mischia" ritual runs for every card game except the ones
 // dealt instantly (Peppa's trimmed deck). Scala uses it too, on its own 106-card
 // deck. `usesRitual` additionally gates the lobby's points/face toggles, which the
@@ -5000,27 +4992,6 @@ function Ico({ n, s = 18, c, sw = 1.7, style, cls }) {
   );
 }
 
-// A collapsible section: a Micro-labelled header with a chevron, tucking its
-// contents away (collapsed by default). Used to hide the per-game score
-// breakdown and the house rules until asked for.
-function Accordion({ label, children, open: openInit = false, right }) {
-  const [open, setOpen] = useState(openInit);
-  return (
-    <div>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        style={{ ...plain, width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 0", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}
-      >
-        <Micro>{label}</Micro>
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {right}
-          <span style={{ fontSize: 11, color: T.ink30, transition: "transform 200ms ease", transform: open ? "rotate(180deg)" : "none", lineHeight: 1 }}>▾</span>
-        </span>
-      </button>
-      {open && <div style={{ marginTop: 8 }}>{children}</div>}
-    </div>
-  );
-}
 
 // The pill toggle used for on/off house rules.
 function Switch({ on }) {
@@ -5327,9 +5298,11 @@ function ScopeTag({ n, cards }) {
   );
 }
 
-// The running head-to-head between the two players at this table, big on the
-// games page, with a per-game breakdown. Reads the locally-kept board.
+// The running head-to-head between the two players at this table: one line on the
+// games page (names either side of the tally), tap it for the per-game breakdown.
+// Reads the locally-kept board. It also says who is seated, so no separate line does.
 function Scoreboard({ board, names }) {
+  const [open, setOpen] = useState(false);
   const nA = names.A,
     nB = names.B;
   if (!nA || !nB) return null;
@@ -5342,22 +5315,29 @@ function Scoreboard({ board, names }) {
     wB = wins(kB);
   const RED = "#A5342F";
   const big = (n, hi) => (
-    <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 54, lineHeight: 1, color: hi ? RED : T.ink }}>{n}</span>
+    <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 44, lineHeight: 1, fontVariantNumeric: "tabular-nums", color: hi ? RED : T.ink }}>{n}</span>
   );
-  const nameStyle = (align) => ({ flex: 1, textAlign: align, fontFamily: BRAND, fontWeight: 600, fontSize: 16, color: T.ink, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+  const nameStyle = { flex: 1, minWidth: 0, fontFamily: BRAND, fontWeight: 600, fontSize: 18, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
   return (
     <div>
-      <Micro style={{ textAlign: "center" }}>{L("Testa a testa", "Head to head")}</Micro>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginTop: 6 }}>
-        <div style={nameStyle("right")}>{nA}</div>
+      <button
+        onClick={games.length ? () => setOpen((o) => !o) : undefined}
+        aria-expanded={games.length ? open : undefined}
+        aria-label={`${L("Testa a testa", "Head to head")}: ${nA} ${wA}, ${nB} ${wB}`}
+        style={{ ...plain, width: "100%", minHeight: 64, display: "flex", alignItems: "center", gap: 14, cursor: games.length ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}
+      >
+        <span style={{ ...nameStyle, textAlign: "right" }}>{nA}</span>
         {big(wA, wA > wB)}
-        <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 24, color: T.ink30 }}>–</span>
+        <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 22, color: T.ink30 }}>–</span>
         {big(wB, wB > wA)}
-        <div style={nameStyle("left")}>{nB}</div>
-      </div>
+        <span style={{ ...nameStyle, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{nB}</span>
+          {games.length > 0 && <Ico n="chev" s={14} c={T.ink60} style={{ flexShrink: 0, transition: "transform 200ms ease", transform: open ? "rotate(180deg)" : "none" }} />}
+        </span>
+      </button>
       {games.length ? (
-        <div style={{ marginTop: 10 }}>
-          <Accordion label={L("Per gioco", "By game")}>
+        open && (
+          <div style={{ marginTop: 6, paddingBottom: 4 }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               {games.map((g) => {
                 const a = rec.byGame[g][kA] || 0,
@@ -5374,10 +5354,10 @@ function Scoreboard({ board, names }) {
                 );
               })}
             </div>
-          </Accordion>
-        </div>
+          </div>
+        )
       ) : (
-        <Micro style={{ textAlign: "center", marginTop: 8 }}>{L("prima sfida — che vinca il migliore", "first match — may the best win")}</Micro>
+        <p style={{ textAlign: "center", margin: "2px 0 0", fontSize: 12.5, color: T.ink60 }}>{L("prima sfida — che vinca il migliore", "first match — may the best win")}</p>
       )}
     </div>
   );
@@ -5766,7 +5746,6 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const [msg, setMsg] = useState("");
   const [link, setLink] = useState("waiting");
   const [pick, setPick] = useState(null);
-  const [cat, setCat] = useState(null); // lobby carousel filter: null=all | "carte" | "dadi" | "tavolo"
   const [sound, setSound] = useState(true);
   const [jolt, setJolt] = useState(false);
   const [slamId, setSlamId] = useState(null);
@@ -7098,76 +7077,86 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
   const seated = !!room.names.B;
 
   /* ═════════ lobby — pick the game and set the rules before dealing ═════════ */
+  // One job per screen. Bump seats both players at once, so the usual lobby is the
+  // seated one: the head-to-head line, the carousel, and the deal button pinned under
+  // the thumb. The code only takes space while nobody has joined (the code path).
   if (room.status === "lobby") {
     const host = seat === "A";
-    const g = GAMES[room.game];
-    const allKeys = PLAYABLE;
-    // Only the host browses/filters; the guest always follows the host's pick.
-    const gkeys = host && cat ? allKeys.filter((k) => gameCat(k) === cat) : allKeys;
+    const gkeys = PLAYABLE;
     const gIndex = Math.max(0, gkeys.indexOf(room.game));
-    const pickCat = (c) => {
-      const next = c === cat ? null : c;
-      setCat(next);
-      const list = next ? allKeys.filter((k) => gameCat(k) === next) : allKeys;
-      if (!list.includes(room.game)) pickGame(list[0]);
+    const solo1p = room.opts.mode === "1p"; // vs CPU — no 2nd player needed (flotta2, azzardo)
+    // A card's one-line rule summary: its pick-one setting (Partita a 11), then any
+    // house rule switched on. Cards other than the chosen one show their defaults.
+    const ruleLine = (key) => {
+      const gm = GAMES[key];
+      const o = key === room.game ? room.opts : gm.def;
+      const shown = gm.opts.filter((x) => !x.when || x.when(o));
+      const cyc = shown.filter((x) => !isToggleOpt(x)).slice(0, 1).map((x) => `${L(x.label, x.le)} ${x.fmt ? x.fmt[o[x.k]] || o[x.k] : o[x.k]}`);
+      const on = shown.filter((x) => isToggleOpt(x) && o[x.k] === true).map((x) => L(x.label, x.le));
+      return [...cyc, ...on].join(" · ");
     };
-    const frontFace = (key, isMid) => {
+    const hasBack = (key) => GAMES[key].opts.length > 0 || usesRitual(key);
+    const cardFace = (key, foot) => {
       const gm = GAMES[key];
       return (
-        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center", padding: "14px 18px", gap: 8 }}>
-          <GameArt game={key} size={72} />
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(22px, 6vw, 30px)", letterSpacing: "-0.02em", lineHeight: 1.02 }}>{gm.name}</div>
-            <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.2em", textTransform: "uppercase", color: T.ink30 }}>{gtag(gm)}</div>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", textAlign: "center", padding: "16px 18px", gap: 10 }}>
+          <GameArt game={key} size={88} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: "clamp(24px, 7vw, 32px)", letterSpacing: "-0.02em", lineHeight: 1.02 }}>{gm.name}</div>
+            <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: "0.2em", textTransform: "uppercase", color: T.ink60 }}>{gtag(gm)}</div>
           </div>
-          <p style={{ color: T.ink60, fontSize: 12, lineHeight: 1.45, margin: 0, maxWidth: 260, overflow: "hidden" }}>{gline(gm)}</p>
+          <p style={{ color: T.ink60, fontSize: 13, lineHeight: 1.45, margin: 0, maxWidth: 260, overflow: "hidden" }}>{gline(gm)}</p>
+          {foot}
         </div>
+      );
+    };
+    // The front says where the rules are: the pill is a cue, the whole card flips on tap.
+    const frontFace = (key) => {
+      const line = ruleLine(key);
+      return cardFace(
+        key,
+        hasBack(key) && (
+          <span style={{ marginTop: 6, minHeight: 40, maxWidth: "100%", padding: "0 14px", border: `1px solid ${T.line}`, borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 8, fontFamily: BRAND, fontWeight: 600, fontSize: 14, color: T.ink }}>
+            {line && (
+              <>
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: T.ink60, fontWeight: 500 }}>{line}</span>
+                <span aria-hidden="true" style={{ width: 1, height: 14, background: T.line, flexShrink: 0 }} />
+              </>
+            )}
+            <span style={{ flexShrink: 0 }}>{L("Regole", "Rules")}</span>
+            <Ico n="rotateL" s={14} style={{ flexShrink: 0 }} />
+          </span>
+        )
       );
     };
     const backFace = (key) => {
       const gm = GAMES[key];
       return (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, padding: "18px 18px 16px" }}>
-          <div style={{ paddingRight: 40 }}>
-            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 19 }}>{gm.name}</div>
-            <Micro style={{ marginTop: 3 }}>{L("Regole della casa", "House rules")}</Micro>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, padding: "16px 18px 12px" }}>
+          <div style={{ paddingRight: 48 }}>
+            <div style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 20 }}>{gm.name}</div>
+            <div style={{ fontSize: 12.5, color: T.ink60, marginTop: 2 }}>{L("Regole della casa", "House rules")}</div>
           </div>
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y", marginTop: 12, paddingRight: 2 }}>
-            {gm.opts.length > 0 ? (
-              <RuleChips conf={gm} opts={room.opts} setOpt={host ? setOpt : null} />
-            ) : (
-              <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 12.5, lineHeight: 1.5 }}>{L("Nessuna regola da scegliere per questo gioco.", "No rules to set for this game.")}</Micro>
-            )}
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y", marginTop: 6, paddingRight: 2 }}>
+            {gm.opts.length > 0 && <RuleChips conf={gm} opts={room.opts} setOpt={setOpt} />}
             {usesRitual(key) && (
               <>
-                <Micro style={{ marginTop: 18 }}>{L("Punti e prese", "Points & captures")}{host ? "" : L(" · li decide l’host", " · host decides")}</Micro>
-                <Segmented
-                  options={[
-                    { v: false, label: L("Nascondi", "Hide") },
-                    { v: true, label: L("Mostra", "Show") },
-                  ]}
-                  value={!!room.scores}
-                  onPick={host ? setScores : null}
-                  style={{ marginTop: 8 }}
-                />
-                <Micro style={{ marginTop: 18 }}>{L("Carte · sul tuo telefono", "Cards · on your phone")}</Micro>
-                <FaceToggle french={french} setFrench={setFrench} />
+                <OptRow label={L("Punti e prese", "Points & captures")}>
+                  <Segmented
+                    options={[
+                      { v: false, label: L("Nascondi", "Hide") },
+                      { v: true, label: L("Mostra", "Show") },
+                    ]}
+                    value={!!room.scores}
+                    onPick={setScores}
+                  />
+                </OptRow>
+                <OptRow label={L("Carte · sul tuo telefono", "Cards · on your phone")} last>
+                  <FaceToggle french={french} setFrench={setFrench} />
+                </OptRow>
               </>
             )}
-          </div>
-          <div style={{ marginTop: 14 }}>
-            {host ? (
-              (() => {
-                const solo1p = room.opts.mode === "1p"; // vs CPU — no 2nd player needed (flotta2, azzardo)
-                return (
-                  <Button full disabled={!seated && !solo1p} onClick={solo1p ? startCpu : start}>
-                    {seated || solo1p ? dealCta(gm) : L("Aspetta il 2º giocatore…", "Waiting for player 2…")}
-                  </Button>
-                );
-              })()
-            ) : (
-              <Micro>{room.names.A} {L("sta preparando il tavolo — un attimo.", "is setting the table — one moment.")}</Micro>
-            )}
+            {!hasBack(key) && <p style={{ margin: "10px 0 0", fontSize: 13, lineHeight: 1.5, color: T.ink60 }}>{L("Nessuna regola da scegliere per questo gioco.", "No rules to set for this game.")}</p>}
           </div>
         </div>
       );
@@ -7175,74 +7164,60 @@ function Game({ french, setFrench, savedRules, setGameRules, name, setName, show
     return (
       <Frame jolt={false}>
         <ReconnectVeil show={link === "lost" || reconnecting} busy={reconnecting} onRetry={reconnect} />
-        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={L("Al tavolo", "At the table")} lang={lang} setLang={setLang} onShare={() => share(room.code)} />
+        <Head room={room} link={link} onLeave={() => setAskLeave(true)} onReconnect={reconnect} sound={sound} setSound={setSound} title={L("Al tavolo", "At the table")} onShare={() => share(room.code)} noCode={!seated} />
         {solo && <SoloBar seat={seat} names={room.names} onFlip={() => setSeat(other(seat))} />}
         <LeaveDialog show={askLeave} onStay={() => setAskLeave(false)} onGo={leave} />
         <div className="fade">
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-            {/* the code tiles are the share control — tap them to send the link */}
-            <button onClick={() => share(room.code)} style={{ ...plain, textAlign: "left", cursor: "pointer" }}>
-              <Micro>{L("Codice · tocca per condividere", "Code · tap to share")}</Micro>
-              <div style={{ display: "flex", gap: 5, marginTop: 6, alignItems: "center" }}>
-                {room.code.split("").map((ch, i) => (
-                  <div key={i} style={{ ...codeTile, width: 34, height: 44, fontSize: 19 }}>
-                    {ch}
-                  </div>
-                ))}
-                <Ico n="share" s={15} c={T.ink30} style={{ marginLeft: 5 }} />
+          {seated ? (
+            <Scoreboard board={board} names={room.names} />
+          ) : (
+            // the code path only: one quiet invite row, the code in it, a share button
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 10px 10px 16px", border: `1px solid ${T.line}`, borderRadius: 14 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 16, color: T.ink }}>{L("Nessuno al tavolo", "Nobody at the table yet")}</div>
+                <div style={{ fontSize: 13, color: T.ink60, marginTop: 1 }}>
+                  {L("Codice", "Code")} <span style={{ fontFamily: MONO, letterSpacing: "0.1em", color: T.ink }}>{room.code}</span>
+                </div>
               </div>
-            </button>
-            {seated && (
-              <Micro style={{ textAlign: "right", maxWidth: 128, lineHeight: 1.6, alignSelf: "center" }}>
-                {room.names.B} {L("è al tavolo", "is at the table")}
-              </Micro>
-            )}
-          </div>
+              <button onClick={() => share(room.code)} style={{ ...plain, minHeight: 44, padding: "0 16px", border: `1.5px solid ${T.ink}`, borderRadius: 999, display: "inline-flex", alignItems: "center", gap: 7, color: T.ink, fontFamily: BRAND, fontWeight: 600, fontSize: 15, flexShrink: 0, WebkitTapHighlightColor: "transparent" }}>
+                <Ico n="share" s={15} /> {L("Invita", "Invite")}
+              </button>
+            </div>
+          )}
 
           {!seated && msg && <Micro style={{ marginTop: 8, textTransform: "none", letterSpacing: 0, fontSize: 12 }}>{msg}</Micro>}
 
-          {seated && (
-            <div style={{ marginTop: 16 }}>
-              <Scoreboard board={board} names={room.names} />
+          <div style={{ marginTop: seated ? 6 : 16 }}>
+            {host ? (
+              <GameCarousel gkeys={gkeys} index={gIndex} host onSettle={(i) => pickGame(gkeys[i])} front={frontFace} back={backFace} height="clamp(380px, calc(100dvh - 262px), 620px)" />
+            ) : (
+              // the guest follows the host's pick: one still card, nothing to swipe
+              <div style={{ ...deckShell, width: "72%", maxWidth: 346, height: "clamp(340px, calc(100dvh - 330px), 540px)", margin: "0 auto" }}>
+                {cardFace(room.game, ruleLine(room.game) && <div style={{ marginTop: 4, fontSize: 13, color: T.ink60 }}>{ruleLine(room.game)}</div>)}
+              </div>
+            )}
+          </div>
+          {!host && usesRitual(room.game) && (
+            <div style={{ marginTop: 14 }}>
+              <OptRow label={L("Carte · sul tuo telefono", "Cards · on your phone")} last>
+                <FaceToggle french={french} setFrench={setFrench} />
+              </OptRow>
             </div>
           )}
-
-          <Rule />
-
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <Micro>{L("Gioco", "Game")}</Micro>
-            <Micro style={{ textTransform: "none", letterSpacing: 0, fontSize: 11, color: T.ink30 }}>
-              {host ? L("Scorri · tocca per le regole", "Swipe · tap for rules") : L("Sceglie l’host", "Host picks")}
-            </Micro>
-          </div>
-          {host && (
-            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              {[["", L("Tutti", "All")], ...GAME_CATS.map(([k, it, en]) => [k, L(it, en)])].map(([k, label]) => {
-                const on = (k || null) === cat;
-                return (
-                  <button
-                    key={k || "all"}
-                    onClick={() => pickCat(k || null)}
-                    style={{ ...plain, flex: "1 1 0", padding: "6px 4px", borderRadius: 999, fontFamily: BRAND, fontWeight: 600, fontSize: 12, border: `1px solid ${on ? T.ink : T.line}`, background: on ? T.ink : "transparent", color: on ? T.bg : T.ink60, cursor: "pointer", WebkitTapHighlightColor: "transparent", transition: "background 160ms ease, color 160ms ease" }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          <div style={{ marginTop: 10 }}>
-            <GameCarousel
-              key={cat || "all"}
-              gkeys={gkeys}
-              index={gIndex}
-              host={host}
-              onSettle={host ? (i) => pickGame(gkeys[i]) : null}
-              front={frontFace}
-              back={backFace}
-            />
-          </div>
+          <div style={{ height: 96 }} />
         </div>
+        <FloatBar>
+          {host ? (
+            <Button full disabled={!seated && !solo1p} onClick={solo1p ? startCpu : start}>
+              {seated || solo1p ? dealCta(GAMES[room.game]) : L("Aspetta il 2º giocatore…", "Waiting for player 2…")}
+            </Button>
+          ) : (
+            <div role="status" style={{ minHeight: 54, border: `1.5px dashed ${T.line}`, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontFamily: BRAND, fontWeight: 600, fontSize: 16, color: T.ink60 }}>
+              <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: "#B8862B" }} />
+              {room.names.A} {L("sta scegliendo…", "is choosing…")}
+            </div>
+          )}
+        </FloatBar>
       </Frame>
     );
   }
@@ -7369,9 +7344,10 @@ function Frame({ children, jolt }) {
   );
 }
 
-function Head({ room, link, onLeave, onReconnect, title, sound, setSound, lang, setLang, onShare }) {
+function Head({ room, link, onLeave, onReconnect, title, sound, setSound, lang, setLang, onShare, noCode }) {
   // status is a colour dot, not a word; the four-letter code tucks under the title
   // and is itself the share control (tap to send the link). Sound and exit are icons.
+  // noCode: the screen shows the code itself (the lobby while nobody has joined).
   const dotC = link === "live" ? "#3A7D4A" : link === "waiting" ? "#B8862B" : T.ink30;
   const dotT = link === "live" ? L("connesso", "connected") : link === "waiting" ? L("in attesa", "waiting") : L("disconnesso", "offline");
   return (
@@ -7390,10 +7366,12 @@ function Head({ room, link, onLeave, onReconnect, title, sound, setSound, lang, 
         <span title={dotT} style={{ width: 8, height: 8, borderRadius: "50%", background: dotC, flexShrink: 0 }} />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em", fontFamily: BRAND, lineHeight: 1.05, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
-          <button onClick={onShare} disabled={!onShare} style={{ ...plain, marginTop: 2, display: "inline-flex", alignItems: "center", gap: 5, cursor: onShare ? "pointer" : "default" }}>
-            <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.08em", color: T.ink60 }}>{room.code}</span>
-            {onShare && <Ico n="share" s={12} c={T.ink30} />}
-          </button>
+          {!noCode && (
+            <button onClick={onShare} disabled={!onShare} style={{ ...plain, marginTop: 2, display: "inline-flex", alignItems: "center", gap: 5, cursor: onShare ? "pointer" : "default" }}>
+              <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: "0.08em", color: T.ink60 }}>{room.code}</span>
+              {onShare && <Ico n="share" s={12} c={T.ink30} />}
+            </button>
+          )}
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
@@ -7471,16 +7449,13 @@ function Segmented({ options, value, onPick, style }) {
             onClick={onPick ? () => onPick(o.v) : undefined}
             disabled={!onPick}
             style={{
-              flex: 1,
-              minWidth: 0,
+              flex: "1 0 auto", // never squeezed into "1…": a row too narrow wraps instead (OptRow)
               whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
               border: "none",
               background: on ? T.ink : "transparent",
               color: on ? T.bg : T.ink60,
               borderRadius: 999,
-              padding: "8px 6px",
+              padding: "8px 11px",
               fontSize: 12,
               fontWeight: 600,
               letterSpacing: "0.01em",
@@ -7499,57 +7474,53 @@ function Segmented({ options, value, onPick, style }) {
 
 /* House-rule chips. setOpt null → read-only (the guest's view). */
 function RuleChips({ conf, opts, setOpt }) {
-  // Cycling values (the point target) read as tap-to-change tiles with the
-  // value shown big; on/off rules read as labelled switch rows underneath —
-  // two clearly different affordances, each with its plain-language hint.
+  // Every rule is one row: a pick-one value (the point target, the mode) gets its
+  // choices laid out as a segmented control, an on/off rule a switch with its
+  // plain-language hint. Rows share one hairline rhythm with the rows below them.
   const shown = conf.opts.filter((o) => !o.when || o.when(opts)); // some rules only apply in a mode
   const cyc = shown.filter((o) => !isToggleOpt(o));
   const tog = shown.filter((o) => isToggleOpt(o));
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {cyc.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {cyc.map((o) => {
-            const cur = opts[o.k];
-            const i = o.cycle.indexOf(cur);
-            const next = o.cycle[(i + 1) % o.cycle.length];
-            return (
-              <button
-                key={o.k}
-                onClick={setOpt ? () => setOpt(o.k, next) : undefined}
-                disabled={!setOpt}
-                title={L(o.hint, o.he)}
-                style={{ border: `1.5px solid ${T.ink}`, background: "transparent", borderRadius: 12, padding: "8px 14px", cursor: setOpt ? "pointer" : "default", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, minWidth: 84, WebkitTapHighlightColor: "transparent" }}
-              >
-                <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: T.ink60 }}>{L(o.label, o.le)}</span>
-                <span style={{ fontFamily: BRAND, fontWeight: 700, fontSize: 24, color: T.ink, lineHeight: 1 }}>{o.fmt ? o.fmt[cur] || String(cur) : String(cur)}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-      {tog.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          {tog.map((o, idx) => {
-            const on = opts[o.k] === true;
-            return (
-              <button
-                key={o.k}
-                onClick={setOpt ? () => setOpt(o.k, !on) : undefined}
-                disabled={!setOpt}
-                title={L(o.hint, o.he)}
-                style={{ ...plain, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "10px 0", textAlign: "left", cursor: setOpt ? "pointer" : "default", borderTop: idx ? `1px solid ${T.line}` : "none", WebkitTapHighlightColor: "transparent" }}
-              >
-                <span style={{ minWidth: 0 }}>
-                  <span style={{ display: "block", fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: on ? T.ink : T.ink60 }}>{L(o.label, o.le)}</span>
-                  {o.hint && <span style={{ display: "block", fontSize: 12, color: T.ink30, marginTop: 2, lineHeight: 1.3 }}>{L(o.hint, o.he)}</span>}
-                </span>
-                <Switch on={on} />
-              </button>
-            );
-          })}
-        </div>
-      )}
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      {cyc.map((o) => (
+        <OptRow key={o.k} label={L(o.label, o.le)}>
+          <Segmented
+            options={o.cycle.map((v) => ({ v, label: o.fmt ? o.fmt[v] || String(v) : String(v) }))}
+            value={opts[o.k]}
+            onPick={setOpt ? (v) => setOpt(o.k, v) : null}
+          />
+        </OptRow>
+      ))}
+      {tog.map((o) => {
+        const on = opts[o.k] === true;
+        return (
+          <button
+            key={o.k}
+            role="switch"
+            aria-checked={on}
+            onClick={setOpt ? () => setOpt(o.k, !on) : undefined}
+            disabled={!setOpt}
+            style={{ ...plain, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "9px 0", textAlign: "left", cursor: setOpt ? "pointer" : "default", borderBottom: `1px solid ${T.line}`, WebkitTapHighlightColor: "transparent" }}
+          >
+            <span style={{ minWidth: 0 }}>
+              <span style={{ display: "block", fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: T.ink }}>{L(o.label, o.le)}</span>
+              {o.hint && <span style={{ display: "block", fontFamily: "system-ui, -apple-system, sans-serif", fontSize: 12, color: T.ink60, marginTop: 2, lineHeight: 1.35 }}>{L(o.hint, o.he)}</span>}
+            </span>
+            <Switch on={on} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// One labelled setting on the back of a lobby card: the label, then its control,
+// wrapping under the label when the two don't fit side by side.
+function OptRow({ label, children, last }) {
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "6px 10px", padding: "9px 0", borderBottom: last ? "none" : `1px solid ${T.line}` }}>
+      <span style={{ fontFamily: BRAND, fontWeight: 600, fontSize: 15, color: T.ink }}>{label}</span>
+      <div style={{ flex: "0 1 auto", minWidth: 0, marginLeft: "auto" }}>{children}</div>
     </div>
   );
 }
@@ -7559,7 +7530,7 @@ function RuleChips({ conf, opts, setOpt }) {
    middle, tap the middle card to flip it — its back holds the rules and the deal
    button. Only the middle card flips; focusing a neighbour never rotates it. */
 const nowMs = () => (typeof performance !== "undefined" && performance.now ? performance.now() : 0);
-function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
+function GameCarousel({ gkeys, index, host, onSettle, front, back, height = "min(46vh, 430px)" }) {
   const N = gkeys.length;
   const wrapRef = useRef(null);
   const outerRefs = useRef([]); // per-card positioned layer (translate lives here)
@@ -7731,7 +7702,7 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
       onMouseMove={onMove}
       onMouseUp={onUp}
       onMouseLeave={onUp}
-      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height: "min(46vh, 430px)", touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "visible" }}
+      style={{ position: "relative", width: "100vw", marginLeft: "calc(-50vw + 50%)", height, touchAction: "pan-y", userSelect: "none", WebkitUserSelect: "none", overflow: "visible" }}
     >
       {gkeys.map((key, i) => {
         const isMid = i === midIdx;
@@ -7752,7 +7723,7 @@ function GameCarousel({ gkeys, index, host, onSettle, front, back }) {
                     {isMid && (
                       <>
                         {back(key)}
-                        <button onClick={() => setFlip(false)} title={L("gira", "flip")} style={{ ...plain, position: "absolute", top: 12, right: 12, width: 30, height: 30, borderRadius: 9, border: `1px solid ${T.line}`, background: T.bg, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+                        <button onClick={() => setFlip(false)} title={L("gira", "flip")} aria-label={L("Gira la carta", "Flip the card")} style={{ ...plain, position: "absolute", top: 12, right: 12, width: 40, height: 40, borderRadius: 11, border: `1px solid ${T.line}`, background: T.bg, display: "grid", placeItems: "center", cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
                           <Ico n="rotateL" s={15} />
                         </button>
                       </>
@@ -7894,7 +7865,6 @@ function FaceToggle({ french, setFrench }) {
       ]}
       value={french}
       onPick={(v) => setFrench(v)}
-      style={{ marginTop: 8 }}
     />
   );
 }
